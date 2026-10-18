@@ -1,0 +1,159 @@
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import type { ExportOptions, ExportResult } from '@shared/types'
+import { store } from '../store'
+import { docDir, thumbFile } from '../paths'
+import { createZip } from '../util/zip'
+import { exportFolder, renderHtml, renderPdf, renderPng, thumbnailPath, type RenderParams } from './render'
+import { sanitizeFileName } from '@shared/util'
+
+function baseName(title: string): string {
+  return sanitizeFileName(title) || 'board'
+}
+
+function renderParams(options: Partial<ExportOptions> & { docId: string }): RenderParams {
+  return {
+    docId: options.docId,
+    scope: options.scope ?? 'board',
+    targetId: options.targetId,
+    selectionIds: options.selectionIds,
+    scale: options.scale ?? 2,
+    background: options.background ?? 'white',
+    paper: options.pdfPaper ?? 'a3',
+    tileCols: options.pdfMode === 'tiles' ? options.pdfTileCols : 1,
+    tileRows: options.pdfMode === 'tiles' ? options.pdfTileRows : 1
+  }
+}
+
+export async function exportBoard(
+  options: Partial<ExportOptions> & { docId: string; thumbnail?: boolean }
+): Promise<string> {
+  if (options.thumbnail) {
+    const doc = store.readDoc(options.docId)
+    if (!doc.stats.items) {
+      const fallback = join(docDir(options.docId), 'empty-thumb.png')
+      if (!existsSync(fallback)) writeFileSync(fallback, emptyPng())
+      return thumbnailPath(options.docId)
+    }
+    const result = await renderPng({
+      docId: options.docId,
+      scope: 'board',
+      scale: 0.2,
+      background: 'white'
+    })
+    const target = thumbnailPath(options.docId)
+    writeFileSync(target, result.buffer)
+    return target
+  }
+  const doc = store.readDoc(options.docId)
+  const dir = exportFolder()
+  const name = `${baseName(doc.title)}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}`
+  switch (options.format) {
+    case 'pdf': {
+      const target = join(dir, `${name}.pdf`)
+      await renderPdf(renderParams(options), target)
+      return target
+    }
+    case 'html': {
+      const target = join(dir, `${name}.html`)
+      const html = await renderHtml(renderParams(options))
+      writeFileSync(target, html, 'utf8')
+      return target
+    }
+    case 'json': {
+      const target = join(dir, `${name}.json`)
+      writeFileSync(target, JSON.stringify(doc, null, 2), 'utf8')
+      return target
+    }
+    case 'zip': {
+      const target = join(dir, `${name}.zip`)
+      writeFileSync(target, buildArchive(options.docId, name))
+      return target
+    }
+    default: {
+      const target = join(dir, `${name}.png`)
+      const result = await renderPng(renderParams(options))
+      writeFileSync(target, result.buffer)
+      return target
+    }
+  }
+}
+
+export async function exportToPath(options: ExportOptions, target: string): Promise<ExportResult> {
+  const doc = store.readDoc(options.docId)
+  switch (options.format) {
+    case 'png': {
+      const result = await renderPng(renderParams(options))
+      writeFileSync(target, result.buffer)
+      return { ok: true, path: target, bytes: result.buffer.byteLength, width: result.width, height: result.height }
+    }
+    case 'pdf': {
+      const info = await renderPdf(renderParams(options), target)
+      return { ok: true, path: target, bytes: info.bytes, width: info.width, height: info.height }
+    }
+    case 'html': {
+      const html = await renderHtml(renderParams(options))
+      writeFileSync(target, html, 'utf8')
+      return { ok: true, path: target, bytes: Buffer.byteLength(html, 'utf8') }
+    }
+    case 'json': {
+      const text = JSON.stringify(doc, null, 2)
+      writeFileSync(target, text, 'utf8')
+      return { ok: true, path: target, bytes: Buffer.byteLength(text, 'utf8') }
+    }
+    case 'zip': {
+      const buffer = buildArchive(options.docId, baseName(doc.title))
+      writeFileSync(target, buffer)
+      return { ok: true, path: target, bytes: buffer.byteLength }
+    }
+    default:
+      return { ok: false, message: 'Неизвестный формат экспорта' }
+  }
+}
+
+export function buildArchive(docId: string, name: string): Buffer {
+  const doc = store.readDoc(docId)
+  const dir = docDir(docId)
+  const entries: { name: string; data: Buffer }[] = [
+    { name: `${name}.json`, data: Buffer.from(JSON.stringify(doc), 'utf8') },
+    { name: 'README.txt', data: Buffer.from(readme(doc.title), 'utf8') }
+  ]
+  const assetsDirPath = join(dir, 'assets')
+  if (existsSync(assetsDirPath)) {
+    for (const entry of readdirSync(assetsDirPath)) {
+      const file = join(assetsDirPath, entry)
+      try {
+        if (statSync(file).isFile()) entries.push({ name: `assets/${entry}`, data: readFileSync(file) })
+      } catch {
+        continue
+      }
+    }
+  }
+  if (existsSync(thumbFile(docId))) {
+    entries.push({ name: 'thumb.png', data: readFileSync(thumbFile(docId)) })
+  }
+  return createZip(entries)
+}
+
+function readme(title: string): string {
+  return [
+    'Liro — архив доски',
+    '',
+    `Доска: ${title}`,
+    `Экспортировано: ${new Date().toISOString()}`,
+    '',
+    'Файлы:',
+    '- board.json — полное описание доски (элементы, стили, связи)',
+    '- assets/ — изображения доски',
+    '- thumb.png — миниатюра',
+    '',
+    'Импорт: перетащите архив в окно Liro или используйте «Импорт из файла».'
+  ].join('\n')
+}
+
+function emptyPng(): Buffer {
+  return Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64'
+  )
+}

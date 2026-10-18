@@ -1,0 +1,75 @@
+.graphrow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.graphrow__swatch {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--panel-2);
+  cursor: pointer;
+}
+
+.graphrow__input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--ui-scale));
+  outline: none;
+  user-select: text;
+}
+
+.graphrow__input:focus {
+  border-color: var(--border-strong);
+}
+
+.graphrow[data-broken] .graphrow__input {
+  border-color: var(--text);
+  border-style: dashed;
+  background: var(--bg-muted);
+}
+
+.graphrow__width {
+  flex: none;
+  width: 30px;
+  height: 28px;
+}
+
+.graphpanel__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(12px * var(--ui-scale));
+  color: var(--text-2);
+}
+
+.graphpanel__select,
+.graphpanel__num {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: calc(12px * var(--ui-scale));
+  outline: none;
+  user-select: text;
+}
+
+.graphpanel__select:focus,
+.graphpanel__num:focus {
+  border-color: var(--border-strong);
+}

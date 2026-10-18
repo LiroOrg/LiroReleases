@@ -1,0 +1,82 @@
+{
+  "name": "liro",
+  "productName": "Liro",
+  "version": "1.0.0",
+  "description": "Настольное приложение для досок. Работает офлайн",
+  "main": "./out/main/index.js",
+  "author": "Liro",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "selftest": "electron-vite build && electron . --selftest",
+    "uitest": "electron-vite build && electron . --uitest",
+    "tools": "electron-vite build && electron . --tools",
+    "demo": "electron-vite build && electron . --demo",
+    "icon": "electron scripts/make-icon.cjs",
+    "dist": "npm run build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.liro.desktop",
+    "productName": "Liro",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "resources/**/*"
+    ],
+    "win": {
+      "icon": "resources/icon-256.png",
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "artifactName": "Liro-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Liro-${version}-${arch}-setup.${ext}",
+      "installerLanguages": [
+        "ru_RU"
+      ],
+      "language": "1049"
+    },
+    "portable": {
+      "artifactName": "Liro-${version}-${arch}-portable.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "LiroOrg",
+        "repo": "LiroApp",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "^44.8.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^6.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/playfair-display": "^5.3.0",
+    "electron-updater": "^6.8.9",
+    "lucide-react": "^1.58.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zustand": "^5.0.15"
+  }
+}
