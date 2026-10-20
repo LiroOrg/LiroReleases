@@ -249,3 +249,16 @@ export function extractUrls(html: string): string[] {
   }
   return out
 }
+
+const LINK = /^https?:\/\/[^\s<>"']+$/i
+
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+export function linkHtml(text: string): string {
+  const value = text.trim()
+  if (!LINK.test(value)) return ''
+  const safe = escapeAttribute(value)
+  return `<p><a href="${safe}">${safe}</a></p>`
+}

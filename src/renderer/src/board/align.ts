@@ -87,46 +87,53 @@ function better(current: Candidate | null, next: Candidate): boolean {
   return !current || next.cost < current.cost
 }
 
+function takeX(
+  current: Candidate | null,
+  delta: number,
+  at: number,
+  from: number,
+  to: number,
+  near: boolean,
+  threshold: number
+): Candidate | null {
+  if (Math.abs(delta) > threshold) return current
+  const cost = Math.abs(delta) + (near ? -threshold * 0.9 : 0)
+  const candidate: Candidate = { delta, at, from, to, cost }
+  return better(current, candidate) ? candidate : current
+}
+
 export function snapBox(box: Rect, others: Placed[], threshold: number): SnapResult {
   if (!others.length || threshold <= 0) return { dx: 0, dy: 0, guides: [] }
   const boxCenterX = box.x + box.width / 2
   const boxCenterY = box.y + box.height / 2
   const boxRight = box.x + box.width
   const boxBottom = box.y + box.height
+  const reach = threshold * 4
+  const minX = box.x - reach
+  const maxX = boxRight + reach
+  const minY = box.y - reach
+  const maxY = boxBottom + reach
   let bestX: Candidate | null = null
   let bestY: Candidate | null = null
 
   for (const other of others) {
     const otherRight = other.x + other.width
     const otherBottom = other.y + other.height
+    if (other.x > maxX || otherRight < minX || other.y > maxY || otherBottom < minY) continue
+    const otherCenterX = other.x + other.width / 2
+    const otherCenterY = other.y + other.height / 2
     const nearX = Math.abs(other.x - boxRight) <= threshold || Math.abs(box.x - otherRight) <= threshold
     const nearY = Math.abs(other.y - boxBottom) <= threshold || Math.abs(box.y - otherBottom) <= threshold
-    const spanX = Math.min(other.y, box.y)
-    const spanXEnd = Math.max(otherBottom, boxBottom)
-    const spanY = Math.min(other.x, box.x)
-    const spanYEnd = Math.max(otherRight, boxRight)
-    const targetsX: Array<[number, number]> = [
-      [other.x - box.x, other.x],
-      [other.x + other.width / 2 - boxCenterX, other.x + other.width / 2],
-      [otherRight - boxRight, otherRight]
-    ]
-    const targetsY: Array<[number, number]> = [
-      [other.y - box.y, other.y],
-      [other.y + other.height / 2 - boxCenterY, other.y + other.height / 2],
-      [otherBottom - boxBottom, otherBottom]
-    ]
-    for (const [delta, at] of targetsX) {
-      if (Math.abs(delta) > threshold) continue
-      const cost = Math.abs(delta) + (nearX ? -threshold * 0.9 : 0)
-      const candidate: Candidate = { delta, at, from: spanX - 24, to: spanXEnd + 24, cost }
-      if (better(bestX, candidate)) bestX = candidate
-    }
-    for (const [delta, at] of targetsY) {
-      if (Math.abs(delta) > threshold) continue
-      const cost = Math.abs(delta) + (nearY ? -threshold * 0.9 : 0)
-      const candidate: Candidate = { delta, at, from: spanY - 24, to: spanYEnd + 24, cost }
-      if (better(bestY, candidate)) bestY = candidate
-    }
+    const fromX = Math.min(other.y, box.y) - 24
+    const toX = Math.max(otherBottom, boxBottom) + 24
+    const fromY = Math.min(other.x, box.x) - 24
+    const toY = Math.max(otherRight, boxRight) + 24
+    bestX = takeX(bestX, other.x - box.x, other.x, fromX, toX, nearX, threshold)
+    bestX = takeX(bestX, otherCenterX - boxCenterX, otherCenterX, fromX, toX, nearX, threshold)
+    bestX = takeX(bestX, otherRight - boxRight, otherRight, fromX, toX, nearX, threshold)
+    bestY = takeX(bestY, other.y - box.y, other.y, fromY, toY, nearY, threshold)
+    bestY = takeX(bestY, otherCenterY - boxCenterY, otherCenterY, fromY, toY, nearY, threshold)
+    bestY = takeX(bestY, otherBottom - boxBottom, otherBottom, fromY, toY, nearY, threshold)
   }
 
   const guides: Guide[] = []

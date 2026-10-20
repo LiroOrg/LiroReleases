@@ -20,6 +20,8 @@ import {
   EyeOff,
   ExternalLink,
   Grid3x3,
+  Group,
+  Ungroup,
   Hand,
   Image,
   ImageOff,
@@ -28,10 +30,13 @@ import {
   Layers,
   LineChart,
   Link2,
-  List,
   Lock,
   LockOpen,
   Maximize,
+  MessageSquare,
+  Play,
+  ChevronLeft,
+  ChevronRight,
   Maximize2,
   Minus,
   MousePointer2,
@@ -51,6 +56,7 @@ import {
   SlidersHorizontal,
   Square,
   StickyNote,
+  Table2,
   Trash2,
   Type,
   Undo2,
@@ -63,22 +69,25 @@ import type { AssetRef, BoardDoc, BoardItem, GraphExpr, GraphItem, GridMode, Rec
 import { solidBounds, solidFaceAt, solidPolygons } from '@shared/three'
 import { compileFormula } from '@shared/graph'
 import { shadesOf } from '@shared/color'
-import { faceFromScreen, solidFaceMap } from './faceMap'
+import { faceLocalToWorld, faceWorldToLocal, projectPoint, solidProjection, solidScreenToLocal } from '@shared/three'
 import { alignDelta, snapBox, unionBox } from './align'
 import type { AlignMode, Guide, Placed } from './align'
-import { clamp, fitTextBox, smoothPoints, uid } from '@shared/util'
+import { clamp, fitTextBox, uid } from '@shared/util'
+import { curvePath } from '@shared/curve'
 import { api } from '../lib/api'
 import { useApp } from '../lib/store'
 import { navigate } from '../router'
-import { ItemView, itemBounds, visibleItems } from './scene'
+import { ItemLayer, itemBounds, visibleItems } from './scene'
 import { ConnectorLayer } from './connectors'
 import { BoardDetails } from './boardDetails'
 import { BoardSettings } from './boardSettings'
 import { Inspector } from './inspector'
-import { ObjectsPanel, isUnsupported, kindLabel } from './objectsPanel'
+import { isUnsupported, kindLabel } from './itemKinds'
 import { ExportDialog } from './exportDialog'
-import { Spinner } from '../components/ui'
-import { parseClipboardHtml, parseClipboardText, payloadFromEvent } from '../lib/paste'
+import { Spinner, usePrompt } from '../components/ui'
+import { isEditableTarget, parseClipboardHtml, parseClipboardText, payloadFromEvent } from '../lib/paste'
+import { readObjectClipboard, writeObjectClipboard } from '../lib/objectClipboard'
+import { encodeLiroClipboard, decodeLiroClipboard } from '../lib/liroClipboard'
 
 interface Viewport {
   x: number
@@ -102,18 +111,103 @@ type DragMode =
     }
   | { kind: 'rubber'; startX: number; startY: number; currentX: number; currentY: number }
   | { kind: 'move'; startX: number; startY: number; ids: string[]; origins: Map<string, { x: number; y: number }>; moved: boolean }
-  | { kind: 'draw'; points: Array<{ x: number; y: number }>; straight: boolean }
   | { kind: 'erase'; removed: Set<string> }
   | { kind: 'create'; startX: number; startY: number; currentX: number; currentY: number; tool: CreateTool; shape: ShapeName }
   | { kind: 'link'; fromId: string; point: { x: number; y: number } }
   | { kind: 'rotate'; id: string; startX: number; startY: number; pitch: number; yaw: number }
-  | { kind: 'face'; id: string; face: string; points: Array<{ x: number; y: number }>; straight: boolean }
+  | {
+      kind: 'face'
+      id: string
+      face: string
+      points: Array<{ x: number; y: number }>
+      straight: boolean
+      done: Array<{ face: string; points: Array<{ x: number; y: number }> }>
+    }
+  | {
+      kind: 'resize'
+      id: string
+      handle: ResizeHandle
+      startX: number
+      startY: number
+      origin: Rect
+      moved: boolean
+    }
+  | {
+      kind: 'turn'
+      id: string
+      centerX: number
+      centerY: number
+      startAngle: number
+      startRotation: number
+      moved: boolean
+    }
 
-type Tool = 'select' | 'pan' | 'draw' | 'erase' | 'create' | 'link' | 'text' | 'sticky' | 'image' | 'solid' | 'graph'
+type Tool = 'select' | 'pan' | 'erase' | 'create' | 'link' | 'text' | 'sticky' | 'image' | 'solid' | 'graph' | 'table'
 
 type CreateTool = 'rect' | 'ellipse' | 'triangle' | 'line' | 'arrow'
 
-type SolidMode = 'rotate' | 'move' | 'paint' | 'draw'
+type SolidMode = 'rotate' | 'move' | 'paint' | 'stroke'
+
+type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
+
+const RESIZE_HANDLES: Array<{ id: ResizeHandle; cx: number; cy: number; cursor: string }> = [
+  { id: 'nw', cx: 0, cy: 0, cursor: 'nwse-resize' },
+  { id: 'n', cx: 0.5, cy: 0, cursor: 'ns-resize' },
+  { id: 'ne', cx: 1, cy: 0, cursor: 'nesw-resize' },
+  { id: 'e', cx: 1, cy: 0.5, cursor: 'ew-resize' },
+  { id: 'se', cx: 1, cy: 1, cursor: 'nwse-resize' },
+  { id: 's', cx: 0.5, cy: 1, cursor: 'ns-resize' },
+  { id: 'sw', cx: 0, cy: 1, cursor: 'nesw-resize' },
+  { id: 'w', cx: 0, cy: 0.5, cursor: 'ew-resize' }
+]
+
+const RESIZE_MIN = 16
+
+interface ResizeBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+function resizedItem(item: BoardItem, origin: Rect, next: ResizeBox): BoardItem {
+  const width = Math.max(RESIZE_MIN, Math.round(next.width))
+  const height = Math.max(RESIZE_MIN, Math.round(next.height))
+  const x = Math.round(next.x)
+  const y = Math.round(next.y)
+  if (item.kind === 'path') {
+    const scaleX = width / Math.max(1, origin.width)
+    const scaleY = height / Math.max(1, origin.height)
+    return {
+      ...item,
+      x,
+      y,
+      w: width,
+      h: height,
+      points: item.points.map((point) => ({ x: point.x * scaleX, y: point.y * scaleY })),
+      lineWidth: Math.max(0.5, item.lineWidth * Math.max(scaleX, scaleY))
+    }
+  }
+  if (item.kind === 'text') {
+    const fit = fitTextBox(item.plain, {
+      width,
+      minHeight: Math.round(item.fontSize * 1.3),
+      fontSize: item.fontSize,
+      padX: 2,
+      padY: 2
+    })
+    return { ...item, x, y, w: width, h: fit.height, fontSize: fit.fontSize }
+  }
+  if (item.kind === 'sticky') {
+    const fit = fitTextBox(item.plain, { width, minHeight: height, fontSize: item.fontSize, padX: 8, padY: 6 })
+    return { ...item, x, y, w: width, h: fit.height, fontSize: fit.fontSize }
+  }
+  if (item.kind === 'shape') {
+    const fit = fitTextBox(item.plain, { width, minHeight: height, fontSize: item.fontSize, padX: 6, padY: 5 })
+    return { ...item, x, y, w: width, h: height, fontSize: fit.fontSize }
+  }
+  return { ...item, x, y, w: width, h: height }
+}
 
 type OrderAction = 'front' | 'back'
 
@@ -221,7 +315,6 @@ const MAX_ZOOM = 6
 const CULL_MARGIN = 320
 const ERASER_RADIUS = 14
 const QUICK_COLORS = ['#1a1a1a', '#7f1d1d', '#1d4ed8', '#15803d', '#b45309']
-const QUICK_WIDTHS = [2, 4, 7]
 const GRAPH_DIVISIONS = [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100]
 const GRAPH_STROKES = [1, 2, 3, 5, 8]
 const SOLID_KINDS: Array<{ id: SolidKind; label: string }> = [
@@ -277,7 +370,7 @@ const SOLID_MODES: Array<{ id: SolidMode; title: string; icon: ReactNode }> = [
   { id: 'rotate', title: 'Вращение: тяните по фигуре', icon: <RotateCw size={16} /> },
   { id: 'move', title: 'Перемещение: тяните по фигуре', icon: <Move size={16} /> },
   { id: 'paint', title: 'Заливка грани: щёлкните по грани', icon: <PaintBucket size={16} /> },
-  { id: 'draw', title: 'Рисование по грани: тяните по поверхности', icon: <PenLine size={16} /> }
+  { id: 'stroke', title: 'Штрих по грани: тяните по грани', icon: <PenLine size={16} /> }
 ]
 
 const SOLID_VIEWS: Array<{ label: string; short: string; pitch: number; yaw: number }> = [
@@ -291,7 +384,7 @@ const SOLID_MODE_HINTS: Record<SolidMode, string> = {
   rotate: 'Тяните по фигуре, чтобы повернуть. За границей фигуры — перенос.',
   move: 'Тяните по фигуре, чтобы переместить. Удерживайте Alt для переноса в любом режиме.',
   paint: 'Выберите цвет выше и щёлкните по грани, чтобы её залить.',
-  draw: 'Тяните по поверхности, чтобы рисовать прямо на грани.'
+  stroke: 'Тяните по грани, чтобы провести по ней штрих. Shift — ровная линия.'
 }
 
 export function BoardView(props: { docId: string }): ReactNode {
@@ -310,8 +403,9 @@ export function BoardView(props: { docId: string }): ReactNode {
   const [selection, setSelection] = useState<Set<string>>(new Set())
   const [drag, setDrag] = useState<DragMode>({ kind: 'idle' })
   const [readOnly, setReadOnly] = useState(false)
+  const { ask, element: promptElement } = usePrompt()
   const [showInspector, setShowInspector] = useState(false)
-  const [objectsOpen, setObjectsOpen] = useState(false)
+  
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [showExport, setShowExport] = useState(false)
   const [gridMode, setGridMode] = useState<GridMode>(settings?.gridMode ?? 'dots')
@@ -328,10 +422,8 @@ export function BoardView(props: { docId: string }): ReactNode {
   const [strokeWidth, setStrokeWidth] = useState(3)
   const [renaming, setRenaming] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
-  const [dirty, setDirty] = useState(false)
-  const [findOpen, setFindOpen] = useState(false)
-  const [findQuery, setFindQuery] = useState('')
-  const [findIndex, setFindIndex] = useState(0)
+  const [, setDirty] = useState(false)
+  
   const [liveZoom, setLiveZoom] = useState(40)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [menuPos, setMenuPos] = useState({ x: 8, y: 8 })
@@ -340,6 +432,8 @@ export function BoardView(props: { docId: string }): ReactNode {
   const [eraserCursor, setEraserCursor] = useState<{ x: number; y: number; size: number } | null>(null)
   const eraseBaseRef = useRef<BoardItem[] | null>(null)
   const itemNodesRef = useRef(new Map<string, HTMLDivElement>())
+  const liveRef = useRef(0)
+  const livePosRef = useRef(new Map<string, { x: number; y: number }>())
   const moveDeltaRef = useRef({ x: 0, y: 0 })
   const [snapEnabled, setSnapEnabled] = useState(true)
   const [dropActive, setDropActive] = useState(false)
@@ -358,12 +452,17 @@ export function BoardView(props: { docId: string }): ReactNode {
     setGuides(next)
   }, [])
 
+  useEffect(() => {
+    if (drag.kind === 'idle') showGuides([])
+  }, [drag.kind, showGuides])
+
   const registerNode = useCallback((id: string, node: HTMLDivElement | null) => {
     if (node) itemNodesRef.current.set(id, node)
     else itemNodesRef.current.delete(id)
   }, [])
 
   const wrapRef = useRef<HTMLDivElement | null>(null)
+  const canvasRectRef = useRef({ left: 0, top: 0 })
 
   useLayoutEffect(() => {
     if (!menu) return
@@ -388,9 +487,17 @@ export function BoardView(props: { docId: string }): ReactNode {
   const inertiaRef = useRef<number | null>(null)
   const undoRef = useRef<BoardItem[][]>([])
   const redoRef = useRef<BoardItem[][]>([])
+
   const dragBaseRef = useRef<BoardItem[] | null>(null)
+  const rotateRef = useRef<{ id: string; rotation: number } | null>(null)
+  const strokePointsRef = useRef<Array<{ x: number; y: number }>>([])
+  const strokeFrameRef = useRef(0)
+  const overlayPointRef = useRef<{ x: number; y: number } | null>(null)
+  const overlayFrameRef = useRef(0)
+  const overlayTimerRef = useRef<number | null>(null)
   const spaceRef = useRef(false)
   const saveTimerRef = useRef<number | null>(null)
+  const pendingRef = useRef<BoardItem[] | null>(null)
   const thumbTimerRef = useRef<number | null>(null)
   const dpr = Math.min(2, window.devicePixelRatio || 1)
 
@@ -501,14 +608,30 @@ export function BoardView(props: { docId: string }): ReactNode {
       const width = element.clientWidth
       const height = element.clientHeight
       if (!width || !height) return
+      const rect = element.getBoundingClientRect()
+      canvasRectRef.current = { left: rect.left, top: rect.top }
       setSize((current) => (current.width === width && current.height === height ? current : { width, height }))
       applyDom(viewRef.current)
     }
     const observer = new ResizeObserver(measure)
     observer.observe(element)
     measure()
-    return () => observer.disconnect()
+    window.addEventListener('resize', measure)
+    window.addEventListener('scroll', measure, true)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', measure)
+      window.removeEventListener('scroll', measure, true)
+    }
   }, [doc, applyDom])
+
+  useLayoutEffect(() => {
+    const element = wrapRef.current
+    if (!element) return
+    const rect = element.getBoundingClientRect()
+    if (rect.left === canvasRectRef.current.left && rect.top === canvasRectRef.current.top) return
+    canvasRectRef.current = { left: rect.left, top: rect.top }
+  })
 
   useEffect(() => {
     if (loading || !doc) return
@@ -538,7 +661,11 @@ export function BoardView(props: { docId: string }): ReactNode {
   const imageSelection = useMemo(() => selectedItems.filter((item) => item.kind === 'image'), [selectedItems])
   const graphSelection = useMemo(() => selectedItems.filter((item): item is GraphItem => item.kind === 'graph'), [selectedItems])
   const selectionLocked = selectedItems.length > 0 && selectedItems.every((item) => item.locked)
-  const panelKind: 'none' | 'selection' | 'solid' | 'graph' | 'create' | 'draw' | 'erase' | 'link' | 'text' | 'sticky' | 'image' = (() => {
+  const resizeTargets =
+    tool === 'select' && !readOnly && !editing
+      ? selectedItems.filter((item) => !item.locked && item.kind !== 'solid' && item.kind !== 'connector')
+      : []
+  const panelKind: 'none' | 'selection' | 'solid' | 'graph' | 'create' | 'erase' | 'link' | 'text' | 'sticky' | 'image' | 'table' = (() => {
     if (tool === 'graph') return 'graph'
     if (tool === 'solid') return 'solid'
     if (tool === 'select') {
@@ -610,21 +737,19 @@ export function BoardView(props: { docId: string }): ReactNode {
 
   const toWorld = useCallback(
     (clientX: number, clientY: number): { x: number; y: number } => {
-      const rect = wrapRef.current?.getBoundingClientRect()
-      const left = rect ? rect.left : 0
-      const top = rect ? rect.top : 0
+      const rect = canvasRectRef.current
       const current = viewRef.current
       return {
-        x: (clientX - left - size.width / 2) / current.zoom + current.x,
-        y: (clientY - top - size.height / 2) / current.zoom + current.y
+        x: (clientX - rect.left - size.width / 2) / current.zoom + current.x,
+        y: (clientY - rect.top - size.height / 2) / current.zoom + current.y
       }
     },
     [size]
   )
 
   const toScreen = useCallback((clientX: number, clientY: number): { x: number; y: number } => {
-    const rect = wrapRef.current?.getBoundingClientRect()
-    return { x: clientX - (rect ? rect.left : 0), y: clientY - (rect ? rect.top : 0) }
+    const rect = canvasRectRef.current
+    return { x: clientX - rect.left, y: clientY - rect.top }
   }, [])
 
   const fitTo = useCallback(
@@ -639,6 +764,46 @@ export function BoardView(props: { docId: string }): ReactNode {
   const fitAll = useCallback(() => {
     if (doc) fitTo(doc.bounds)
   }, [doc, fitTo])
+
+  const frames = useMemo(
+    () =>
+      (doc?.items ?? [])
+        .filter((item) => item.kind === 'frame')
+        .sort((left, right) => left.y - right.y || left.x - right.x),
+    [doc]
+  )
+
+  const [present, setPresent] = useState(false)
+  const [presentIndex, setPresentIndex] = useState(0)
+
+  const showFrame = useCallback(
+    (index: number) => {
+      const frame = frames[index]
+      if (!frame) return
+      setPresentIndex(index)
+      fitTo({ x: frame.x, y: frame.y, width: frame.w, height: frame.h })
+    },
+    [frames, fitTo]
+  )
+
+  const startPresent = useCallback(() => {
+    setPresent(true)
+    if (frames.length) showFrame(0)
+    else fitAll()
+  }, [frames.length, showFrame, fitAll])
+
+  const stopPresent = useCallback(() => {
+    setPresent(false)
+  }, [])
+
+  const stepFrame = useCallback(
+    (delta: number) => {
+      if (!frames.length) return
+      const next = (presentIndex + delta + frames.length) % frames.length
+      showFrame(next)
+    },
+    [frames.length, presentIndex, showFrame]
+  )
 
   const animateTo = useCallback(
     (target: Viewport, duration = 220): void => {
@@ -734,8 +899,11 @@ export function BoardView(props: { docId: string }): ReactNode {
   const persist = useCallback(
     (next: BoardItem[]) => {
       if (!doc) return
+      livePosRef.current.clear()
+      liveRef.current += 1
       setDoc({ ...doc, items: next, stats: { ...doc.stats, items: next.length } })
       setDirty(true)
+      pendingRef.current = next
       if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current)
       saveTimerRef.current = window.setTimeout(() => {
         saveTimerRef.current = null
@@ -743,6 +911,7 @@ export function BoardView(props: { docId: string }): ReactNode {
           .saveItems(props.docId, next)
           .then(() => {
             setDirty(false)
+            if (pendingRef.current === next) pendingRef.current = null
             scheduleThumb()
           })
           .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
@@ -750,6 +919,24 @@ export function BoardView(props: { docId: string }): ReactNode {
     },
     [doc, props.docId, fail, scheduleThumb]
   )
+
+  useEffect(() => {
+    const flush = (): void => {
+      const pending = pendingRef.current
+      if (!pending) return
+      pendingRef.current = null
+      void api.board.saveItems(props.docId, pending).catch(() => undefined)
+    }
+    const onHide = (): void => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    window.addEventListener('pagehide', flush)
+    document.addEventListener('visibilitychange', onHide)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', onHide)
+    }
+  }, [props.docId])
 
   const saveNow = useCallback(
     (items: BoardItem[]) => {
@@ -780,6 +967,8 @@ export function BoardView(props: { docId: string }): ReactNode {
       return
     }
     redoRef.current.push(doc.items)
+    livePosRef.current.clear()
+    liveRef.current += 1
     setDoc({ ...doc, items: previous, stats: { ...doc.stats, items: previous.length } })
     setHistoryState({ undo: undoRef.current.length, redo: redoRef.current.length })
     saveNow(previous)
@@ -794,6 +983,8 @@ export function BoardView(props: { docId: string }): ReactNode {
       return
     }
     undoRef.current.push(doc.items)
+    livePosRef.current.clear()
+    liveRef.current += 1
     setDoc({ ...doc, items: next, stats: { ...doc.stats, items: next.length } })
     setHistoryState({ undo: undoRef.current.length, redo: redoRef.current.length })
     saveNow(next)
@@ -868,8 +1059,35 @@ export function BoardView(props: { docId: string }): ReactNode {
   )
 
   const createAt = useCallback(
-    async (point: { x: number; y: number }, kind: 'text' | 'sticky' | 'image' | 'solid' | 'graph'): Promise<void> => {
+    async (point: { x: number; y: number }, kind: 'text' | 'sticky' | 'image' | 'solid' | 'graph' | 'table'): Promise<void> => {
       if (!doc || readOnly) return
+      if (kind === 'table') {
+        const columns = 3
+        const rows = 3
+        const columnWidth = 160
+        const rowHeight = 48
+        const id = uid('tbl_')
+        const item: BoardItem = {
+          id,
+          kind: 'table',
+          x: Math.round(point.x - (columnWidth * columns) / 2),
+          y: Math.round(point.y - (rowHeight * rows) / 2),
+          w: columnWidth * columns,
+          h: rowHeight * rows,
+          rotation: 0,
+          z: doc.items.length,
+          columns,
+          rows,
+          columnWidths: new Array(columns).fill(columnWidth),
+          rowHeights: new Array(rows).fill(rowHeight),
+          cells: new Array(columns * rows).fill(''),
+          fontSize: 14
+        }
+        commit([...doc.items, item])
+        setSelection(new Set([id]))
+        setTool('select')
+        return
+      }
       if (kind === 'graph') {
         const id = uid('graph_')
         const current = viewRef.current
@@ -1031,6 +1249,19 @@ export function BoardView(props: { docId: string }): ReactNode {
     [doc, readOnly, props.docId, remember, toast, fail]
   )
 
+  const insertImageFromUrl = useCallback(
+    async (url: string): Promise<void> => {
+      if (!doc || readOnly) return
+      try {
+        const fetched = await api.image.fetch(url)
+        await addImageAt(fetched.dataUrl, { x: viewRef.current.x, y: viewRef.current.y })
+      } catch (error) {
+        fail(error instanceof Error ? error.message : String(error))
+      }
+    },
+    [doc, readOnly, addImageAt, fail]
+  )
+
   const createFromDrag = useCallback(
     (drag: { startX: number; startY: number; currentX: number; currentY: number; tool: CreateTool; shape: ShapeName }): BoardItem | null => {
       if (!doc) return null
@@ -1105,6 +1336,73 @@ export function BoardView(props: { docId: string }): ReactNode {
     [doc, strokeColor, strokeWidth]
   )
 
+  const startResize = useCallback(
+    (id: string, handle: ResizeHandle, event: React.PointerEvent): void => {
+      event.stopPropagation()
+      if (readOnly || !doc) return
+      const item = byId.get(id)
+      if (!item || item.locked) return
+      if (item.kind === 'solid' || item.kind === 'connector') return
+      const box = itemBounds(item)
+      const point = toWorld(event.clientX, event.clientY)
+      dragBaseRef.current = doc.items
+      setDrag({ kind: 'resize', id, handle, startX: point.x, startY: point.y, origin: box, moved: false })
+    },
+    [byId, doc, readOnly, toWorld]
+  )
+
+  const startRotate = useCallback(
+    (id: string, event: React.PointerEvent): void => {
+      event.stopPropagation()
+      if (readOnly || !doc) return
+      const item = byId.get(id)
+      if (!item || item.locked) return
+      if (item.kind === 'solid' || item.kind === 'connector') return
+      const box = itemBounds(item)
+      const centerX = box.x + box.width / 2
+      const centerY = box.y + box.height / 2
+      const point = toWorld(event.clientX, event.clientY)
+      const startAngle = (Math.atan2(point.y - centerY, point.x - centerX) * 180) / Math.PI
+      dragBaseRef.current = doc.items
+      setDrag({ kind: 'turn', id, centerX, centerY, startAngle, startRotation: item.rotation, moved: false })
+    },
+    [byId, doc, readOnly, toWorld]
+  )
+
+  const scheduleStrokeRender = useCallback((): void => {
+    if (strokeFrameRef.current) return
+    strokeFrameRef.current = requestAnimationFrame(() => {
+      strokeFrameRef.current = 0
+      setDrag((current) => {
+        if (current.kind === 'face') {
+          return { ...current, points: strokePointsRef.current }
+        }
+        return current
+      })
+    })
+  }, [])
+
+  const scheduleOverlayRender = useCallback((): void => {
+    if (overlayFrameRef.current) return
+    const apply = (): void => {
+      overlayFrameRef.current = 0
+      if (overlayTimerRef.current !== null) {
+        window.clearTimeout(overlayTimerRef.current)
+        overlayTimerRef.current = null
+      }
+      const point = overlayPointRef.current
+      if (!point) return
+      setDrag((current) => {
+        if (current.kind === 'rubber') return { ...current, currentX: point.x, currentY: point.y }
+        if (current.kind === 'create') return { ...current, currentX: point.x, currentY: point.y }
+        if (current.kind === 'link') return { ...current, point }
+        return current
+      })
+    }
+    overlayFrameRef.current = requestAnimationFrame(apply)
+    overlayTimerRef.current = window.setTimeout(apply, 40)
+  }, [])
+
   const onPointerDown = useCallback(
     (event: React.PointerEvent) => {
       if (event.button !== 0 && event.button !== 1 && event.button !== 2) return
@@ -1134,11 +1432,6 @@ export function BoardView(props: { docId: string }): ReactNode {
         return
       }
       const point = toWorld(event.clientX, event.clientY)
-      if (tool === 'draw') {
-        event.preventDefault()
-        setDrag({ kind: 'draw', points: [point, point], straight: event.shiftKey })
-        return
-      }
       if (tool === 'erase') {
         if (!doc || readOnly) return
         eraseBaseRef.current = doc.items
@@ -1148,7 +1441,7 @@ export function BoardView(props: { docId: string }): ReactNode {
         setDrag({ kind: 'erase', removed })
         return
       }
-      if (tool === 'text' || tool === 'sticky' || tool === 'image' || tool === 'solid' || tool === 'graph') {
+      if (tool === 'text' || tool === 'sticky' || tool === 'image' || tool === 'solid' || tool === 'graph' || tool === 'table') {
         if (event.button !== 0) return
         void createAt(point, tool)
         return
@@ -1184,10 +1477,20 @@ export function BoardView(props: { docId: string }): ReactNode {
   const facePointOf = useCallback((item: SolidItem, faceId: string, point: { x: number; y: number }): { x: number; y: number } | null => {
     const polygon = solidPolygons(item).find((entry) => entry.id === faceId)
     if (!polygon) return null
-    const map = solidFaceMap(polygon, polygon.points)
-    if (!map) return null
-    return faceFromScreen(map, { x: point.x - item.x, y: point.y - item.y })
+    const world = solidScreenToLocal(item, polygon, { x: point.x - item.x, y: point.y - item.y })
+    if (!world) return null
+    return faceWorldToLocal(polygon, world)
   }, [])
+
+  const faceScreenPoint = useCallback(
+    (item: SolidItem, faceId: string, local: { x: number; y: number }): { x: number; y: number } | null => {
+      const projection = solidProjection(item)
+      const polygon = projection.polygons.find((entry) => entry.id === faceId)
+      if (!polygon) return null
+      return projectPoint(faceLocalToWorld(polygon, local), projection.camera)
+    },
+    []
+  )
 
   const paintSolidFace = useCallback(
     (items: BoardItem[], id: string, faceId: string, color: string) => {
@@ -1208,6 +1511,7 @@ export function BoardView(props: { docId: string }): ReactNode {
   const onItemPointerDown = useCallback(
     (id: string, event: React.PointerEvent) => {
       if (event.button !== 0) return
+      if (tool !== 'select') return
       event.stopPropagation()
       const item = byId.get(id)
       if (item?.locked) {
@@ -1218,14 +1522,18 @@ export function BoardView(props: { docId: string }): ReactNode {
         const point = toWorld(event.clientX, event.clientY)
         setSelection(new Set([id]))
         const hit = faceAtLocal(item, point)
-        if (solidMode === 'draw') {
-          if (!hit) return
-          setDrag({ kind: 'face', id, face: hit.id, points: [], straight: event.shiftKey })
-          return
-        }
         if (solidMode === 'paint') {
           if (!hit || !doc) return
           paintSolidFace(doc.items, id, hit.id, strokeColor)
+          return
+        }
+        if (solidMode === 'stroke') {
+          if (!hit) return
+          const local = facePointOf(item, hit.id, point)
+          if (!local) return
+          strokePointsRef.current = [local]
+          dragBaseRef.current = doc?.items ?? null
+          setDrag({ kind: 'face', id, face: hit.id, points: strokePointsRef.current, straight: event.shiftKey, done: [] })
           return
         }
         const moveOnly = solidMode === 'move' || event.altKey || !hit
@@ -1254,6 +1562,12 @@ export function BoardView(props: { docId: string }): ReactNode {
       } else if (!next.has(id)) {
         next.clear()
         next.add(id)
+      }
+      const groupId = item?.groupId
+      if (groupId && !event.shiftKey && doc) {
+        for (const entry of doc.items) {
+          if (entry.groupId === groupId && !entry.locked) next.add(entry.id)
+        }
       }
       setSelection(next)
       if (readOnly || tool !== 'select') return
@@ -1303,21 +1617,40 @@ export function BoardView(props: { docId: string }): ReactNode {
         return
       }
       const point = toWorld(event.clientX, event.clientY)
-      if (drag.kind === 'draw') {
-        const last = drag.points[drag.points.length - 1]
-        const current = viewRef.current
-        const straight = drag.straight || event.shiftKey
-        if (straight) {
-          if (Math.hypot(point.x - last.x, point.y - last.y) < 1) return
-          setDrag({ kind: 'draw', points: [drag.points[0], point], straight: true })
-          return
+      if (drag.kind === 'resize' && doc) {
+        const item = byId.get(drag.id)
+        if (!item) return
+        const dx = point.x - drag.startX
+        const dy = point.y - drag.startY
+        const horizontal = drag.handle.includes('e') ? 1 : drag.handle.includes('w') ? -1 : 0
+        const vertical = drag.handle.includes('s') ? 1 : drag.handle.includes('n') ? -1 : 0
+        let width = drag.origin.width + dx * horizontal
+        let height = drag.origin.height + dy * vertical
+        const keepRatio =
+          event.shiftKey ||
+          item.kind === 'image' ||
+          item.kind === 'frame' ||
+          item.kind === 'path'
+        if (keepRatio && horizontal && vertical) {
+          const ratio = drag.origin.width / Math.max(1, drag.origin.height)
+          if (Math.abs(dx) > Math.abs(dy)) height = width / ratio
+          else width = height * ratio
         }
-        if (Math.hypot(point.x - last.x, point.y - last.y) < Math.max(1.2, 1.6 / current.zoom)) return
-        setDrag({ kind: 'draw', points: [...drag.points, point], straight: false })
+        width = Math.max(RESIZE_MIN, width)
+        height = Math.max(RESIZE_MIN, height)
+        const x = horizontal < 0 ? drag.origin.x + drag.origin.width - width : drag.origin.x
+        const y = vertical < 0 ? drag.origin.y + drag.origin.height - height : drag.origin.y
+        setDoc({
+          ...doc,
+          items: doc.items.map((entry) => (entry.id === drag.id ? resizedItem(entry, drag.origin, { x, y, width, height }) : entry))
+        })
+        liveRef.current += 1
+        if (!drag.moved) setDrag({ ...drag, moved: true })
         return
       }
       if (drag.kind === 'rubber') {
-        setDrag({ ...drag, currentX: point.x, currentY: point.y })
+        overlayPointRef.current = point
+        scheduleOverlayRender()
         return
       }
       if (drag.kind === 'rotate' && doc) {
@@ -1326,42 +1659,71 @@ export function BoardView(props: { docId: string }): ReactNode {
         const item = byId.get(drag.id)
         if (item?.kind !== 'solid') return
         const box = solidBounds(item.solid, item.edge, pitch, yaw)
-        setDoc({
-          ...doc,
-          items: doc.items.map((entry) =>
-            entry.id === drag.id && entry.kind === 'solid'
-              ? ({ ...entry, pitch, yaw, w: Math.max(1, Math.round(box.width)), h: Math.max(1, Math.round(box.height)) } as SolidItem)
-              : entry
-          )
-        })
+        const items = doc.items.slice()
+        const index = items.findIndex((entry) => entry.id === drag.id)
+        if (index < 0) return
+        items[index] = {
+          ...items[index],
+          pitch,
+          yaw,
+          w: Math.max(1, Math.round(box.width)),
+          h: Math.max(1, Math.round(box.height))
+        } as SolidItem
+        setDoc({ ...doc, items })
         return
       }
       if (drag.kind === 'face' && doc) {
         const item = byId.get(drag.id)
         if (item?.kind !== 'solid') return
+        const hit = faceAtLocal(item, point)
+        if (!hit) return
+        if (hit.id !== drag.face) {
+          const local = facePointOf(item, hit.id, point)
+          if (!local) return
+          const done = [...drag.done, { face: drag.face, points: strokePointsRef.current }]
+          strokePointsRef.current = [local]
+          setDrag({ ...drag, face: hit.id, points: strokePointsRef.current, done })
+          return
+        }
         const local = facePointOf(item, drag.face, point)
         if (!local) return
-        const last = drag.points[drag.points.length - 1]
+        const last = strokePointsRef.current[strokePointsRef.current.length - 1]
         if (drag.straight || event.shiftKey) {
-          const anchor = drag.points[0] ?? drag.points[drag.points.length - 1]
+          const anchor = strokePointsRef.current[0] ?? last
           if (!anchor) {
-            setDrag({ ...drag, points: [local], straight: true })
+            strokePointsRef.current = [local]
+            scheduleStrokeRender()
             return
           }
           if (Math.hypot(local.x - anchor.x, local.y - anchor.y) < 1) return
-          setDrag({ ...drag, points: [anchor, local], straight: true })
+          strokePointsRef.current = [anchor, local]
+          scheduleStrokeRender()
           return
         }
-        if (last && Math.hypot(local.x - last.x, local.y - last.y) < 2) return
-        setDrag({ ...drag, points: [...drag.points, local] })
+        if (last && Math.hypot(local.x - last.x, local.y - last.y) < 0.5) return
+        strokePointsRef.current.push(local)
+        scheduleStrokeRender()
         return
       }
       if (drag.kind === 'create') {
-        setDrag({ ...drag, currentX: point.x, currentY: point.y })
+        overlayPointRef.current = point
+        scheduleOverlayRender()
+        return
+      }
+      if (drag.kind === 'turn' && doc) {
+        const angle = (Math.atan2(point.y - drag.centerY, point.x - drag.centerX) * 180) / Math.PI
+        let rotation = drag.startRotation + (angle - drag.startAngle)
+        if (event.shiftKey) rotation = Math.round(rotation / 15) * 15
+        rotation = Math.round(rotation)
+        const node = itemNodesRef.current.get(drag.id)
+        if (node) node.style.transform = `rotate(${rotation}deg)`
+        if (!drag.moved) setDrag({ ...drag, moved: true })
+        rotateRef.current = { id: drag.id, rotation }
         return
       }
       if (drag.kind === 'link') {
-        setDrag({ ...drag, point })
+        overlayPointRef.current = point
+        scheduleOverlayRender()
         return
       }
       if (drag.kind === 'erase') {
@@ -1396,10 +1758,14 @@ export function BoardView(props: { docId: string }): ReactNode {
       moveDeltaRef.current = { x: dx, y: dy }
       for (const [id, origin] of drag.origins) {
         const node = itemNodesRef.current.get(id)
+        const x = Math.round(origin.x + dx)
+        const y = Math.round(origin.y + dy)
+        livePosRef.current.set(id, { x, y })
         if (!node) continue
-        node.style.left = `${Math.round(origin.x + dx)}px`
-        node.style.top = `${Math.round(origin.y + dy)}px`
+        node.style.left = `${x}px`
+        node.style.top = `${y}px`
       }
+      liveRef.current += 1
       if (!drag.moved) setDrag({ ...drag, moved: true })
     },
     [drag, toWorld, toScreen, applyView, doc, eraseAt, snapEnabled, snapGrid, gridSize, selectedItems, showGuides]
@@ -1429,6 +1795,18 @@ export function BoardView(props: { docId: string }): ReactNode {
 
   const onPointerUp = useCallback(
     (event: React.PointerEvent) => {
+      if (strokeFrameRef.current) {
+        cancelAnimationFrame(strokeFrameRef.current)
+        strokeFrameRef.current = 0
+      }
+      if (overlayFrameRef.current) {
+        cancelAnimationFrame(overlayFrameRef.current)
+        overlayFrameRef.current = 0
+      }
+      if (overlayTimerRef.current !== null) {
+        window.clearTimeout(overlayTimerRef.current)
+        overlayTimerRef.current = null
+      }
       if (drag.kind === 'create' && doc) {
         const created = createFromDrag(drag)
         setDrag({ kind: 'idle' })
@@ -1439,16 +1817,26 @@ export function BoardView(props: { docId: string }): ReactNode {
         }
         return
       }
-      if (drag.kind === 'rotate' && doc) {
+      if (drag.kind === 'turn' && doc) {
         if (dragBaseRef.current) remember(dragBaseRef.current)
         dragBaseRef.current = null
-        persist(doc.items)
+        const live = rotateRef.current
+        rotateRef.current = null
+        if (live) {
+          const next = doc.items.map((item) =>
+            item.id === live.id ? ({ ...item, rotation: live.rotation } as BoardItem) : item
+          )
+          commit(next)
+        }
         setDrag({ kind: 'idle' })
         return
       }
       if (drag.kind === 'face' && doc) {
         const item = byId.get(drag.id)
-        if (item?.kind === 'solid' && drag.points.length >= 2) {
+        const segments = [...drag.done, { face: drag.face, points: strokePointsRef.current }].filter(
+          (segment) => segment.points.length >= 2
+        )
+        if (item?.kind === 'solid' && segments.length) {
           if (dragBaseRef.current) remember(dragBaseRef.current)
           dragBaseRef.current = null
           commit(
@@ -1458,7 +1846,12 @@ export function BoardView(props: { docId: string }): ReactNode {
                     ...entry,
                     sketch: [
                       ...entry.sketch,
-                      { face: drag.face, points: drag.points, color: strokeColor, lineWidth: Math.max(1, strokeWidth) }
+                      ...segments.map((segment) => ({
+                        face: segment.face,
+                        points: segment.points,
+                        color: strokeColor,
+                        lineWidth: Math.max(1, strokeWidth)
+                      }))
                     ]
                   } as SolidItem)
                 : entry
@@ -1499,36 +1892,7 @@ export function BoardView(props: { docId: string }): ReactNode {
         setTool('select')
         return
       }
-      if (drag.kind === 'draw' && doc) {
-      const points = drag.points
-      if (points.length >= 2) {
-        const xs = points.map((entry) => entry.x)
-        const ys = points.map((entry) => entry.y)
-        const minX = Math.min(...xs)
-        const minY = Math.min(...ys)
-        const local = drag.straight
-          ? points.map((entry) => ({ x: entry.x - minX, y: entry.y - minY }))
-          : smoothPoints(points.map((entry) => ({ x: entry.x - minX, y: entry.y - minY })), 2)
-        const path: BoardItem = {
-          id: uid('path_'),
-          kind: 'path',
-          x: minX,
-          y: minY,
-          w: Math.max(2, Math.max(...xs) - minX),
-          h: Math.max(2, Math.max(...ys) - minY),
-          rotation: 0,
-          z: doc.items.length,
-          points: local,
-          color: strokeColor,
-          lineWidth: strokeWidth,
-          closed: false
-        }
-        commit([...doc.items, path])
-      }
-      setDrag({ kind: 'idle' })
-      return
-    }
-    if (drag.kind === 'erase') {
+      if (drag.kind === 'erase') {
       const base = eraseBaseRef.current
       eraseBaseRef.current = null
       if (doc && base && drag.removed.size) {
@@ -1539,7 +1903,18 @@ export function BoardView(props: { docId: string }): ReactNode {
       setEraserCursor(null)
       return
     }
-    if (drag.kind === 'rubber' && doc) {
+    if (drag.kind === 'resize' && doc) {
+        if (drag.moved) {
+          if (dragBaseRef.current) remember(dragBaseRef.current)
+          dragBaseRef.current = null
+          persist(doc.items)
+        } else {
+          dragBaseRef.current = null
+        }
+        setDrag({ kind: 'idle' })
+        return
+      }
+      if (drag.kind === 'rubber' && doc) {
       const rect: Rect = {
         x: Math.min(drag.startX, drag.currentX),
         y: Math.min(drag.startY, drag.currentY),
@@ -1627,6 +2002,73 @@ export function BoardView(props: { docId: string }): ReactNode {
     [doc, commit, readOnly, toast]
   )
 
+  const copyItems = useCallback(
+    (ids: string[]) => {
+      if (!doc || readOnly) return
+      const source = doc.items.filter((item) => ids.includes(item.id))
+      if (!source.length) return
+      writeObjectClipboard(props.docId, source)
+      const html = encodeLiroClipboard({ version: 1, docId: props.docId, items: source })
+      void api.clipboard
+        .writeHtml(html, source.map((item) => ('plain' in item ? item.plain : '')).filter(Boolean).join('\n'))
+        .catch(() => undefined)
+      toast(`Скопировано объектов: ${source.length}`, 'copy')
+    },
+    [doc, readOnly, props.docId, toast]
+  )
+
+  const pasteObjects = useCallback(async () => {
+    if (!doc || readOnly) return
+    const stored = readObjectClipboard()
+    const source = stored?.items ?? []
+    if (!source.length) {
+      toast('В буфере нет объектов Liro', 'error')
+      return
+    }
+    const clones = source.map((item, index) => ({
+      ...item,
+      id: uid(`cp_${index}`),
+      x: item.x + 28,
+      y: item.y + 28,
+      z: doc.items.length + index
+    })) as BoardItem[]
+    try {
+      const result = await api.board.pasteItems({ docId: props.docId, sourceDocId: stored?.docId ?? props.docId, items: clones })
+      const loaded = await api.board.open(props.docId)
+      remember(doc.items)
+      setDoc(loaded)
+      setSelection(new Set(clones.map((item) => item.id)))
+      toast(`Вставлено объектов: ${result.added}`, 'paste')
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error))
+    }
+  }, [doc, readOnly, props.docId, remember, toast, fail])
+
+  const groupedSelection = useMemo(() => {
+    const groups = new Set(selectedItems.map((item) => item.groupId).filter((value): value is string => !!value))
+    return groups.size > 0
+  }, [selectedItems])
+
+  const groupSelection = useCallback(() => {
+    if (!doc || readOnly || selection.size < 2) return
+    const groupId = uid('grp_')
+    const target = new Set(selection)
+    commit(doc.items.map((item) => (target.has(item.id) ? ({ ...item, groupId } as BoardItem) : item)))
+    toast('Объекты объединены в группу', 'layer')
+  }, [doc, commit, readOnly, selection, toast])
+
+  const ungroupSelection = useCallback(() => {
+    if (!doc || readOnly) return
+    const groups = new Set(selectedItems.map((item) => item.groupId).filter((value): value is string => !!value))
+    if (!groups.size) return
+    commit(
+      doc.items.map((item) =>
+        item.groupId && groups.has(item.groupId) ? ({ ...item, groupId: undefined } as BoardItem) : item
+      )
+    )
+    toast('Группа разделена', 'layer')
+  }, [doc, commit, readOnly, selectedItems, toast])
+
   const patchItem = useCallback(
     (id: string, patch: Partial<BoardItem>) => {
       if (!doc || readOnly) return
@@ -1653,37 +2095,6 @@ export function BoardView(props: { docId: string }): ReactNode {
       )
     },
     [doc, readOnly, selection, selectedItems, commit, toast]
-  )
-
-  const orderItems = useCallback(
-    (ids: string[], action: 'front' | 'back' | 'up' | 'down'): void => {
-      if (!doc || readOnly || !ids.length) return
-      const target = new Set(ids)
-      const sorted = [...doc.items].sort((left, right) => left.z - right.z)
-      if (action === 'front' || action === 'back') {
-        const rest = sorted.filter((item) => !target.has(item.id))
-        const moved = sorted.filter((item) => target.has(item.id))
-        const next = action === 'front' ? [...rest, ...moved] : [...moved, ...rest]
-        commit(next.map((item, index) => ({ ...item, z: index }) as BoardItem))
-        return
-      }
-      const list = [...sorted]
-      const indices = list.map((item, index) => (target.has(item.id) ? index : -1)).filter((index) => index >= 0)
-      if (indices.length !== 1) return
-      const at = indices[0]
-      const swapWith = action === 'up' ? at + 1 : at - 1
-      if (swapWith < 0 || swapWith >= list.length) return
-      const current = list[at]
-      const other = list[swapWith]
-      if (!current || !other) return
-      const swapZ = current.z
-      current.z = other.z
-      other.z = swapZ
-      list[at] = other
-      list[swapWith] = current
-      commit(list as BoardItem[])
-    },
-    [doc, readOnly, commit]
   )
 
   const applyOrder = useCallback(
@@ -1776,6 +2187,7 @@ const assetOf = (dataUrl: string, size: { width: number; height: number } | null
         await addImageAt(extra[index], { x: last.x + last.w + 300, y: last.y + index * 320 })
       }
       toast(`Картинок заменено: ${count}, добавлено: ${extra.length}`, 'image')
+      if (count < targets.length) toast(`Заглушек осталось без файла: ${targets.length - count}`, 'image')
     },
     [doc, readOnly, imageSelection, addImageAt, commit, toast]
   )
@@ -1787,14 +2199,12 @@ const assetOf = (dataUrl: string, size: { width: number; height: number } | null
       if (!item || item.kind !== 'image') return
       try {
         if (source === 'url') {
-          const value = window.prompt('Ссылка на картинку', item.asset?.sourceUrl ?? 'https://')
+          const value = await ask('Ссылка на картинку', item.asset?.sourceUrl ?? 'https://', 'https://')
           if (!value) return
           const url = value.trim()
-          patchItem(id, {
-            asset: { file: '', mime: 'image/link', bytes: 0, sourceUrl: url },
-            unsupported: true
-          } as Partial<BoardItem>)
-          toast('Картинка заменена ссылкой', 'link')
+          const fetched = await api.image.fetch(url)
+          await applyImageData(id, fetched.dataUrl)
+          toast('Картинка заменена', 'image')
           return
         }
         const dataUrl = source === 'clipboard' ? await api.clipboard.readImage() : await api.dialog.pickImage()
@@ -1808,7 +2218,7 @@ const assetOf = (dataUrl: string, size: { width: number; height: number } | null
         toast(error instanceof Error ? error.message : String(error), 'error')
       }
     },
-    [doc, readOnly, byId, patchItem, applyImageData, toast]
+    [doc, readOnly, byId, patchItem, applyImageData, toast, ask]
   )
 
   const replaceImagesFromFiles = useCallback(async (): Promise<void> => {
@@ -1904,72 +2314,39 @@ const assetOf = (dataUrl: string, size: { width: number; height: number } | null
     toast(`Плоскость вписана в окно: ${width}×${height}`, 'zoom')
   }, [doc, readOnly, graphPanel, size, patchGraph, toast])
 
-  const convertToShape = useCallback(
-    (ids: string[]) => {
-      if (!doc || readOnly) return
-      const target = new Set(ids)
-      const next = doc.items.map((item) => {
-        if (!target.has(item.id) || !isUnsupported(item)) return item
-        return {
-          id: uid('shape_'),
-          kind: 'shape',
-          x: item.x,
-          y: item.y,
-          w: Math.max(24, item.w),
-          h: Math.max(24, item.h),
-          rotation: item.rotation,
-          z: item.z,
-          shape: 'rectangle',
-          fillColor: '#ffffff',
-          color: '#1a1a1a',
-          borderStyle: 'solid',
-          lineWidth: 2,
-          content: '',
-          plain: kindLabel(item.kind),
-          raw: { replacedFrom: item.sourceType ?? item.kind }
-        } as unknown as BoardItem
-      })
-      commit(next)
-      toast('Объекты заменены простыми фигурами', 'shape')
-    },
-    [doc, readOnly, commit, toast]
-  )
+  
 
 const openLinkPreview = useCallback(
     async (preset?: string): Promise<void> => {
-      if (preset) {
-        await api.preview.open({ kind: 'web', title: preset, src: preset })
-        return
-      }
-      const value = window.prompt('Ссылка или путь к файлу для предпросмотра', linkPreview)
-      if (!value) return
-      const src = value.trim()
+      const asked = preset ?? (await ask('Ссылка или путь к файлу для предпросмотра', linkPreview, 'https://'))
+      if (!asked) return
+      const src = asked.trim()
+      if (!src) return
       setLinkPreview(src)
-      await api.preview.open({ kind: 'file', title: src.split(/[\\/]/).pop() ?? src, src })
+      const web = /^https?:\/\//i.test(src)
+      const title = web ? /^https?:\/\/([^/?#]+)/i.exec(src)?.[1] ?? src : src.split(/[\\/]/).pop() ?? src
+      await api.preview.open({ kind: web ? 'web' : 'file', title, src })
     },
-    [linkPreview]
+    [ask, linkPreview]
   )
 
   const openItemPreview = useCallback(
     (item: BoardItem): void => {
-      if (item.kind === 'image') {
-        const asset = (item as { asset?: { file?: string; src?: string } }).asset
-        const file = asset?.file
-        const src = file ? assetUrl(file) : asset?.src
-        if (!src) {
-          toast('У картинки нет файла, предпросмотр недоступен', 'preview')
-          return
-        }
-        void api.preview.open({ kind: 'image', title: item.sourceType ?? 'Картинка', src })
+      const raw = (item.raw ?? {}) as { url?: string; link?: string; source?: string; embedUrl?: string; title?: string }
+      const asset = (item as { asset?: { file?: string; src?: string; sourceUrl?: string } }).asset
+      const title = (item as { title?: string }).title || raw.title || (item.kind === 'image' ? 'Картинка' : 'Объект')
+      const file = asset?.file ? assetUrl(asset.file) : ''
+      if (file) {
+        void api.preview.open({ kind: 'file', title, src: file })
         return
       }
-      const raw = (item.raw ?? {}) as { url?: string; link?: string; source?: string; embedUrl?: string }
-      const url = raw.url ?? raw.link ?? raw.source ?? raw.embedUrl ?? ''
-      if (!url) {
-        toast('У объекта нет ссылки', 'link')
+      const sourceUrl = asset?.sourceUrl ?? asset?.src ?? ''
+      const url = sourceUrl || raw.url || raw.link || raw.source || raw.embedUrl || ''
+      if (url) {
+        void api.preview.open({ kind: 'web', title, src: url })
         return
       }
-      void api.preview.open({ kind: 'web', title: item.sourceType ?? 'Ссылка', src: url })
+      toast('У объекта нет ни файла, ни ссылки', 'link')
     },
     [assetUrl, toast]
   )
@@ -2007,7 +2384,8 @@ const navigateTo = useCallback(
       }
       if (item.kind !== 'text' && item.kind !== 'sticky' && item.kind !== 'shape') return
       setSelection(new Set([id]))
-      setEditing({ id, value: item.content ?? '' })
+      const text = item.plain || item.content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+      setEditing({ id, value: text })
     },
     [byId, readOnly, replaceImage]
   )
@@ -2134,6 +2512,27 @@ const navigateTo = useCallback(
 
   const pasteIntoBoard = useCallback(
     async (html?: string, text?: string): Promise<void> => {
+      const liro = html ? decodeLiroClipboard(html) : null
+      if (liro) {
+        const clones = liro.items.map((item, index) => ({
+          ...item,
+          id: uid(`cp_${index}`),
+          x: item.x + 28,
+          y: item.y + 28,
+          z: (doc?.items.length ?? 0) + index
+        })) as BoardItem[]
+        try {
+          const result = await api.board.pasteItems({ docId: props.docId, sourceDocId: liro.docId, items: clones })
+          const loaded = await api.board.open(props.docId)
+          if (doc) remember(doc.items)
+          setDoc(loaded)
+          setSelection(new Set(clones.map((item) => item.id)))
+          toast(`Вставлено объектов: ${result.added}`, 'paste')
+        } catch (error) {
+          fail(error instanceof Error ? error.message : String(error))
+        }
+        return
+      }
       const payload = html ? parseClipboardHtml(html) : text ? parseClipboardText(text) : null
       if (!payload || !payload.items.length) {
         toast('В буфере обмена нет объектов для вставки', 'error')
@@ -2147,12 +2546,17 @@ const navigateTo = useCallback(
         const rect = loaded.bounds
         const zoom = clamp(Math.min(size.width / rect.width, size.height / rect.height) * 0.92, MIN_ZOOM, 1.6)
         applyView({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, zoom }, true)
-        toast(`Добавлено объектов: ${result.added}${result.images ? `, картинок: ${result.images}` : ''}`, 'paste')
+        toast(
+          payload.label === 'Формат доски'
+            ? `Вставлено объектов доски: ${result.added}${result.images ? `, картинок: ${result.images}` : ''}`
+            : `Вставлено: ${result.added}`,
+          'paste'
+        )
       } catch (error) {
         fail(error instanceof Error ? error.message : String(error))
       }
     },
-    [props.docId, toast, fail, size, applyView, doc, remember]
+    [props.docId, toast, fail, size, applyView, doc, remember, setSelection]
   )
 
   const insertImages = useCallback(
@@ -2232,6 +2636,7 @@ const navigateTo = useCallback(
 
   useEffect(() => {
     const onPaste = (event: ClipboardEvent): void => {
+      if (isEditableTarget(event.target)) return
       const payload = payloadFromEvent(event)
       if (!payload) {
         const files = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith('image/'))
@@ -2259,6 +2664,8 @@ const navigateTo = useCallback(
       if (command === 'undo') undo()
       else if (command === 'redo') redo()
       else if (command === 'duplicate' && selection.size) duplicateItems([...selection])
+      else if (command === 'copy' && selection.size) copyItems([...selection])
+      else if (command === 'paste') void pasteObjects()
       else if (command === 'delete' && selection.size) deleteItems([...selection])
       else if (command === 'select-all' && doc) {
         setSelection(new Set(doc.items.filter((item) => item.kind !== 'connector').map((item) => item.id)))
@@ -2266,29 +2673,7 @@ const navigateTo = useCallback(
     }
     window.addEventListener('liro:board-command', listener)
     return () => window.removeEventListener('liro:board-command', listener)
-  }, [undo, redo, duplicateItems, deleteItems, selection, doc])
-
-  const searchResults = useMemo(() => {
-    if (!doc || !findQuery.trim()) return [] as BoardItem[]
-    const needle = findQuery.trim().toLowerCase()
-    return doc.items
-      .filter((item) => {
-        const plain = 'plain' in item ? String((item as { plain?: string }).plain ?? '') : ''
-        const title = 'title' in item ? String((item as { title?: string }).title ?? '') : ''
-        const frameTitle = item.kind === 'frame' ? item.title : ''
-        return `${plain} ${title} ${frameTitle}`.toLowerCase().includes(needle)
-      })
-      .slice(0, 200)
-  }, [doc, findQuery])
-
-  useEffect(() => {
-    if (findIndex >= searchResults.length) setFindIndex(0)
-  }, [searchResults.length, findIndex])
-
-  useEffect(() => {
-    const item = searchResults[findIndex]
-    if (item) navigateTo(item.id)
-  }, [findIndex])
+  }, [undo, redo, duplicateItems, deleteItems, copyItems, pasteObjects, selection, doc])
 
   useEffect(() => {
     const listener = (event: KeyboardEvent): void => {
@@ -2300,6 +2685,23 @@ const navigateTo = useCallback(
         return
       }
       if (typing) return
+      if (present) {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          stopPresent()
+          return
+        }
+        if (event.key === 'ArrowRight' || event.key === 'PageDown') {
+          event.preventDefault()
+          stepFrame(1)
+          return
+        }
+        if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
+          event.preventDefault()
+          stepFrame(-1)
+          return
+        }
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a' && doc) {
         event.preventDefault()
         setSelection(new Set(doc.items.filter((item) => item.kind !== 'connector').map((item) => item.id)))
@@ -2307,12 +2709,12 @@ const navigateTo = useCallback(
         return
       }
       const plain = !event.ctrlKey && !event.metaKey && !event.altKey
-      if (plain && (event.key.toLowerCase() === 'v' || event.key.toLowerCase() === 'h' || event.key.toLowerCase() === 'p' || event.key.toLowerCase() === 'e')) {
+      if (plain && (event.key.toLowerCase() === 'v' || event.key.toLowerCase() === 'h' || event.key.toLowerCase() === 'e')) {
         const mode = event.key.toLowerCase()
-        setTool(mode === 'v' ? 'select' : mode === 'h' ? 'pan' : mode === 'e' ? 'erase' : 'draw')
+        setTool(mode === 'v' ? 'select' : mode === 'h' ? 'pan' : 'erase')
         return
       }
-      const toolKeys: Record<string, Tool> = { s: 'create', l: 'create', c: 'link', t: 'text', n: 'sticky', i: 'image', d: 'solid', g: 'graph' }
+      const toolKeys: Record<string, Tool> = { s: 'create', l: 'create', c: 'link', t: 'text', n: 'sticky', i: 'image', d: 'solid', g: 'graph', b: 'table' }
       const mapped = plain ? toolKeys[event.key.toLowerCase()] : undefined
       if (mapped && !readOnly) {
         if (event.key.toLowerCase() === 'l') setCreateTool((current) => (current === 'line' ? 'arrow' : 'line'))
@@ -2321,7 +2723,6 @@ const navigateTo = useCallback(
       }
       if (event.key === 'Escape') {
         setSelection(new Set())
-        setFindOpen(false)
         setMenu(null)
         setTool('select')
         return
@@ -2336,6 +2737,16 @@ const navigateTo = useCallback(
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd') {
         event.preventDefault()
         duplicateItems([...selection])
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c' && selection.size) {
+        event.preventDefault()
+        copyItems([...selection])
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v' && readObjectClipboard()) {
+        event.preventDefault()
+        void pasteObjects()
         return
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
@@ -2368,10 +2779,6 @@ const navigateTo = useCallback(
       }
       if (event.key === '=' || event.key === '+') zoomBy(1.2)
       if (event.key === '-' || event.key === '_') zoomBy(1 / 1.2)
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
-        event.preventDefault()
-        setFindOpen(true)
-      }
       if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
         if (!selection.size || readOnly || !doc) return
         event.preventDefault()
@@ -2387,7 +2794,7 @@ const navigateTo = useCallback(
       window.removeEventListener('keydown', listener)
       window.removeEventListener('keyup', listener)
     }
-  }, [doc, selection, zoomBy, fitAll, deleteItems, duplicateItems, commit, undo, redo, readOnly, animateTo, pasteIntoBoard, fail])
+  }, [doc, selection, zoomBy, fitAll, deleteItems, duplicateItems, copyItems, pasteObjects, commit, undo, redo, readOnly, animateTo, pasteIntoBoard, fail, present, stopPresent, stepFrame])
 
   const gridStep = useMemo(() => {
     const step = Math.max(4, gridSize)
@@ -2401,11 +2808,11 @@ const navigateTo = useCallback(
     if (fade <= 0.01) return { backgroundImage: 'none', backgroundSize: 'auto' }
     const minor = Math.round(cell * 100) / 100
     const major = Math.round(minor * 5 * 100) / 100
-    const soft = Math.round(0.05 * fade * 1000) / 1000
-    const firm = Math.round(0.095 * fade * 1000) / 1000
+    const soft = Math.round(0.03 * fade * 1000) / 1000
+    const firm = Math.round(0.06 * fade * 1000) / 1000
     if (gridMode === 'dots') {
       return {
-        backgroundImage: `radial-gradient(circle at 0.5px 0.5px, rgba(24,24,30,${Math.round(0.2 * fade * 1000) / 1000}) 0.5px, transparent 0)`,
+        backgroundImage: `radial-gradient(circle at 0.5px 0.5px, rgba(24,24,30,${Math.round(0.19 * fade * 1000) / 1000}) 0.6px, transparent 0)`,
         backgroundSize: `${minor}px ${minor}px`
       }
     }
@@ -2442,21 +2849,43 @@ const navigateTo = useCallback(
 
   if (!doc) return null
 
-  const drawBox = (() => {
-    if (drag.kind !== 'draw' || drag.points.length < 2) return null
-    const xs = drag.points.map((point) => point.x)
-    const ys = drag.points.map((point) => point.y)
-    const minX = Math.min(...xs)
-    const minY = Math.min(...ys)
-    const path = drag.points
-      .map((point, index) => `${index === 0 ? 'M' : 'L'} ${(point.x - minX).toFixed(1)} ${(point.y - minY).toFixed(1)}`)
-      .join(' ')
+  const strokeBox = (() => {
+    let world: Array<{ x: number; y: number }> = []
+    if (drag.kind === 'face' && drag.points.length >= 1) {
+      const item = byId.get(drag.id)
+      if (item && item.kind === 'solid') {
+        const segments = [...drag.done, { face: drag.face, points: drag.points }]
+        for (const segment of segments) {
+          for (const point of segment.points) {
+            const screen = faceScreenPoint(item, segment.face, point)
+            if (screen) world.push({ x: screen.x + item.x, y: screen.y + item.y })
+          }
+        }
+      }
+    }
+    if (world.length < 2) return null
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const point of world) {
+      if (point.x < minX) minX = point.x
+      if (point.y < minY) minY = point.y
+      if (point.x > maxX) maxX = point.x
+      if (point.y > maxY) maxY = point.y
+    }
+    const pad = Math.ceil(strokeWidth) + 2
+    minX -= pad
+    minY -= pad
+    maxX += pad
+    maxY += pad
+    const local = world.map((point) => ({ x: point.x - minX, y: point.y - minY }))
     return {
       x: minX,
       y: minY,
-      width: Math.max(1, Math.max(...xs) - minX),
-      height: Math.max(1, Math.max(...ys) - minY),
-      path
+      width: Math.max(1, maxX - minX),
+      height: Math.max(1, maxY - minY),
+      path: curvePath(local)
     }
   })()
 
@@ -2497,7 +2926,6 @@ const navigateTo = useCallback(
                 {doc.title}
               </div>
             )}
-            {dirty ? <div className="bbar__sub">Сохраняем…</div> : null}
           </div>
           <div className="bbar__sep" />
           <button
@@ -2540,22 +2968,15 @@ const navigateTo = useCallback(
             <button
               type="button"
               className="toolbtn"
-              onClick={() => setFindOpen((value) => !value)}
-              aria-label="Найти"
-              title="Найти (Ctrl+F)"
-              data-active={findOpen}
+              onClick={() => {
+                if (present) stopPresent()
+                else startPresent()
+              }}
+              aria-label="Режим докладчика"
+              title="Режим докладчика: показ по рамкам"
+              data-active={present}
             >
-              <Search size={16} />
-            </button>
-            <button
-              type="button"
-              className="toolbtn"
-              onClick={() => setObjectsOpen((value) => !value)}
-              aria-label="Список объектов"
-              title="Список объектов и неподдерживаемые"
-              data-active={objectsOpen}
-            >
-              <List size={16} />
+              <Play size={16} />
             </button>
             <button
               type="button"
@@ -2565,7 +2986,6 @@ const navigateTo = useCallback(
               onClick={() => {
                 setDetailsOpen((value) => !value)
                 setShowInspector(false)
-                setObjectsOpen(false)
               }}
               aria-label="Подробнее о доске"
               title="Подробнее о доске: состав, файлы, происхождение"
@@ -2612,7 +3032,6 @@ const navigateTo = useCallback(
               className="toolbtn"
               onClick={() => {
                 setBoardSettingsOpen((value) => !value)
-                setObjectsOpen(false)
                 setDetailsOpen(false)
                 setShowInspector(false)
               }}
@@ -2628,37 +3047,11 @@ const navigateTo = useCallback(
             </button>
           </div>
 
-          {findOpen ? (
-            <div className="bbar bbar--panel">
-              <input
-                className="input"
-                autoFocus
-                placeholder="Поиск по тексту на доске"
-                value={findQuery}
-                onChange={(event) => {
-                  setFindQuery(event.target.value)
-                  setFindIndex(0)
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') setFindIndex((value) => value + 1)
-                  if (event.key === 'Escape') setFindOpen(false)
-                }}
-              />
-              <span className="dim" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>
-                {findQuery ? `${Math.min(findIndex + 1, searchResults.length)}/${searchResults.length}` : ''}
-              </span>
-              <button type="button" className="toolbtn" onClick={() => setFindOpen(false)} aria-label="Закрыть поиск">
-                <X size={15} />
-              </button>
-            </div>
-          ) : null}
-
           {missingImages ? (
             <div className="bbar bbar--panel bbar--warn">
               <ImageOff size={15} />
               <span>
-                Без данных: {missingImages} картинок. При копировании изображения не переносятся — выделите
-                заглушки и перетащите в них файлы из проводника.
+                Без данных: {missingImages} картинок. Изображения при копировании не переносятся — выделите заглушки и перетащите в них файлы из проводника.
               </span>
               <button
                 type="button"
@@ -2702,22 +3095,56 @@ const navigateTo = useCallback(
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
       >
-        <ConnectorLayer doc={doc} viewRef={viewRef} size={size} visible={visible} dpr={dpr} />
+        <ConnectorLayer doc={doc} viewRef={viewRef} size={size} visible={visible} dpr={dpr} liveRef={liveRef} livePosRef={livePosRef} />
         <div className="boardview__world" ref={worldRef}>
-          {rendered.map((item) => (
-            <ItemView
-              key={item.id}
-              item={item}
-              doc={doc}
-              assetUrl={assetUrl}
-              selected={tool === 'select' && selection.has(item.id)}
-              dimmed={false}
-              moving={drag.kind === 'move' && selection.has(item.id)}
-              onNode={registerNode}
-              onPointerDown={readOnly || tool !== 'select' || item.locked ? undefined : onItemPointerDown}
-              onDoubleClick={readOnly ? undefined : startEditing}
-            />
-          ))}
+          <ItemLayer
+            items={rendered}
+            doc={doc}
+            assetUrl={assetUrl}
+            selection={selection}
+            selectable={tool === 'select' && !readOnly}
+            moving={drag.kind === 'move'}
+            editable={!readOnly}
+            onPatch={patchItem}
+            onNode={registerNode}
+            onPointerDown={onItemPointerDown}
+            onDoubleClick={readOnly ? undefined : startEditing}
+            onLink={(href) => void openLinkPreview(href)}
+          />
+          {resizeTargets.map((target) => {
+            const box = itemBounds(target)
+            const grip = 11 / Math.max(0.05, liveZoom)
+            const half = grip / 2
+            return (
+              <div key={`rs${target.id}`} className="resizeframe" style={{ left: box.x, top: box.y, width: box.width, height: box.height }}>
+                {RESIZE_HANDLES.map((handle) => (
+                  <span
+                    key={handle.id}
+                    className="resizehandle"
+                    style={{
+                      left: `calc(${handle.cx * 100}% - ${half}px)`,
+                      top: `calc(${handle.cy * 100}% - ${half}px)`,
+                      width: grip,
+                      height: grip,
+                      cursor: handle.cursor
+                    }}
+                    onPointerDown={(event) => startResize(target.id, handle.id, event)}
+                  />
+                ))}
+                <span
+                  className="rotatehandle"
+                  style={{
+                    left: `calc(50% - ${half}px)`,
+                    top: `${-28 / Math.max(0.05, liveZoom) - half}px`,
+                    width: grip,
+                    height: grip
+                  }}
+                  title="Повернуть"
+                  onPointerDown={(event) => startRotate(target.id, event)}
+                />
+              </div>
+            )
+          })}
           {guides.map((guide, index) =>
             guide.axis === 'x' ? (
               <div
@@ -2733,7 +3160,7 @@ const navigateTo = useCallback(
               />
             )
           )}
-          {textSelection.length && tool === 'select' && drag.kind !== 'move' && textPanelSpot ? (
+          {textSelection.length && tool === 'select' && alignOpen && drag.kind !== 'move' && textPanelSpot ? (
             <div
               className="textpanel"
               style={{
@@ -2822,22 +3249,22 @@ const navigateTo = useCallback(
           {rubberRect ? (
             <div className="rubber" style={{ left: rubberRect.x, top: rubberRect.y, width: rubberRect.width, height: rubberRect.height }} />
           ) : null}
-          {drawBox ? (
-            <div className="inkpreview" style={{ left: drawBox.x, top: drawBox.y, width: drawBox.width, height: drawBox.height }}>
-              <svg width="100%" height="100%" viewBox={`0 0 ${Math.max(1, drawBox.width)} ${Math.max(1, drawBox.height)}`}>
+          {strokeBox ? (
+            <div className="inkpreview" style={{ left: strokeBox.x, top: strokeBox.y, width: strokeBox.width, height: strokeBox.height }}>
+              <svg width="100%" height="100%" viewBox={`0 0 ${Math.max(1, strokeBox.width)} ${Math.max(1, strokeBox.height)}`}>
                 <path
-                  d={drawBox.path}
+                  d={strokeBox.path}
                   fill="none"
                   stroke={strokeColor}
                   strokeWidth={strokeWidth}
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  opacity={0.85}
                 />
               </svg>
             </div>
           ) : null}
         </div>
+        {promptElement}
         {eraserCursor ? (
           <div
             className="eraser__cursor"
@@ -3023,20 +3450,9 @@ const navigateTo = useCallback(
             <button
               type="button"
               className="toolbtn"
-              data-active={tool === 'draw'}
-              onClick={() => setTool('draw')}
-              title="Рисовать (P) — Shift+P оставляет кисть включённой"
-            >
-              <PenLine size={17} />
-            </button>
-          ) : null}
-          {!readOnly ? (
-            <button
-              type="button"
-              className="toolbtn"
               data-active={tool === 'erase'}
               onClick={() => setTool('erase')}
-              title="Стирать (E) — удаляет объекты под кистью"
+              title="Стирать (E) — удаляет объекты под курсором"
             >
               <Eraser size={17} />
             </button>
@@ -3087,6 +3503,17 @@ const navigateTo = useCallback(
               title="Стикер (N)"
             >
               <StickyNote size={17} />
+            </button>
+          ) : null}
+          {!readOnly ? (
+            <button
+              type="button"
+              className="toolbtn"
+              data-active={tool === 'table'}
+              onClick={() => setTool('table')}
+              title="Таблица (B)"
+            >
+              <Table2 size={17} />
             </button>
           ) : null}
           {!readOnly ? (
@@ -3145,6 +3572,27 @@ const navigateTo = useCallback(
                 </button>
               ))}
             </div>
+            <div className="toolpalette__label">Группа</div>
+            <div className="toolpalette__grid">
+              <button
+                type="button"
+                className="toolbtn"
+                onClick={() => groupSelection()}
+                disabled={selection.size < 2 || readOnly}
+                title="Объединить выделенные в группу"
+              >
+                <Group size={16} />
+              </button>
+              <button
+                type="button"
+                className="toolbtn"
+                onClick={() => ungroupSelection()}
+                disabled={!groupedSelection || readOnly}
+                title="Разделить группу на отдельные объекты"
+              >
+                <Ungroup size={16} />
+              </button>
+            </div>
             <div className="toolpalette__sep" />
             <label className="toolpalette__check">
               <input type="checkbox" checked={snapEnabled} onChange={(event) => setSnapEnabled(event.target.checked)} />
@@ -3162,7 +3610,7 @@ const navigateTo = useCallback(
                   <button type="button" className="toolbtn" onClick={() => void replaceImage(imageSelection[0].id, 'file')} title="Заменить из файла">
                     <ImagePlus size={16} />
                   </button>
-                  <button type="button" className="toolbtn" onClick={() => void replaceImage(imageSelection[0].id, 'url')} title="Заменить по ссылке">
+                  <button type="button" className="toolbtn" onClick={() => void replaceImage(imageSelection[0].id, 'url')} title="Заменить картинкой по ссылке">
                     <ExternalLink size={16} />
                   </button>
                   <button type="button" className="toolbtn" onClick={() => void openItemPreview(imageSelection[0])} title="Открыть предпросмотр">
@@ -3221,7 +3669,6 @@ const navigateTo = useCallback(
                 className="toolbtn"
                 onClick={() => {
                   setSelection(new Set())
-                  setFindOpen(false)
                 }}
                 title="Снять выделение (Escape)"
               >
@@ -3265,6 +3712,44 @@ const navigateTo = useCallback(
               ))}
             </div>
             <div className="toolpalette__hint">{solidPanel.hint}</div>
+            {solidMode === 'stroke' || solidMode === 'paint' ? (
+              <>
+                <div className="toolpalette__sep" />
+                <div className="toolpalette__label">
+                  {solidMode === 'stroke' ? 'Цвет и толщина штриха' : 'Цвет заливки грани'}
+                </div>
+                <div className="toolpalette__row">
+                  {QUICK_COLORS.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      className="swatch"
+                      aria-label={`Цвет ${color}`}
+                      onClick={() => setStrokeColor(color)}
+                      style={{ background: color, outline: strokeColor.toLowerCase() === color ? '2px solid var(--inverse)' : '1px solid var(--border)' }}
+                    />
+                  ))}
+                  <label className="swatch swatch--custom" title="Свой цвет">
+                    <input type="color" value={strokeColor} onChange={(event) => setStrokeColor(event.target.value)} aria-label="Свой цвет" />
+                    <Pipette size={14} />
+                  </label>
+                </div>
+                {solidMode === 'stroke' ? (
+                  <label className="toolpalette__slider" title="Толщина штриха">
+                    <span>Толщина</span>
+                    <input
+                      type="range"
+                      min={1}
+                      max={12}
+                      step={1}
+                      value={strokeWidth}
+                      onChange={(event) => setStrokeWidth(Number(event.target.value))}
+                    />
+                    <span>{strokeWidth}</span>
+                  </label>
+                ) : null}
+              </>
+            ) : null}
             <div className="toolpalette__sep" />
             <label className="toolpalette__slider" title="Размер ребра">
               <span>Размер</span>
@@ -3511,52 +3996,6 @@ const navigateTo = useCallback(
             ) : null}
           </div>
         ) : null}
-        {panelKind === 'draw' ? (
-          <div className="toolgroup toolpalette">
-            <div className="toolpalette__row">
-              {QUICK_COLORS.map((color) => (
-                <button
-                  key={color}
-                  type="button"
-                  className="swatch"
-                  aria-label={`Цвет ${color}`}
-                  onClick={() => setStrokeColor(color)}
-                  style={{ background: color, outline: strokeColor.toLowerCase() === color ? '2px solid var(--inverse)' : '1px solid var(--border)' }}
-                />
-              ))}
-              <label className="swatch swatch--custom" title="Свой цвет">
-                <input type="color" value={strokeColor} onChange={(event) => setStrokeColor(event.target.value)} aria-label="Свой цвет" />
-                <Pipette size={14} />
-              </label>
-            </div>
-            <div className="toolpalette__row">
-              {QUICK_WIDTHS.map((width) => (
-                <button
-                  key={width}
-                  type="button"
-                  className="toolbtn"
-                  data-active={strokeWidth === width}
-                  onClick={() => setStrokeWidth(width)}
-                  title={`Толщина ${width}`}
-                  style={{ height: 26 }}
-                >
-                  <span style={{ width: 20, height: width, borderRadius: 99, background: 'currentColor' }} />
-                </button>
-              ))}
-            </div>
-            <label className="toolpalette__slider" title="Своя толщина">
-              <input
-                type="range"
-                min={1}
-                max={40}
-                step={1}
-                value={strokeWidth}
-                onChange={(event) => setStrokeWidth(Number(event.target.value))}
-              />
-              <span>{strokeWidth}</span>
-            </label>
-          </div>
-        ) : null}
         {panelKind === 'erase' ? (
           <div className="toolgroup toolpalette">
             <div className="toolpalette__hint">Проведите по объектам, чтобы стереть их</div>
@@ -3597,15 +4036,21 @@ const navigateTo = useCallback(
               <button
                 type="button"
                 className="toolbtn"
-                onClick={() => void openLinkPreview()}
-                title="Предпросмотр ссылки, PDF, видео или файла"
+                onClick={() => {
+                  void ask('Ссылка на картинку', '', 'https://').then((value) => {
+                    const url = value?.trim()
+                    if (!url) return
+                    return insertImageFromUrl(url)
+                  })
+                }}
+                title="Вставить картинку по ссылке"
               >
                 <ExternalLink size={16} />
               </button>
             </div>
             <div className="toolpalette__hint">
-              Поддерживаются png, jpg, gif, webp, svg, avif, bmp, ico. Кнопка со ссылкой открывает окно предпросмотра: страница сайта,
-              YouTube или Vimeo, PDF, видео и аудио.
+              Поддерживаются png, jpg, gif, webp, svg, avif, bmp, ico. По ссылке вставляется картинка из интернета: ссылка должна
+              вести прямо на файл картинки.
             </div>
           </div>
         ) : null}
@@ -3809,6 +4254,25 @@ const navigateTo = useCallback(
         ) : null}
       </div>
 
+      {present ? (
+        <div className="presentbar">
+          <button type="button" className="toolbtn" onClick={() => stepFrame(-1)} aria-label="Предыдущая рамка" title="Предыдущая рамка (стрелка влево)">
+            <ChevronLeft size={17} />
+          </button>
+          <div className="presentbar__title">
+            {frames.length ? frames[presentIndex]?.title || 'Без названия' : 'Вся доска'}
+            {frames.length ? <span className="presentbar__count">{presentIndex + 1} из {frames.length}</span> : null}
+          </div>
+          <button type="button" className="toolbtn" onClick={() => stepFrame(1)} aria-label="Следующая рамка" title="Следующая рамка (стрелка вправо)">
+            <ChevronRight size={17} />
+          </button>
+          <div className="bbar__sep" />
+          <button type="button" className="toolbtn" onClick={stopPresent} aria-label="Выйти из режима докладчика" title="Выйти (Esc)">
+            <X size={17} />
+          </button>
+        </div>
+      ) : null}
+
       <div className="overlay bfloat bfloat--br">
         <div className="toolgroup">
           <button type="button" className="toolbtn" onClick={() => zoomBy(1 / 1.25)} aria-label="Уменьшить" title="Уменьшить">
@@ -3829,7 +4293,6 @@ const navigateTo = useCallback(
             className="toolbtn"
             onClick={() => {
               setBoardSettingsOpen((value) => !value)
-              setObjectsOpen(false)
               setDetailsOpen(false)
               setShowInspector(false)
             }}
@@ -3842,30 +4305,6 @@ const navigateTo = useCallback(
         </div>
       </div>
 
-
-      {objectsOpen && doc ? (
-        <ObjectsPanel
-          items={doc.items}
-          selection={selection}
-          onSelect={(ids, additive) =>
-            setSelection((current) => {
-              if (!additive) return new Set(ids)
-              const next = new Set(current)
-              for (const id of ids) {
-                if (next.has(id)) next.delete(id)
-                else next.add(id)
-              }
-              return next
-            })
-          }
-          onFocus={(id) => navigateTo(id)}
-          onDelete={(ids) => deleteItems(ids)}
-          onToggleLock={(ids) => toggleLock(ids)}
-          onConvert={(ids) => convertToShape(ids)}
-          onOrder={(ids, action) => orderItems(ids, action)}
-          onClose={() => setObjectsOpen(false)}
-        />
-      ) : null}
 
       {showInspector && selection.size ? (
         <Inspector

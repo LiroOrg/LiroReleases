@@ -21,10 +21,6 @@
   background-image: none;
 }
 
-.boardview__canvas[data-tool='draw'] {
-  cursor: crosshair;
-}
-
 .boardview__canvas[data-panning='true'] {
   cursor: grabbing;
 }
@@ -126,12 +122,16 @@
 .bbar--warn {
   font-size: calc(11.5px * var(--ui-scale));
   color: var(--text-2);
-  align-items: flex-start;
+  align-items: center;
   line-height: 1.4;
+  flex-wrap: wrap;
+  max-width: min(540px, 54vw);
 }
 
 .bbar--warn span {
-  max-width: 420px;
+  flex: 1 1 220px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .bbar__btn {
@@ -273,12 +273,6 @@
   font-weight: 620;
   letter-spacing: -0.01em;
   max-width: 280px;
-  padding: 0 2px;
-}
-
-.bbar__sub {
-  font-size: calc(11px * var(--ui-scale));
-  color: var(--text-4);
   padding: 0 2px;
 }
 
@@ -425,8 +419,6 @@
   position: absolute;
   transform-origin: center center;
   overflow: visible;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 160px;
 }
 
 .boarditem__text {
@@ -653,6 +645,33 @@
   z-index: 5;
 }
 
+.resizeframe {
+  position: absolute;
+  pointer-events: none;
+  z-index: 8;
+}
+
+.resizehandle {
+  position: absolute;
+  pointer-events: auto;
+  background: #ffffff;
+  border: 1.5px solid #1a1a1a;
+  border-radius: 3px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  touch-action: none;
+}
+
+.rotatehandle {
+  position: absolute;
+  pointer-events: auto;
+  background: #ffffff;
+  border: 1.5px solid #1a1a1a;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  touch-action: none;
+  cursor: grab;
+}
+
 .guide {
   position: absolute;
   border: 0 dashed #1a1a1a;
@@ -674,6 +693,7 @@
   position: absolute;
   pointer-events: none;
   overflow: visible;
+  z-index: 100000;
 }
 
 .eraser__cursor {
@@ -918,7 +938,7 @@
   right: 12px;
   width: 272px;
   max-width: calc(100vw - 24px);
-  max-height: calc(100% - 120px);
+  max-height: calc(100% - 176px);
   overflow: auto;
   overscroll-behavior: contain;
   background: var(--panel);
@@ -944,6 +964,19 @@
   gap: 8px;
 }
 
+.inspector__number {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.inspector__number .input {
+  width: 100%;
+  padding: 4px 6px;
+  font-size: calc(12px * var(--ui-scale));
+  font-variant-numeric: tabular-nums;
+}
+
 .inspector__label {
   font-size: calc(10.5px * var(--ui-scale));
   text-transform: uppercase;
@@ -956,6 +989,123 @@
   font-size: calc(12.5px * var(--ui-scale));
   font-variant-numeric: tabular-nums;
   word-break: break-word;
+}
+
+.inspector__block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.inspector__row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.inspector__row .btn[data-active='true'] {
+  border-color: var(--text);
+  color: var(--text);
+}
+
+.inspector__colors {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.inspector__color {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.inspector__color--custom {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: conic-gradient(#7f1d1d, #b45309, #15803d, #1d4ed8, #6b21a8, #7f1d1d);
+  border: 1px solid var(--border);
+}
+
+.inspector__color--custom input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.inspector__slider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inspector__slider .inspector__label {
+  flex: none;
+  width: 96px;
+}
+
+.inspector__slider input[type='range'] {
+  flex: 1;
+  min-width: 0;
+}
+
+.inspector__slider .inspector__value {
+  flex: none;
+  width: 34px;
+  text-align: right;
+}
+
+.tableview {
+  position: relative;
+  overflow: visible;
+}
+
+.tableview__grid {
+  position: relative;
+  border: 1px solid #d4d4d8;
+  background: #ffffff;
+}
+
+.tableview__cell {
+  position: absolute;
+  box-sizing: border-box;
+  border-right: 1px solid #e4e4e7;
+  border-bottom: 1px solid #e4e4e7;
+  padding: 6px 8px;
+  overflow: hidden;
+  color: #1a1a1a;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.tableview__cell[data-active='true'] {
+  outline: 2px solid #1a1a1a;
+  outline-offset: -2px;
+}
+
+.tableview__text {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tableview__input {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  resize: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  line-height: inherit;
+  outline: none;
 }
 
 .boarddetails {

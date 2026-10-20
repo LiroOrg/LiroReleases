@@ -1,0 +1,35 @@
+.presentbar {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 28;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 7px;
+  border-radius: var(--radius-l);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-2);
+  animation: panel-in var(--dur) ease both;
+}
+
+.presentbar__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 10px;
+  min-width: 140px;
+  font-size: calc(12.5px * var(--ui-scale));
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.presentbar__count {
+  font-size: calc(11px * var(--ui-scale));
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+}

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Box,
@@ -20,7 +20,6 @@ import {
   Maximize,
   LockOpen,
   MousePointer2,
-  PenLine,
   Redo2,
   RefreshCw,
   Ruler,
@@ -55,7 +54,6 @@ const TOAST_ICONS: Record<ToastKind, ReactNode> = {
   graph: <LineChart size={13} />,
   solid: <Box size={13} />,
   text: <Type size={13} />,
-  draw: <PenLine size={13} />,
   link: <Link2 size={13} />,
   zoom: <Maximize size={13} />,
   preview: <Eye size={13} />,
@@ -138,6 +136,76 @@ export function Modal(props: {
       </div>
     </div>
   )
+}
+
+interface PromptState {
+  title: string
+  value: string
+  placeholder: string
+  resolve: (value: string | null) => void
+}
+
+function PromptForm(props: { state: PromptState; finish: (value: string | null) => void }): ReactNode {
+  const [value, setValue] = useState(props.state.value)
+  const ref = useRef<HTMLInputElement | null>(null)
+  useEffect(() => {
+    ref.current?.focus()
+    ref.current?.select()
+  }, [])
+  return (
+    <Modal
+      open
+      title={props.state.title}
+      onClose={() => props.finish(null)}
+      footer={
+        <>
+          <button type="button" className="btn" onClick={() => props.finish(null)}>
+            Отмена
+          </button>
+          <button type="button" className="btn btn--primary" onClick={() => props.finish(value.trim())}>
+            Готово
+          </button>
+        </>
+      }
+    >
+      <input
+        ref={ref}
+        className="input"
+        value={value}
+        placeholder={props.state.placeholder}
+        onChange={(event) => setValue(event.target.value)}
+        onPointerDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          event.stopPropagation()
+          if (event.key === 'Enter') props.finish(value.trim())
+          if (event.key === 'Escape') props.finish(null)
+        }}
+      />
+    </Modal>
+  )
+}
+
+export interface PromptApi {
+  ask: (title: string, value?: string, placeholder?: string) => Promise<string | null>
+  element: ReactNode
+}
+
+export function usePrompt(): PromptApi {
+  const [state, setState] = useState<PromptState | null>(null)
+  const ask = useCallback(
+    (title: string, value = '', placeholder = ''): Promise<string | null> =>
+      new Promise<string | null>((resolve) => {
+        setState({ title, value, placeholder, resolve })
+      }),
+    []
+  )
+  const finish = useCallback((result: string | null): void => {
+    setState((current) => {
+      current?.resolve(result)
+      return null
+    })
+  }, [])
+  return { ask, element: state ? <PromptForm state={state} finish={finish} /> : null }
 }
 
 export function Switch(props: { value: boolean; onChange: (value: boolean) => void; label?: string }): ReactNode {

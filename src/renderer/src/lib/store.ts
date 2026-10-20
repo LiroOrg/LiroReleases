@@ -24,7 +24,6 @@ export type ToastKind =
   | 'graph'
   | 'solid'
   | 'text'
-  | 'draw'
   | 'link'
   | 'zoom'
   | 'preview'

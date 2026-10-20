@@ -23,11 +23,11 @@ export interface BoardSettingsProps {
 export function BoardSettings(props: BoardSettingsProps): ReactNode {
   const step = Math.max(0, SIZES.indexOf(props.size))
   return (
-    <div className="objpanel boardsettings" style={{ bottom: 'auto', height: 'auto' }}>
-      <div className="objpanel__head">
+    <div className="boardsettings">
+      <div className="boardsettings__head">
         <Grid3x3 size={15} />
-        <span className="boardsettings__title">Сетка</span>
-        <button type="button" className="objpanel__close" onClick={props.onClose} aria-label="Закрыть настройки доски">
+        <span className="boardsettings__title">Сетка и привязка</span>
+        <button type="button" className="boardsettings__close" onClick={props.onClose} aria-label="Закрыть настройки доски">
           <X size={14} />
         </button>
       </div>

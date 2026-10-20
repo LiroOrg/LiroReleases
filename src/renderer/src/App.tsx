@@ -5,7 +5,7 @@ import logo from '../../../resources/icon-256.png'
 import { useApp } from './lib/store'
 import type { ToastKind } from './lib/store'
 import { navigate, onRouteChange, parseRoute, type Route } from './router'
-import { Toasts } from './components/ui'
+import { Toasts, usePrompt } from './components/ui'
 import { FirstRunName } from './components/welcome'
 import { BoardView } from './board/boardView'
 import { RenderMode } from './render/renderMode'
@@ -50,6 +50,7 @@ export function App(): ReactNode {
   const fail = useApp((state) => state.fail)
   const patchToast = useApp((state) => state.patchToast)
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash))
+  const { ask, element: promptElement } = usePrompt()
 
   useEffect(() => {
     void init()
@@ -184,8 +185,9 @@ export function App(): ReactNode {
               type="button"
               className={route.name === 'search' ? 'navitem navitem--active' : 'navitem'}
               onClick={() => {
-                const query = window.prompt('Поиск по названию доски')
-                if (query) navigate({ name: 'search', query })
+                void ask('Поиск по названию доски').then((query) => {
+                  if (query) navigate({ name: 'search', query })
+                })
               }}
             >
               <Search size={16} className="navitem__icon" />
@@ -229,6 +231,7 @@ export function App(): ReactNode {
         )}
       </main>
       </div>
+      {promptElement}
       <Toasts />
       <FirstRunName />
     </div>

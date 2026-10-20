@@ -1,4 +1,4 @@
-import type { BoardItem, ConnectorItem, TextPoint } from './types'
+import type { BoardItem, ConnectorItem, RelativeOffset, TextPoint } from './types'
 
 export interface Point {
   x: number
@@ -31,8 +31,15 @@ export function snapPoint(item: BoardItem, snapTo?: string): Point {
   }
 }
 
+export function anchorPoint(item: BoardItem, offset?: RelativeOffset, snapTo?: string): Point {
+  if (offset) {
+    const rect = itemRect(item)
+    return { x: rect.x + offset.x * Math.max(1, rect.width), y: rect.y + offset.y * Math.max(1, rect.height) }
+  }
+  return snapPoint(item, snapTo)
+}
+
 export function deriveConnectorPoints(connector: ConnectorItem, byId: Map<string, BoardItem>): TextPoint[] {
-  if (connector.points.length >= 2) return connector.points
   const start = connector.startItemId ? byId.get(connector.startItemId) : undefined
   const end = connector.endItemId ? byId.get(connector.endItemId) : undefined
   const startMeta = (connector.raw as { startSnapTo?: string } | undefined)?.startSnapTo
@@ -40,8 +47,10 @@ export function deriveConnectorPoints(connector: ConnectorItem, byId: Map<string
   let a: Point
   let b: Point
   if (start && end) {
-    a = snapPoint(start, startMeta)
-    b = snapPoint(end, endMeta)
+    a = anchorPoint(start, connector.startOffset, startMeta)
+    b = anchorPoint(end, connector.endOffset, endMeta)
+  } else if (connector.points.length >= 2) {
+    return connector.points
   } else {
     const rect = itemRect(connector)
     a = { x: rect.x, y: rect.y + rect.height / 2 }
@@ -49,9 +58,6 @@ export function deriveConnectorPoints(connector: ConnectorItem, byId: Map<string
   }
   if (connector.shape === 'elbowed') {
     return [a, { x: b.x, y: a.y }, b]
-  }
-  if (connector.shape === 'curved') {
-    return [a, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - Math.abs(b.x - a.x) * 0.12 }, b]
   }
   return [a, b]
 }

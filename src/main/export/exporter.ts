@@ -5,6 +5,7 @@ import { store } from '../store'
 import { docDir, thumbFile } from '../paths'
 import { createZip } from '../util/zip'
 import { exportFolder, renderHtml, renderPdf, renderPng, thumbnailPath, type RenderParams } from './render'
+import { buildSvg } from './svg'
 import { sanitizeFileName } from '@shared/util'
 
 function baseName(title: string): string {
@@ -70,6 +71,11 @@ export async function exportBoard(
       writeFileSync(target, buildArchive(options.docId, name))
       return target
     }
+    case 'svg': {
+      const target = join(dir, `${name}.svg`)
+      writeFileSync(target, buildSvg(doc, options.docId, options.background ?? 'white'), 'utf8')
+      return target
+    }
     default: {
       const target = join(dir, `${name}.png`)
       const result = await renderPng(renderParams(options))
@@ -105,6 +111,11 @@ export async function exportToPath(options: ExportOptions, target: string): Prom
       const buffer = buildArchive(options.docId, baseName(doc.title))
       writeFileSync(target, buffer)
       return { ok: true, path: target, bytes: buffer.byteLength }
+    }
+    case 'svg': {
+      const text = buildSvg(doc, options.docId, options.background)
+      writeFileSync(target, text, 'utf8')
+      return { ok: true, path: target, bytes: Buffer.byteLength(text, 'utf8') }
     }
     default:
       return { ok: false, message: 'Неизвестный формат экспорта' }

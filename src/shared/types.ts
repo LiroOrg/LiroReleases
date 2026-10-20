@@ -69,6 +69,7 @@ export interface ItemBase {
   modifiedAt?: string
   author?: string
   tagIds?: string[]
+  groupId?: string
   raw?: unknown
 }
 
@@ -536,7 +537,7 @@ export interface CaptureOptions {
 
 export interface ExportOptions {
   docId: string
-  format: 'png' | 'pdf' | 'html' | 'json' | 'zip'
+  format: 'png' | 'pdf' | 'html' | 'json' | 'zip' | 'svg'
   scope: 'board' | 'frame' | 'selection'
   targetId?: string
   scale: number

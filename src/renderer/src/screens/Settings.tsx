@@ -1,11 +1,11 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Download, FolderOpen, HardDrive, Image, RefreshCw } from 'lucide-react'
 import type { Settings as AppSettings } from '@shared/types'
 import { formatBytes, formatNumber } from '@shared/util'
 import { api } from '../lib/api'
 import { useApp } from '../lib/store'
-import { Switch, Spinner } from '../components/ui'
+import { Modal, Switch, Spinner } from '../components/ui'
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -33,7 +33,21 @@ export function SettingsScreen(): ReactNode {
   const appInfo = useApp((state) => state.appInfo)
   const toast = useApp((state) => state.toast)
   const [thumbBusy, setThumbBusy] = useState(false)
+  const [askMove, setAskMove] = useState(false)
   const [thumbProgress, setThumbProgress] = useState({ done: 0, total: 0 })
+  const [name, setName] = useState('')
+  const nameTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    setName(settings?.userName ?? '')
+  }, [settings?.userName])
+
+  useEffect(
+    () => () => {
+      if (nameTimerRef.current !== null) window.clearTimeout(nameTimerRef.current)
+    },
+    []
+  )
 
   const update = useCallback(
     async (patch: Partial<AppSettings>, message: string): Promise<void> => {
@@ -48,6 +62,25 @@ export function SettingsScreen(): ReactNode {
     [setSettings, toast]
   )
 
+  const saveName = async (): Promise<void> => {
+    const value = name.trim()
+    const current = (settings?.userName ?? '').trim()
+    if (!value) {
+      setName(current)
+      return
+    }
+    if (value === current) return
+    await update({ userName: value }, 'Имя сохранено')
+  }
+
+  const scheduleNameSave = useCallback(() => {
+    if (nameTimerRef.current !== null) window.clearTimeout(nameTimerRef.current)
+    nameTimerRef.current = window.setTimeout(() => {
+      nameTimerRef.current = null
+      void saveName()
+    }, 600)
+  }, [saveName])
+
   const storagePath = appInfo?.storage || settings?.storagePath || ''
 
   const reveal = async (): Promise<void> => {
@@ -60,10 +93,11 @@ export function SettingsScreen(): ReactNode {
   }
 
   const move = async (): Promise<void> => {
-    const ok = window.confirm(
-      'Перенести библиотеку в другую папку? Приложение переедет целиком вместе со всеми досками и картинками.'
-    )
-    if (!ok) return
+    setAskMove(true)
+  }
+
+  const confirmMove = async (): Promise<void> => {
+    setAskMove(false)
     try {
       const path = await api.storage.move()
       setLibrary(await api.library.get())
@@ -132,12 +166,57 @@ export function SettingsScreen(): ReactNode {
   return (
     <div className="content">
       <div className="page page--narrow">
+        <Modal
+          open={askMove}
+          title="Перенести библиотеку?"
+          onClose={() => setAskMove(false)}
+          footer={
+            <>
+              <button type="button" className="btn" onClick={() => setAskMove(false)}>
+                Отмена
+              </button>
+              <button type="button" className="btn btn--primary" onClick={() => void confirmMove()}>
+                Перенести
+              </button>
+            </>
+          }
+        >
+          Приложение переедет целиком вместе со всеми досками и картинками.
+        </Modal>
         <div className="page__head">
           <h1 className="page__title">Настройки</h1>
           <p className="page__lead">
             Внешний вид, параметры экспорта и расположение библиотеки. Изменения применяются сразу и сохраняются на
             диск.
           </p>
+        </div>
+
+        <div className="section">
+          <div className="section__title">О себе</div>
+          <div className="card">
+            <Row label="Имя" hint="Показывается в приветствии на главной странице.">
+              <input
+                className="input"
+                value={name}
+                maxLength={40}
+                placeholder="Как к вам обращаться"
+                onChange={(event) => {
+                  setName(event.target.value)
+                  scheduleNameSave()
+                }}
+                onBlur={() => {
+                  if (nameTimerRef.current !== null) {
+                    window.clearTimeout(nameTimerRef.current)
+                    nameTimerRef.current = null
+                  }
+                  void saveName()
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void saveName()
+                }}
+              />
+            </Row>
+          </div>
         </div>
 
         <div className="section">

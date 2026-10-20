@@ -1,9 +1,10 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
-import { uid } from '@shared/util'
+import { boundsOfItems, roundRect, uid } from '@shared/util'
 import type { BoardDoc, BoardMeta, LibraryIndex, Project, Settings } from '@shared/types'
 import { assetsDir, boardsDir, docDir, docFile, indexFile, readJson, settingsFile, thumbFile, writeAtomic } from './paths'
+import { assetsBytesOf, buildStats } from './import/commit'
 
 const SCHEMA = 1
 
@@ -209,6 +210,7 @@ export class Store {
     doc.viewport = viewport
     writeAtomic(file, JSON.stringify(doc))
   }
+
 
   duplicateDoc(docId: string, newId: string): BoardMeta {
     const doc = this.readDoc(docId)

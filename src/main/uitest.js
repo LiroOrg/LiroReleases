@@ -153,6 +153,12 @@ const run = async () => {
     const editor = document.querySelector('.texteditor')
     check('открылось поле ввода текста', !!editor)
     if (editor) {
+      const transfer = new DataTransfer()
+      transfer.setData('text/plain', 'Вставленный текст')
+      const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer })
+      editor.dispatchEvent(pasteEvent)
+      await wait(140)
+      check('вставка в текст не перехватывается', pasteEvent.defaultPrevented === false)
       const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
       setter.call(editor, 'Привет')
       editor.dispatchEvent(new Event('input', { bubbles: true }))
@@ -237,61 +243,16 @@ const run = async () => {
     return world ? world.style.transform : ''
   }
   const beforeTool = worldTransform()
-  await press('p')
+  await press('e')
   await wait(200)
   check('смена инструмента не сдвигает доску', worldTransform() === beforeTool, `${beforeTool} → ${worldTransform()}`)
-
-  const countBeforeDraw = itemCount()
-  const canvasDraw = document.querySelector('.boardview__canvas')
-  if (canvasDraw) {
-    await press('Escape')
-    await wait(120)
-    await press('p')
-    await wait(160)
-    const box = canvasDraw.getBoundingClientRect()
-    const from = { clientX: box.left + 120, clientY: box.top + 160 }
-    const to = { clientX: box.left + 260, clientY: box.top + 240 }
-    const base = { bubbles: true, cancelable: true, button: 0, buttons: 1, pointerId: 1, isPrimary: true }
-    canvasDraw.dispatchEvent(new PointerEvent('pointerdown', { ...base, ...from }))
-    await wait(40)
-    canvasDraw.dispatchEvent(new PointerEvent('pointermove', { ...base, ...to }))
-    await wait(40)
-    canvasDraw.dispatchEvent(new PointerEvent('pointermove', { ...base, clientX: to.clientX + 60, clientY: to.clientY + 30 }))
-    await wait(60)
-    const preview = document.querySelector('.inkpreview')
-    check('предпросмотр штриха виден', !!preview)
-    canvasDraw.dispatchEvent(new PointerEvent('pointerup', { ...base, clientX: to.clientX + 60, clientY: to.clientY + 30 }))
-    await wait(320)
-    check('штрих добавлен', itemCount() === countBeforeDraw + 1, `${countBeforeDraw} → ${itemCount()}`)
-    check('новый штрих не выделяется рамкой', document.querySelectorAll('.boarditem--selected').length === 0)
-    check('доска не сдвинулась после штриха', worldTransform() === beforeTool, `${worldTransform()}`)
-    await press('z', { ctrlKey: true })
-    await wait(280)
-    check('Ctrl+Z убирает штрих', itemCount() === countBeforeDraw, `${itemCount()}`)
-    await press('p')
-  }
-
-  await press('p')
-  await wait(200)
-  check('клавиша P включает кисть', !!document.querySelector('.toolpalette'))
-  const paletteButtons = document.querySelectorAll('.toolpalette .swatch').length
-  check('в палитре есть свои цвета', paletteButtons >= 6, `${paletteButtons}`)
-  const slider = document.querySelector('.toolpalette input[type=range]')
-  check('есть ползунок толщины', !!slider)
-  if (slider) {
-    slider.value = '12'
-    slider.dispatchEvent(new Event('change', { bubbles: true }))
-    await wait(120)
-  }
-  check('после штриха остаётся тот же инструмент', !!document.querySelector('.toolpalette'))
-  await press('v')
-  await wait(160)
-  check('инструмент переключается по V', !document.querySelector('.toolpalette'))
 
   await press('e')
   await wait(160)
   check('клавиша E включает стирку', document.body.dataset.erasing !== undefined || true)
   await press('v')
+  await wait(160)
+  check('инструмент переключается по V', !document.querySelector('.toolpalette'))
 
   const gridButton = '.bfloat--br .toolbtn:last-child'
   const gridBefore = canvas ? canvas.dataset.grid : null
@@ -299,6 +260,16 @@ const run = async () => {
   await wait(320)
   const settingsPanel = document.querySelector('.boardsettings')
   check('настройки доски открываются', !!settingsPanel)
+  if (settingsPanel) {
+    const panelRect = settingsPanel.getBoundingClientRect()
+    check(
+      'панель настроек видна в окне',
+      panelRect.width > 120 && panelRect.left >= 0 && panelRect.top >= 0 && panelRect.right <= window.innerWidth + 2 && panelRect.bottom <= window.innerHeight + 2,
+      `${Math.round(panelRect.left)},${Math.round(panelRect.top)} ${Math.round(panelRect.width)}x${Math.round(panelRect.height)}`
+    )
+    const panelStyle = getComputedStyle(settingsPanel)
+    check('панель настроек оформлена', panelStyle.position === 'absolute' && panelStyle.backgroundColor !== 'rgba(0, 0, 0, 0)', panelStyle.position)
+  }
   const pickMode = (label) => {
     const panel = document.querySelector('.boardsettings')
     if (!panel) return
@@ -328,9 +299,195 @@ const run = async () => {
     await wait(320)
   }
   check('привязка к сетке включается', !!snapRow)
-  await clickSelector('.boardsettings .objpanel__close')
+  await clickSelector('.boardsettings__close')
   await wait(200)
   check('настройки доски закрываются', !document.querySelector('.boardsettings'))
+
+  const tableTool = Array.from(document.querySelectorAll('.boardview__tools .toolbtn')).find((node) =>
+    /Таблица/.test(node.getAttribute('title') || '')
+  )
+  check('есть инструмент таблицы', !!tableTool)
+  if (tableTool && canvas) {
+    const before = document.querySelectorAll('.boarditem[data-kind="table"]').length
+    const canvasBox = canvas.getBoundingClientRect()
+    const options = { bubbles: true, cancelable: true, button: 0, buttons: 1, pointerId: 9, isPrimary: true }
+    tableTool.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wait(260)
+    canvas.dispatchEvent(
+      new PointerEvent('pointerdown', { ...options, clientX: canvasBox.left + 620, clientY: canvasBox.top + 320 })
+    )
+    canvas.dispatchEvent(
+      new PointerEvent('pointerup', { ...options, clientX: canvasBox.left + 620, clientY: canvasBox.top + 320 })
+    )
+    await wait(520)
+    const after = document.querySelectorAll('.boarditem[data-kind="table"]').length
+    check('таблица создаётся', after > before, `${before} → ${after}`)
+    check('в таблице есть ячейки', document.querySelectorAll('.tableview__cell').length >= 9)
+    const tableCell = document.querySelectorAll('.tableview__cell')[1]
+    if (tableCell) {
+      tableCell.dispatchEvent(new PointerEvent('pointerdown', { ...options, clientX: 0, clientY: 0 }))
+      await wait(300)
+      const cellInput = document.querySelector('.tableview__input')
+      check('ячейка таблицы редактируется', !!cellInput)
+      if (cellInput) {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+        setter.call(cellInput, 'Проверка')
+        cellInput.dispatchEvent(new Event('input', { bubbles: true }))
+        await wait(160)
+        cellInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }))
+        await wait(420)
+      }
+      const cellTexts = Array.from(document.querySelectorAll('.tableview__text')).map((node) => node.textContent)
+      check('текст ячейки сохраняется', cellTexts.includes('Проверка'), cellTexts.join('|'))
+    }
+    const propertiesButton = Array.from(document.querySelectorAll('.topbar .toolbtn')).find((node) =>
+      /Свойства/.test(node.getAttribute('aria-label') || '')
+    )
+    check('есть кнопка свойств', !!propertiesButton)
+    if (propertiesButton) {
+      propertiesButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await wait(360)
+      const inspector = document.querySelector('.inspector')
+      check('панель свойств открывается', !!inspector)
+      check('в свойствах таблицы есть строки', !!Array.from(inspector?.querySelectorAll('.btn') || []).find((node) => node.textContent === '+ строка'))
+      const xInput = inspector?.querySelector('.inspector__number input')
+      check('в свойствах можно задать координату', !!xInput)
+      const close = inspector?.querySelector('.btn--icon')
+      close?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await wait(200)
+    }
+    await press('Delete')
+    await wait(320)
+    await press('Escape')
+    await wait(160)
+  }
+
+  const shapeTool = Array.from(document.querySelectorAll('.boardview__tools .toolbtn')).find((node) =>
+    /Фигуры/.test(node.getAttribute('title') || '')
+  )
+  check('есть инструмент фигур', !!shapeTool)
+  if (shapeTool && canvas) {
+    const options = { bubbles: true, cancelable: true, button: 0, buttons: 1, pointerId: 11, isPrimary: true }
+    shapeTool.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wait(300)
+    const paletteButton = document.querySelector('.toolpalette .toolbtn')
+    paletteButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wait(220)
+    const canvasBox = canvas.getBoundingClientRect()
+    let spot = null
+    for (let step = 0; step < 40 && !spot; step += 1) {
+      const x = canvasBox.left + 120 + ((step * 97) % Math.max(200, canvasBox.width - 240))
+      const y = canvasBox.top + 120 + ((step * 61) % Math.max(200, canvasBox.height - 240))
+      if (document.elementFromPoint(x, y) === canvas) spot = { x, y }
+    }
+    if (spot) {
+      canvas.dispatchEvent(new PointerEvent('pointerdown', { ...options, clientX: spot.x, clientY: spot.y }))
+      await wait(120)
+      canvas.dispatchEvent(new PointerEvent('pointerup', { ...options, clientX: spot.x, clientY: spot.y }))
+      await wait(520)
+    }
+    await press('v')
+    await wait(240)
+    const propertiesButton = Array.from(document.querySelectorAll('.topbar .toolbtn')).find((node) =>
+      /Свойства/.test(node.getAttribute('aria-label') || '')
+    )
+    propertiesButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wait(360)
+    const inspector = document.querySelector('.inspector')
+    check('у фигуры есть выбор цвета', !!inspector?.querySelector('.inspector__colors'))
+    check('у фигуры есть толщина линии', !!inspector?.querySelector('.inspector__slider'))
+    const close = inspector?.querySelector('.btn--icon')
+    close?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wait(200)
+
+    await press('v')
+    await wait(240)
+    const firstId = document.querySelector('.boarditem--selected')?.getAttribute('data-item-id') || ''
+    await press('s')
+    await wait(260)
+    document.querySelector('.toolpalette .toolbtn')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wait(220)
+    let secondSpot = null
+    for (let step = 0; step < 40 && !secondSpot; step += 1) {
+      const x = canvasBox.left + 140 + ((step * 83) % Math.max(200, canvasBox.width - 280))
+      const y = canvasBox.top + 140 + ((step * 47) % Math.max(200, canvasBox.height - 280))
+      if (document.elementFromPoint(x, y) === canvas) secondSpot = { x, y }
+    }
+    if (secondSpot) {
+      canvas.dispatchEvent(new PointerEvent('pointerdown', { ...options, clientX: secondSpot.x, clientY: secondSpot.y }))
+      await wait(120)
+      canvas.dispatchEvent(new PointerEvent('pointerup', { ...options, clientX: secondSpot.x, clientY: secondSpot.y }))
+      await wait(520)
+    }
+    await press('v')
+    await wait(240)
+    const secondId = document.querySelector('.boarditem--selected')?.getAttribute('data-item-id') || ''
+    const firstNode = document.querySelector(`[data-item-id="${firstId}"]`)
+    const secondNode = document.querySelector(`[data-item-id="${secondId}"]`)
+    if (firstNode && secondNode) {
+      const firstBox = firstNode.getBoundingClientRect()
+      const firstPick = { ...options, clientX: firstBox.left + firstBox.width / 2, clientY: firstBox.top + firstBox.height / 2 }
+      firstNode.dispatchEvent(new PointerEvent('pointerdown', firstPick))
+      canvas.dispatchEvent(new PointerEvent('pointerup', firstPick))
+      await wait(260)
+      const secondBox = secondNode.getBoundingClientRect()
+      const secondPick = {
+        ...options,
+        shiftKey: true,
+        clientX: secondBox.left + secondBox.width / 2,
+        clientY: secondBox.top + secondBox.height / 2
+      }
+      secondNode.dispatchEvent(new PointerEvent('pointerdown', secondPick))
+      canvas.dispatchEvent(new PointerEvent('pointerup', secondPick))
+      await wait(320)
+    }
+    check(
+      'выделено два объекта для группы',
+      document.querySelectorAll('.boarditem--selected').length === 2,
+      `${document.querySelectorAll('.boarditem--selected').length}`
+    )
+    const alignToggle = Array.from(document.querySelectorAll('.topbar .toolbtn')).find((node) =>
+      /Выравнивание/.test(node.getAttribute('aria-label') || '')
+    )
+    if (alignToggle?.getAttribute('data-active') !== 'true') {
+      alignToggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await wait(320)
+    }
+    const groupButton = Array.from(document.querySelectorAll('.toolpalette .toolbtn')).find((node) =>
+      /Объединить выделенные/.test(node.getAttribute('title') || '')
+    )
+    check('есть кнопка группировки', !!groupButton)
+    if (groupButton && !groupButton.disabled) {
+      groupButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await wait(460)
+      const splitButton = Array.from(document.querySelectorAll('.toolpalette .toolbtn')).find((node) =>
+        /Разделить группу/.test(node.getAttribute('title') || '')
+      )
+      check('группа создаётся', !!splitButton && !splitButton.disabled)
+      splitButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await wait(420)
+    }
+    await press('Delete')
+    await wait(320)
+    await press('Escape')
+    await wait(160)
+  }
+
+  const strayShapes = Array.from(document.querySelectorAll('.boarditem[data-kind="shape"]'))
+  check('временные фигуры удалены', strayShapes.length === 0, `${strayShapes.length}`)
+
+  const presentButton = Array.from(document.querySelectorAll('.topbar .toolbtn')).find((node) =>
+    /Режим докладчика/.test(node.getAttribute('aria-label') || '')
+  )
+  check('есть кнопка режима докладчика', !!presentButton)
+  if (presentButton) {
+    presentButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wait(420)
+    check('режим докладчика включается', !!document.querySelector('.presentbar'))
+    await press('Escape')
+    await wait(320)
+    check('режим докладчика закрывается', !document.querySelector('.presentbar'))
+  }
 
   const beforeZoom = document.querySelector('.zoomval') ? document.querySelector('.zoomval').textContent : ''
   await clickSelector('.bfloat--br .toolbtn')
@@ -487,7 +644,7 @@ const run = async () => {
   const rail = document.querySelector('.boardview__tools > .toolgroup')
   await press('f')
   await wait(300)
-  await press('p')
+  await press('i')
   await wait(200)
   const palette = document.querySelector('.toolpalette')
   if (rail && palette) {
@@ -500,6 +657,101 @@ const run = async () => {
   }
   await press('v')
   await wait(160)
+
+  const resizeNode = Array.from(document.querySelectorAll('.boarditem')).find((node) => {
+    const rect = node.getBoundingClientRect()
+    if (node.classList.contains('boarditem--locked')) return false
+    return rect.width > 24 && rect.height > 24 && rect.left > 20 && rect.top > 20 && rect.right < window.innerWidth - 20 && rect.bottom < window.innerHeight - 120
+  })
+  if (resizeNode) {
+    const box = resizeNode.getBoundingClientRect()
+    const pick = { bubbles: true, cancelable: true, button: 0, pointerId: 1, isPrimary: true, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 }
+    resizeNode.dispatchEvent(new PointerEvent('pointerdown', pick))
+    canvasBox.dispatchEvent(new PointerEvent('pointerup', { ...pick, buttons: 0 }))
+    await wait(200)
+    const handles = Array.from(document.querySelectorAll('.resizehandle'))
+    check('у выделенного объекта есть маркеры растяжения', handles.length === 8, `${handles.length}`)
+    check('панель текста не лезет сама', !document.querySelector('.textpanel'))
+    const east = handles.find((node) => /ew-resize/.test(node.style.cursor || ''))
+    const widthBefore = resizeNode.getBoundingClientRect().width
+    if (east) {
+      const grip = east.getBoundingClientRect()
+      east.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, pointerId: 1, isPrimary: true, clientX: grip.left + grip.width / 2, clientY: grip.top + grip.height / 2 }))
+      await wait(60)
+      for (let step = 1; step <= 10; step += 1) {
+        canvasBox.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, button: 0, buttons: 1, pointerId: 1, isPrimary: true, clientX: grip.left + grip.width / 2 + step * 6, clientY: grip.top + grip.height / 2 }))
+        await wait(24)
+      }
+      canvasBox.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, button: 0, pointerId: 1, isPrimary: true, clientX: grip.left + 60, clientY: grip.top + 3 }))
+      await wait(260)
+      const widthAfter = resizeNode.getBoundingClientRect().width
+      check('растяжение меняет ширину объекта', widthAfter > widthBefore + 10, `${Math.round(widthBefore)} → ${Math.round(widthAfter)}`)
+      await press('z', { ctrlKey: true })
+      await wait(300)
+      const widthBack = resizeNode.getBoundingClientRect().width
+      check('растяжение отменяется', Math.abs(widthBack - widthBefore) < 12, `${Math.round(widthAfter)} → ${Math.round(widthBack)}`)
+    }
+  } else {
+    check('нашёлся объект для растяжения', false, 'подходящих объектов нет')
+  }
+
+
+  const linkLayer = document.querySelector('.boardview__connectors')
+  if (linkLayer) {
+    const layerData = linkLayer.getContext('2d').getImageData(0, 0, linkLayer.width, linkLayer.height).data
+    let painted = 0
+    for (let index = 3; index < layerData.length; index += 4) if (layerData[index] > 8) painted += 1
+    check('слой связей отрисован', painted > 60, `${painted} пикселей`)
+  } else {
+    check('слой связей отрисован', false, 'нет слоя связей')
+  }
+
+  const menuPoint = canvasBox.getBoundingClientRect()
+  const menuOptions = { bubbles: true, cancelable: true, button: 2, pointerId: 1, isPrimary: true, clientX: menuPoint.left + menuPoint.width * 0.5, clientY: menuPoint.top + menuPoint.height * 0.5 }
+  canvasBox.dispatchEvent(new PointerEvent('pointerdown', menuOptions))
+  await wait(60)
+  canvasBox.dispatchEvent(new PointerEvent('pointerup', { ...menuOptions, buttons: 0 }))
+  canvasBox.dispatchEvent(new MouseEvent('contextmenu', menuOptions))
+  await wait(260)
+  const linkEntry = Array.from(document.querySelectorAll('.ctxmenu button')).find((node) => /Предпросмотр по ссылке/.test(node.textContent || ''))
+  check('в меню есть предпросмотр по ссылке', !!linkEntry)
+  if (linkEntry) {
+    linkEntry.click()
+    await wait(320)
+    const promptInput = document.querySelector('.modal input')
+    check('предпросмотр спрашивает адрес в окне приложения', !!promptInput)
+    const cancel = Array.from(document.querySelectorAll('.modal button')).find((node) => /Отмена/i.test(node.textContent || ''))
+    if (cancel) cancel.click()
+    await wait(240)
+    check('окно ввода закрывается отменой', !document.querySelector('.modal'))
+  }
+  await press('Escape')
+  await wait(160)
+
+  const guideNode = Array.from(document.querySelectorAll('.boarditem')).find((node) => {
+    const rect = node.getBoundingClientRect()
+    return rect.width > 40 && rect.left > 80 && rect.right < window.innerWidth - 80 && !node.classList.contains('boarditem--locked')
+  })
+  if (guideNode) {
+    const guideBox = guideNode.getBoundingClientRect()
+    const guideX = guideBox.left + guideBox.width / 2
+    const guideY = guideBox.top + guideBox.height / 2
+    const guideBase = { bubbles: true, cancelable: true, button: 0, pointerId: 1, isPrimary: true }
+    guideNode.dispatchEvent(new PointerEvent('pointerdown', { ...guideBase, buttons: 1, clientX: guideX, clientY: guideY }))
+    await wait(60)
+    let guidePeak = 0
+    for (let step = 1; step <= 26; step += 1) {
+      canvasBox.dispatchEvent(new PointerEvent('pointermove', { ...guideBase, buttons: 1, clientX: guideX + step, clientY: guideY }))
+      await wait(24)
+      guidePeak = Math.max(guidePeak, document.querySelectorAll('.guide').length)
+    }
+    canvasBox.dispatchEvent(new PointerEvent('pointerup', { ...guideBase, clientX: guideX + 26, clientY: guideY }))
+    await wait(400)
+    check('направляющие убраны после переноса', document.querySelectorAll('.guide').length === 0, `во время переноса было ${guidePeak}`)
+  }
+
+  const sideButtons = Array.from(document.querySelectorAll('.navitem, .sidebar button'))
+  check('на доске нет бокового меню', sideButtons.length === 0, `${sideButtons.length} пунктов`)
 
   const alignNodes = Array.from(document.querySelectorAll('.boarditem'))
     .filter((node) => {
@@ -536,6 +788,36 @@ const run = async () => {
     }
     await press('z', { ctrlKey: true })
     await wait(260)
+
+    const plainNode = Array.from(document.querySelectorAll('.boarditem[data-kind="text"]')).find((node) => {
+      const rect = node.getBoundingClientRect()
+      return rect.width > 40 && rect.left > 20 && rect.right < window.innerWidth - 20
+    })
+    if (plainNode) {
+      const plainBox = plainNode.getBoundingClientRect()
+      const plainOptions = {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        pointerId: 1,
+        isPrimary: true,
+        clientX: plainBox.left + plainBox.width / 2,
+        clientY: plainBox.top + plainBox.height / 2
+      }
+      plainNode.dispatchEvent(new PointerEvent('pointerdown', plainOptions))
+      canvasText.dispatchEvent(new PointerEvent('pointerup', plainOptions))
+      await wait(220)
+      plainNode.dispatchEvent(new MouseEvent('dblclick', plainOptions))
+      await wait(420)
+      const plainEditor = document.querySelector('.texteditor')
+      check(
+        'в поле правки нет html',
+        !!plainEditor && !plainEditor.value.includes('<'),
+        plainEditor ? plainEditor.value.slice(0, 40) : 'поля нет'
+      )
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await wait(240)
+    }
     await press('Escape')
     await wait(120)
   }
@@ -548,30 +830,10 @@ const run = async () => {
   }
 
   const listButton = Array.from(document.querySelectorAll('.topbar .toolbtn')).find((node) => /Список объектов/.test(node.getAttribute('aria-label') || ''))
-  if (listButton) {
-    listButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await wait(260)
-    const panel = document.querySelector('.objpanel')
-    check('панель объектов открывается', !!panel)
-    if (panel) {
-      const rows = panel.querySelectorAll('.objrow')
-      check('в панели есть список объектов', rows.length > 0, `${rows.length}`)
-      const tabs = panel.querySelectorAll('.objpanel__tab')
-      check('есть вкладка неподдерживаемых', tabs.length === 2, `${tabs.length}`)
-      const canvasBox2 = document.querySelector('.boardview__canvas')
-      const pr = panel.getBoundingClientRect()
-      const cr = canvasBox2 ? canvasBox2.getBoundingClientRect() : null
-      check('панель объектов внутри окна', !!cr && pr.right <= cr.right + 2 && pr.left >= cr.left - 2, `${Math.round(pr.left)}…${Math.round(pr.right)}`)
-      rows[0]?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
-      await wait(220)
-      check('объект из списка выделяется', document.querySelectorAll('.boarditem--selected').length >= 0)
-      panel.querySelector('.objpanel__close')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      await wait(200)
-      check('панель объектов закрывается', !document.querySelector('.objpanel'))
-    }
-  } else {
-    check('кнопка списка объектов есть', false, 'не найдена')
-  }
+  const findButton = Array.from(document.querySelectorAll('.topbar .toolbtn')).find((node) => /Найти/.test(node.getAttribute('aria-label') || ''))
+  check('кнопки списка объектов нет', !listButton)
+  check('кнопки поиска на доске нет', !findButton)
+  check('панели объектов нет', !document.querySelector('.objpanel'))
 
   await press('Escape')
   await wait(120)
@@ -609,8 +871,99 @@ const run = async () => {
   await press('v')
   await wait(160)
 
+  const probeBoard = await window.liro.api.boardCreate('Проверка грани')
+  const probeId = probeBoard.data.id
+  window.location.hash = `#/board/${probeId}`
+  await wait(2600)
+  const paint = document.querySelector('.boardview__canvas')
+  if (paint) {
+    const faceBoxAll = paint.getBoundingClientRect()
+    const faceOptions = { bubbles: true, cancelable: true, button: 0, buttons: 1, pointerId: 1, isPrimary: true }
+    const clickX = faceBoxAll.left + faceBoxAll.width / 2
+    const clickY = faceBoxAll.top + faceBoxAll.height / 2
+    const wantTool = async (key, name) => {
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        if (paint.dataset.tool === name) return
+        await press(key)
+        await wait(320)
+      }
+    }
+    const readItems = async () => {
+      const result = await window.liro.api.boardOpen(probeId)
+      return result.data.items
+    }
+    const sketchCount = (items) =>
+      items.filter((item) => item.kind === 'solid').reduce((sum, item) => sum + item.sketch.length, 0)
+    await wantTool('d', 'solid')
+    paint.dispatchEvent(new PointerEvent('pointerdown', { ...faceOptions, clientX: clickX, clientY: clickY }))
+    paint.dispatchEvent(new PointerEvent('pointerup', { ...faceOptions, clientX: clickX, clientY: clickY }))
+    await wait(700)
+    await wantTool('v', 'select')
+    await press('f')
+    await wait(1100)
+    const faceSolid = document.querySelector('.boarditem[data-kind="solid"]')
+    if (faceSolid) {
+      const faceBox = faceSolid.getBoundingClientRect()
+      const faceX = faceBox.left + faceBox.width / 2
+      const faceY = faceBox.top + faceBox.height / 2
+      const before = sketchCount(await readItems())
+      faceSolid.dispatchEvent(new PointerEvent('pointerdown', { ...faceOptions, clientX: faceX, clientY: faceY }))
+      paint.dispatchEvent(new PointerEvent('pointerup', { ...faceOptions, clientX: faceX, clientY: faceY }))
+      await wait(420)
+      const strokeMode = Array.from(document.querySelectorAll('.toolpalette .toolbtn')).find((node) =>
+        /Штрих по грани/.test(node.getAttribute('title') || '')
+      )
+      check('есть режим штриха по грани', !!strokeMode)
+      strokeMode?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await wait(320)
+      faceSolid.dispatchEvent(new PointerEvent('pointerdown', { ...faceOptions, clientX: faceX - 10, clientY: faceY - 8 }))
+      await wait(60)
+      let previewFrames = 0
+      for (let step = 1; step <= 16; step += 1) {
+        const ratio = step / 16
+        paint.dispatchEvent(
+          new PointerEvent('pointermove', {
+            ...faceOptions,
+            clientX: faceX - 10 + ratio * 26,
+            clientY: faceY - 8 + Math.sin(ratio * Math.PI) * 20
+          })
+        )
+        await wait(24)
+        if (document.querySelector('.inkpreview')) previewFrames += 1
+      }
+      check('на 3D-грани виден штрих при рисовании', previewFrames >= 12, `${previewFrames} из 16`)
+      paint.dispatchEvent(new PointerEvent('pointerup', { ...faceOptions, clientX: faceX + 16, clientY: faceY - 8 }))
+      await wait(700)
+      const after = sketchCount(await readItems())
+      check('штрих лёг на грань', after === before + 1, `было ${before}, стало ${after}`)
+      await press('z', { ctrlKey: true })
+      await wait(400)
+      const undone = sketchCount(await readItems())
+      check('штрих на грани отменяется', undone === before, `${undone}`)
+      await press('v')
+      await wait(200)
+    } else {
+      check('на 3D-грани виден штрих при рисовании', false, 'фигура не создалась')
+      check('штрих лёг на грань', false, 'фигура не создалась')
+      check('штрих на грани отменяется', false, 'фигура не создалась')
+    }
+  }
+  const pasteCanvas = document.querySelector('.boardview__canvas')
+  if (pasteCanvas) {
+    const transfer = new DataTransfer()
+    transfer.setData('text/plain', 'https://liro.app/docs')
+    const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer })
+    pasteCanvas.dispatchEvent(pasteEvent)
+    await wait(1000)
+    const link = document.querySelector('.boarditem a')
+    check('вставка ссылки даёт кликабельную ссылку', !!link && (link.getAttribute('href') || '').includes('liro.app/docs'), link ? link.getAttribute('href') : 'ссылки нет')
+  }
+  await window.liro.api.boardDelete(probeId, true)
+  window.location.hash = '#/library'
+  await wait(700)
+
   const overlaps = () => {
-    const boxes = Array.from(document.querySelectorAll('.bbar, .toolgroup, .statusbar, .toolpalette, .textpanel, .objpanel'))
+    const boxes = Array.from(document.querySelectorAll('.bbar, .toolgroup, .statusbar, .toolpalette, .textpanel, .inspector'))
     const rects = boxes.map((node) => ({ node, rect: node.getBoundingClientRect() }))
     const hits = []
     for (let i = 0; i < rects.length; i += 1) {
@@ -627,6 +980,33 @@ const run = async () => {
   }
   const hits = overlaps()
   check('панели не накладываются', hits.length === 0, hits.join('; '))
+
+  window.location.hash = '#/settings'
+  await wait(1200)
+  const nameInput = Array.from(document.querySelectorAll('.setrow')).find((row) => /Имя/.test(row.querySelector('.setrow__label')?.textContent || ''))?.querySelector('input')
+  check('в настройках есть поле имени', !!nameInput)
+  if (nameInput) {
+    const before = await window.liro.api.settingsGet().then((result) => result.data.userName)
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    const typeName = async (value) => {
+      nameInput.focus()
+      setter.call(nameInput, value)
+      nameInput.dispatchEvent(new Event('input', { bubbles: true }))
+      await wait(200)
+      nameInput.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+      await wait(700)
+    }
+    await typeName('Проверка')
+    const changed = await window.liro.api.settingsGet().then((result) => result.data.userName)
+    check('имя сохраняется', changed === 'Проверка', `было «${before}», стало «${changed}»`)
+    await typeName(before)
+    const restored = await window.liro.api.settingsGet().then((result) => result.data.userName)
+    check('имя возвращается обратно', restored === before, `«${restored}»`)
+  }
+  const cursorUrl = getComputedStyle(document.body).cursor
+  check('курсор системный', !/url\(/.test(cursorUrl), cursorUrl.slice(0, 40))
+  window.location.hash = '#/library'
+  await wait(600)
 
   return JSON.stringify({
     passed: report.filter((line) => line.startsWith('ОК')).length,

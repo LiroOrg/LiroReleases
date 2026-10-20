@@ -13,7 +13,7 @@ import {
   SquarePlus
 } from 'lucide-react'
 import type { BoardMeta } from '@shared/types'
-import { formatBytes, formatDate, formatNumber } from '@shared/util'
+import { formatDate } from '@shared/util'
 import logo from '../../../../resources/icon-256.png'
 import { api } from '../lib/api'
 import { createBoardFromClipboard } from '../lib/paste'
@@ -107,15 +107,6 @@ export function Home(props: { onFail: (text: string) => void }): ReactNode {
   const boards = useMemo(
     () => library.boards.filter((board) => !board.archived).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
     [library.boards]
-  )
-
-  const totals = useMemo(
-    () => ({
-      boards: boards.length,
-      items: boards.reduce((sum, board) => sum + board.itemCount, 0),
-      bytes: boards.reduce((sum, board) => sum + board.assetBytes, 0)
-    }),
-    [boards]
   )
 
   const reload = useCallback(async (): Promise<void> => {
@@ -233,9 +224,7 @@ export function Home(props: { onFail: (text: string) => void }): ReactNode {
             <span className="resume__body">
               <span className="resume__label">Последняя доска</span>
               <span className="resume__title truncate">{last.title}</span>
-              <span className="resume__meta">
-                Открыта {whenLabel(last.updatedAt)} · {formatNumber(last.itemCount)} объектов
-              </span>
+              <span className="resume__meta">Открыта {whenLabel(last.updatedAt)}</span>
             </span>
             <span className="resume__go">
               <ArrowRight size={18} />
@@ -304,10 +293,6 @@ export function Home(props: { onFail: (text: string) => void }): ReactNode {
           <HardDrive size={14} />
           <span className="truncate">{appInfo?.storage || 'Папка хранилища'}</span>
         </button>
-        <span className="homefoot__sep" />
-        <span className="homefoot__item homefoot__item--plain">
-          {formatNumber(totals.boards)} досок · {formatNumber(totals.items)} объектов · {formatBytes(totals.bytes)}
-        </span>
         <span className="homefoot__sep" />
         <span className="homefoot__item homefoot__item--plain">
           <ShieldCheck size={14} />

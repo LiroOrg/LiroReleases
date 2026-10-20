@@ -10,7 +10,8 @@ const FORMATS: Array<{ id: ExportOptions['format']; title: string; text: string 
   { id: 'pdf', title: 'PDF', text: 'Векторный документ с текстом. Можно разбить на несколько страниц.' },
   { id: 'html', title: 'HTML', text: 'Автономный файл: открывается без приложения, работает офлайн.' },
   { id: 'zip', title: 'ZIP', text: 'Архив: описание доски плюс все изображения.' },
-  { id: 'json', title: 'JSON', text: 'Полное описание доски для последующего импорта.' }
+  { id: 'json', title: 'JSON', text: 'Полное описание доски для последующего импорта.' },
+  { id: 'svg', title: 'SVG', text: 'Векторная картинка: открывается в браузере, Иллюстраторе и Inkscape.' }
 ]
 
 export function ExportDialog(props: { doc: BoardDoc; onClose: () => void }): ReactNode {
@@ -60,7 +61,8 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void }): Rea
         ? await api.board.exportSaveAs(buildOptions())
         : await api.board.export(buildOptions())
       if (result.ok && result.path) {
-        toast('export')
+        const name = result.path.split(/[\\/]/).pop() ?? result.path
+        toast(`Файл сохранён: ${name}`, 'export')
         props.onClose()
       } else {
         fail(result.message ?? 'Экспорт не выполнен')

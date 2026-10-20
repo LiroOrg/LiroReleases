@@ -1,6 +1,6 @@
-import { app, BrowserWindow, ClipboardItem, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, ClipboardItem, clipboard, dialog, ipcMain, nativeImage, net, shell } from 'electron'
 import type { NativeImage } from 'electron'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ApiLiro, IpcResult } from '@shared/api'
 import type { ApiImportOptions, BoardItem, ExportOptions, ExportResult, LibraryIndex, Project, Settings } from '@shared/types'
@@ -14,7 +14,7 @@ import { importFromApi, listBoards, type SourceBoardSummary } from './import/api
 import { buildDoc, buildStats, assetsBytesOf, commitDoc, persistInlineAssets } from './import/commit'
 import { exportBoard, exportToPath } from './export/exporter'
 import { exportFolder } from './export/render'
-import { openPreview, previewFor, type PreviewPayload } from './preview'
+import { openPreview, previewFor, readPreviewText, toLocalPath, type PreviewPayload } from './preview'
 import { askToRestart, checkForUpdate } from './updater'
 import { sanitizeFileName } from '@shared/util'
 import type { RawItem } from './import/normalize'
@@ -75,6 +75,37 @@ function sendSettings(): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('event:settings:changed', store.settings)
   }
+}
+
+const IMAGE_LIMIT = 24 * 1024 * 1024
+
+function nameFromUrl(url: string): string {
+  try {
+    const parsed = new URL(url)
+    const last = parsed.pathname.split('/').filter(Boolean).pop() ?? ''
+    const clean = decodeURIComponent(last.split('?')[0]).trim()
+    if (clean) return clean
+    return parsed.hostname
+  } catch {
+    return 'Картинка'
+  }
+}
+
+async function fetchImage(url: string): Promise<{ dataUrl: string; mime: string; name: string }> {
+  const value = url.trim()
+  if (!/^https?:\/\//i.test(value)) throw new Error('Нужна ссылка, начинающаяся с http:// или https://')
+  const response = await net.fetch(value, {
+    redirect: 'follow',
+    headers: { 'User-Agent': 'Liro/1.0 (https://liro.app)', Accept: 'image/*,*/*;q=0.8' }
+  })
+  if (!response.ok) throw new Error(`Сервер ответил ${response.status}`)
+  const type = (response.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
+  if (type && !type.startsWith('image/')) throw new Error('По этой ссылке не картинка')
+  const buffer = Buffer.from(await response.arrayBuffer())
+  if (buffer.length === 0) throw new Error('Сервер вернул пустой ответ')
+  if (buffer.length > IMAGE_LIMIT) throw new Error('Картинка слишком большая')
+  const mime = type || 'image/png'
+  return { dataUrl: `data:${mime};base64,${buffer.toString('base64')}`, mime, name: nameFromUrl(value) }
 }
 
 export function registerIpc(): void {
@@ -163,10 +194,14 @@ export function registerIpc(): void {
     return ok(await runExport(options, true, result.filePath))
   })
   ipcMain.handle('board:thumbnail', async (_e, docId: string) => {
-    const file = await exportBoard({ docId, thumbnail: true })
-    store.setThumbnail(docId, file ? 'thumb.png' : undefined)
-    sendLibraryChanged()
-    return ok(file)
+    try {
+      const file = await exportBoard({ docId, thumbnail: true })
+      store.setThumbnail(docId, file ? 'thumb.png' : undefined)
+      sendLibraryChanged()
+      return ok(file)
+    } catch (error) {
+      return fail(error)
+    }
   })
   ipcMain.handle('board:viewport', (_e, docId: string, viewport: { x: number; y: number; zoom: number }) => {
     store.saveViewport(docId, viewport)
@@ -181,6 +216,40 @@ export function registerIpc(): void {
     doc.stats = buildStats(next, assetsBytesOf(doc))
     store.writeDoc(doc)
     return ok(true)
+  })
+  ipcMain.handle('board:paste-items', (_e, payload: { docId: string; sourceDocId: string; items: BoardItem[] }) => {
+    try {
+      const doc = store.readDoc(payload.docId)
+      const source = payload.sourceDocId === payload.docId ? null : store.readDoc(payload.sourceDocId)
+      const sourceAssets = source?.assets ?? {}
+      const incoming = payload.items ?? []
+      const next = [...doc.items]
+      for (const item of incoming) {
+        const clone: BoardItem = { ...item }
+        if (clone.kind === 'image' && clone.asset?.local && clone.asset.file) {
+          const file = clone.asset.file
+          const target = join(assetsDir(payload.docId), file)
+          const origin = join(assetsDir(payload.sourceDocId), file)
+          if (!existsSync(target) && existsSync(origin)) {
+            mkdirSync(assetsDir(payload.docId), { recursive: true })
+            copyFileSync(origin, target)
+          }
+          const ref = sourceAssets[file]
+          if (ref) {
+            doc.assets = doc.assets ?? {}
+            doc.assets[file] = { ...ref }
+          }
+        }
+        next.push(clone)
+      }
+      doc.items = next
+      doc.bounds = roundRect(boundsOfItems(next, 160))
+      doc.stats = buildStats(next, assetsBytesOf(doc))
+      store.writeDoc(doc)
+      return ok({ added: incoming.length })
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error))
+    }
   })
   ipcMain.handle('board:link-source', async (_e, docId: string) => {
     const doc = store.readDoc(docId)
@@ -570,6 +639,16 @@ export function registerIpc(): void {
   })
   ipcMain.handle('preview:get', (event) => {
     return ok(previewFor(BrowserWindow.fromWebContents(event.sender)))
+  })
+  ipcMain.handle('preview:text', (_event, file: string) => {
+    return ok(readPreviewText(toLocalPath(file)))
+  })
+  ipcMain.handle('image:fetch', async (_event, url: string) => {
+    try {
+      return ok(await fetchImage(url))
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error), 'image')
+    }
   })
   ipcMain.handle('app:info', () =>
     ok({

@@ -457,28 +457,65 @@ export function solidFaceAt(item: SolidItem, point: Vec2): SolidPolygon | null {
 
 export function faceFrame(face: SolidFaceMesh): SolidFrame {
   const origin = face.world[0] ?? vec(0, 0, 0)
-  const next = face.world[1] ?? origin
-  const axisXRaw = sub(next, origin)
-  const axisX = unit(axisXRaw)
-  const normal = faceNormal(face, vec(0, 0, 0))
-  let axisY = unit(cross(normal, axisX))
-  if (axisY.y < 0) axisY = negate(axisY)
-  let height = 0
-  for (const point of face.world) {
-    height = Math.max(height, dot(sub(point, origin), axisY))
+  const second = face.world[1] ?? origin
+  const third = face.world[2] ?? second
+  const axisXRaw = sub(second, origin)
+  const axisYRaw = sub(third, origin)
+  return {
+    origin,
+    axisX: unit(axisXRaw),
+    axisY: unit(axisYRaw),
+    width: length(axisXRaw),
+    height: length(axisYRaw)
   }
-  return { origin, axisX, axisY, width: length(axisXRaw), height: Math.max(height, 1e-6) }
 }
 
 export function faceLocalToWorld(face: SolidFaceMesh, point: Vec2): Vec3 {
   const frame = faceFrame(face)
-  return add(add(frame.origin, scale(frame.axisX, point.x)), scale(frame.axisY, point.y))
+  const gxx = dot(frame.axisX, frame.axisX)
+  const gxy = dot(frame.axisX, frame.axisY)
+  const gyy = dot(frame.axisY, frame.axisY)
+  const det = gxx * gyy - gxy * gxy
+  if (Math.abs(det) < 1e-9) return frame.origin
+  const alpha = (point.x * gyy - point.y * gxy) / det
+  const beta = (point.y * gxx - point.x * gxy) / det
+  return add(add(frame.origin, scale(frame.axisX, alpha)), scale(frame.axisY, beta))
 }
 
 export function faceWorldToLocal(face: SolidFaceMesh, point: Vec3): Vec2 {
   const frame = faceFrame(face)
   const delta = sub(point, frame.origin)
   return { x: dot(delta, frame.axisX), y: dot(delta, frame.axisY) }
+}
+
+export function unrotateSolid(point: Vec3, rotation: SolidRotation): Vec3 {
+  const yaw = rotation.yaw * DEG
+  const pitch = rotation.pitch * DEG
+  const cosYaw = Math.cos(yaw)
+  const sinYaw = Math.sin(yaw)
+  const cosPitch = Math.cos(pitch)
+  const sinPitch = Math.sin(pitch)
+  const y = point.y * cosPitch + point.z * sinPitch
+  const z = -point.y * sinPitch + point.z * cosPitch
+  return vec(point.x * cosYaw - z * sinYaw, y, point.x * sinYaw + z * cosYaw)
+}
+
+export function solidScreenToLocal(item: SolidItem, face: SolidFaceMesh, screen: Vec2): Vec3 | null {
+  const edge = solidSize(item.edge)
+  const camera = solidCamera(item.solid, edge, itemRotation(item), itemBox(item))
+  const base = face.world[0]
+  if (!base) return null
+  const u = (screen.x - camera.offsetX) / camera.scale
+  const v = -(screen.y - camera.offsetY) / camera.scale
+  const origin = rotateSolid(base, camera)
+  const normal = rotateSolid(faceNormal(face, solidCenter(edge)), camera)
+  const direction = vec(u, v, -camera.distance)
+  const start = vec(0, 0, camera.distance)
+  const denominator = dot(normal, direction)
+  if (Math.abs(denominator) < 1e-9) return null
+  const t = dot(normal, sub(origin, start)) / denominator
+  if (t <= 0) return null
+  return unrotateSolid(add(start, scale(direction, t)), camera)
 }
 
 export function faceOf(item: SolidItem, id: string): SolidFace | undefined {

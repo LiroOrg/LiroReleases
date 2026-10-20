@@ -1,6 +1,6 @@
 import { normalizeColor } from '@shared/color'
 import { extractUrls, toPlainText } from '@shared/richtext'
-import { boundsOfItems, isImageMime, mimeToExtension } from '@shared/util'
+import { boundsOfItems, isImageMime, measureTextBox, mimeToExtension } from '@shared/util'
 import type {
   BoardItem,
   ConnectorItem,
@@ -356,18 +356,21 @@ function normalizeOne(raw: RawItem, index: number): BoardItem | null {
     }
     case 'text': {
       const box = rect(Math.max(80, fontSize * 6), Math.max(24, fontSize * 1.6))
+      const size = fontSize > 0 ? fontSize : 14
+      const plain = toPlainText(content)
+      const needed = measureTextBox(plain, size, Math.max(8, box.w - 4)).height + 4
       return {
         ...base,
         kind: 'text',
         x: box.x,
         y: box.y,
         w: box.w,
-        h: box.h,
+        h: Math.max(box.h, needed),
         content,
-        plain: toPlainText(content),
+        plain,
         color: color(pick(style.color, style.textColor, data.color), '#1a1a1a'),
         align: alignOf(pick(style.textAlign, data.textAlign), 'left'),
-        fontSize: fontSize > 0 ? fontSize : 14,
+        fontSize: size,
         fontFamily,
         urls: extractUrls(content)
       }

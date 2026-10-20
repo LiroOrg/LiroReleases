@@ -1,8 +1,32 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ExternalLink, FileQuestion, Globe, Minus, Square, X } from 'lucide-react'
-import type { PreviewPayload } from '@shared/api'
+import { ExternalLink, FileQuestion, Globe, Minus, Square, WifiOff, X } from 'lucide-react'
+import hljs from 'highlight.js/lib/core'
+import bash from 'highlight.js/lib/languages/bash'
+import css from 'highlight.js/lib/languages/css'
+import diff from 'highlight.js/lib/languages/diff'
+import ini from 'highlight.js/lib/languages/ini'
+import javascript from 'highlight.js/lib/languages/javascript'
+import json from 'highlight.js/lib/languages/json'
+import markdown from 'highlight.js/lib/languages/markdown'
+import sql from 'highlight.js/lib/languages/sql'
+import typescript from 'highlight.js/lib/languages/typescript'
+import xml from 'highlight.js/lib/languages/xml'
+import yaml from 'highlight.js/lib/languages/yaml'
+import type { PreviewPayload, PreviewText } from '@shared/api'
 import { api } from '../lib/api'
+
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('css', css)
+hljs.registerLanguage('diff', diff)
+hljs.registerLanguage('ini', ini)
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('markdown', markdown)
+hljs.registerLanguage('sql', sql)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('xml', xml)
+hljs.registerLanguage('yaml', yaml)
 
 function youtubeEmbed(url: string): string | null {
   const match = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|live\/)|youtu\.be\/)([\w-]{6,})/)
@@ -15,9 +39,19 @@ function vimeoEmbed(url: string): string | null {
   return match ? `https://player.vimeo.com/video/${match[1]}` : null
 }
 
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>]/g, (char) => (char === '&' ? '&amp;' : char === '<' ? '&lt;' : '&gt;'))
+}
+
 export function PreviewScreen(): ReactNode {
   const [payload, setPayload] = useState<PreviewPayload | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const [online, setOnline] = useState(() => navigator.onLine)
+  const [text, setText] = useState<PreviewText | null>(null)
+  const [textReady, setTextReady] = useState(false)
+
+  const kind = payload?.kind ?? 'file'
+  const src = payload?.src ?? ''
 
   useEffect(() => {
     void api.preview.get().then((value) => {
@@ -26,8 +60,55 @@ export function PreviewScreen(): ReactNode {
     })
   }, [])
 
-  const kind = payload?.kind ?? 'file'
-  const src = payload?.src ?? ''
+  useEffect(() => {
+    if (!payload) return
+    setOnline(payload.online ?? navigator.onLine)
+  }, [payload])
+
+  useEffect(() => {
+    const up = () => setOnline(true)
+    const down = () => setOnline(false)
+    window.addEventListener('online', up)
+    window.addEventListener('offline', down)
+    return () => {
+      window.removeEventListener('online', up)
+      window.removeEventListener('offline', down)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (kind !== 'text' || !src) {
+      setText(null)
+      setTextReady(true)
+      return
+    }
+    let alive = true
+    setTextReady(false)
+    void api.preview
+      .text(src)
+      .then((value) => {
+        if (!alive) return
+        setText(value)
+        setTextReady(true)
+      })
+      .catch(() => {
+        if (!alive) return
+        setText(null)
+        setTextReady(true)
+      })
+    return () => {
+      alive = false
+    }
+  }, [kind, src])
+
+  const code = useMemo(() => {
+    if (!text) return ''
+    try {
+      return hljs.highlight(text.content, { language: text.language, ignoreIllegals: true }).value
+    } catch {
+      return escapeHtml(text.content)
+    }
+  }, [text])
 
   let body: ReactNode = null
   if (kind === 'image') {
@@ -48,14 +129,34 @@ export function PreviewScreen(): ReactNode {
       <video className="preview__video" src={src} controls />
     )
   } else if (kind === 'web') {
-    const embed = youtubeEmbed(src) ?? vimeoEmbed(src)
-    body = embed ? (
+    const embed = online ? youtubeEmbed(src) ?? vimeoEmbed(src) : null
+    body = !online ? (
+      <div className="preview__center preview__center--empty">
+        <WifiOff size={42} />
+        <div className="preview__hint">Нет подключения к интернету</div>
+        <div className="preview__hint preview__hint--dim">Страница и видео приходят из сети, офлайн показать их нельзя</div>
+        <div className="preview__path">{src}</div>
+      </div>
+    ) : embed ? (
       <iframe className="preview__frame" src={embed} title={payload?.title ?? 'Видео'} allow="autoplay; encrypted-media; picture-in-picture" />
     ) : (
       <iframe className="preview__frame" src={src} title={payload?.title ?? 'Страница'} sandbox="allow-scripts allow-same-origin allow-popups allow-forms" />
     )
   } else if (kind === 'text') {
-    body = <iframe className="preview__frame" src={src} title={payload?.title ?? 'Текст'} />
+    body = text ? (
+      <div className="preview__code">
+        <pre className="preview__code-body">
+          <code className="hljs" dangerouslySetInnerHTML={{ __html: code }} />
+        </pre>
+        {text.truncated ? <div className="preview__code-note">Файл большой — показано только начало</div> : null}
+      </div>
+    ) : textReady ? (
+      <div className="preview__center preview__center--empty">
+        <FileQuestion size={42} />
+        <div className="preview__hint">Этот файл нельзя показать текстом.</div>
+        <div className="preview__path">{src}</div>
+      </div>
+    ) : null
   } else {
     body = (
       <div className="preview__center preview__center--empty">
@@ -93,7 +194,7 @@ export function PreviewScreen(): ReactNode {
       <div className="preview__body" data-kind={kind}>
         {loaded ? body : null}
       </div>
-      {kind === 'web' ? (
+      {kind === 'web' && online ? (
         <div className="preview__foot">
           <Globe size={13} />
           <span className="truncate">{src}</span>

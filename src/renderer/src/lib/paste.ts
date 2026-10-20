@@ -3,6 +3,7 @@ import {
   decodeBoardClipboard,
   isBoardClipboardHtml
 } from './boardClipboard'
+import { linkHtml } from '@shared/richtext'
 import { api } from './api'
 
 export interface PasteImage {
@@ -110,6 +111,7 @@ export function parseClipboardHtml(html: string): PastePayload | null {
 
 export function parseClipboardText(text: string): PastePayload | null {
   if (!text || !text.trim()) return null
+  const content = linkHtml(text) || text
   return {
     label: 'Обычный текст',
     title: 'Вставка из буфера',
@@ -123,7 +125,7 @@ export function parseClipboardText(text: string): PastePayload | null {
         height: 140,
         position: { x: 240, y: 70, origin: 'center', relativeTo: 'canvas_center' },
         geometry: { width: 480, height: 140, rotation: 0 },
-        data: { content: text }
+        data: { content }
       }
     ],
     images: []
@@ -157,6 +159,14 @@ export function payloadFromEvent(event: ClipboardEvent): PastePayload | null {
   }
   const text = event.clipboardData?.getData('text/plain')
   return text ? parseClipboardText(text) : null
+}
+
+export function isEditableTarget(target: EventTarget | null): boolean {
+  const node = target as HTMLElement | null
+  if (!node || typeof node.tagName !== 'string') return false
+  const tag = node.tagName.toUpperCase()
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+  return node.isContentEditable === true
 }
 
 export async function createBoardFromClipboard(

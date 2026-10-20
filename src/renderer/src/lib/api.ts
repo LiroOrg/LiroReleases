@@ -1,8 +1,9 @@
-import type { CaptureSnapshot, FileRef, SourceBoardSummary, PreviewPayload } from '@shared/api'
+import type { CaptureSnapshot, FileRef, SourceBoardSummary, PreviewPayload, PreviewText } from '@shared/api'
 import type { IpcResult } from '@shared/api'
 import type { ApiImportOptions, CaptureOptions } from '@shared/types'
 import type {
   BoardDoc,
+  BoardItem,
   BoardMeta,
   ExportOptions,
   ExportResult,
@@ -62,6 +63,8 @@ export const api = {
       offsetX?: number
       offsetY?: number
     }) => unwrap<{ added: number; images: number }>(window.liro.api.boardAppendItems(payload)),
+    pasteItems: (payload: { docId: string; sourceDocId: string; items: BoardItem[] }) =>
+      unwrap<{ added: number }>(window.liro.api.boardPasteItems(payload)),
     openSource: (docId: string) => unwrap(window.liro.api.boardLinkToSource(docId)),
     assetUrl: (docId: string, file: string) => unwrap<string>(window.liro.api.assetUrl(docId, file))
   },
@@ -116,7 +119,11 @@ export const api = {
   },
   preview: {
     open: (payload: PreviewPayload) => unwrap(window.liro.api.previewOpen(payload)),
-    get: () => unwrap<PreviewPayload | null>(window.liro.api.previewGet())
+    get: () => unwrap<PreviewPayload | null>(window.liro.api.previewGet()),
+    text: (file: string) => unwrap<PreviewText | null>(window.liro.api.previewText(file))
+  },
+  image: {
+    fetch: (url: string) => unwrap<{ dataUrl: string; mime: string; name: string }>(window.liro.api.imageFetch(url))
   },
   windows: {
     minimize: () => unwrap(window.liro.api.windowMinimize()),

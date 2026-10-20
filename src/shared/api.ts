@@ -1,6 +1,7 @@
 import type {
   ApiImportOptions,
   BoardDoc,
+  BoardItem,
   BoardMeta,
   CaptureOptions,
   ExportOptions,
@@ -25,6 +26,13 @@ export interface PreviewPayload {
   title: string
   src: string
   detail?: string
+  online?: boolean
+}
+
+export interface PreviewText {
+  content: string
+  language: string
+  truncated: boolean
 }
 
 export interface FileRef {
@@ -97,6 +105,7 @@ export interface ApiLiro {
     offsetX?: number
     offsetY?: number
   }) => Promise<IpcResult<{ added: number; images: number }>>
+  boardPasteItems: (payload: { docId: string; sourceDocId: string; items: BoardItem[] }) => Promise<IpcResult<{ added: number }>>
   boardLinkToSource: (docId: string) => Promise<IpcResult<string>>
   assetUrl: (docId: string, file: string) => Promise<IpcResult<string>>
   assetMissing: (docId: string) => Promise<IpcResult<boolean>>
@@ -141,6 +150,8 @@ export interface ApiLiro {
   windowMinimize: () => Promise<IpcResult<boolean>>
   previewOpen: (payload: PreviewPayload) => Promise<IpcResult<boolean>>
   previewGet: () => Promise<IpcResult<PreviewPayload | null>>
+  previewText: (file: string) => Promise<IpcResult<PreviewText | null>>
+  imageFetch: (url: string) => Promise<IpcResult<{ dataUrl: string; mime: string; name: string }>>
   windowMaximize: () => Promise<IpcResult<boolean>>
   windowClose: () => Promise<IpcResult<boolean>>
   appInfo: () => Promise<IpcResult<{ version: string; electron: string; storage: string; platform: string; packaged: boolean }>>

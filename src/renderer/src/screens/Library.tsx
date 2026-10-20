@@ -94,7 +94,11 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
       list = list.filter((board) => board.projectId === projectFilter)
     }
     if (text) {
-      list = list.filter((board) => `${board.title} ${board.description ?? ''}`.toLowerCase().includes(text))
+      const folders = new Map(library.projects.map((project) => [project.id, project.name.toLowerCase()]))
+      list = list.filter((board) => {
+        const folder = board.projectId ? folders.get(board.projectId) ?? '' : ''
+        return `${board.title} ${board.description ?? ''} ${folder}`.toLowerCase().includes(text)
+      })
     }
     const sorted = [...list]
     if (sort === 'name') sorted.sort((left, right) => left.title.localeCompare(right.title, 'ru'))

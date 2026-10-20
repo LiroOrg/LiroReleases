@@ -524,6 +524,11 @@
   display: block;
 }
 
+.boardcard__thumb > .thumbph {
+  position: absolute;
+  inset: 0;
+}
+
 .boardcard__body {
   padding: 12px 14px 14px;
   display: flex;
@@ -802,8 +807,7 @@
 }
 
 .menu__pop {
-  position: absolute;
-  top: calc(100% + 6px);
+  position: fixed;
   z-index: 60;
   min-width: 196px;
   max-height: min(420px, 70vh);
@@ -818,14 +822,6 @@
   flex-direction: column;
   gap: 1px;
   animation: panel-in var(--dur-fast) ease both;
-}
-
-.menu__pop[data-align='right'] {
-  right: 0;
-}
-
-.menu__pop[data-align='left'] {
-  left: 0;
 }
 
 .menu__title {

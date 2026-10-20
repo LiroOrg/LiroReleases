@@ -10,6 +10,38 @@ export interface ConnectorLayerProps {
   size: { width: number; height: number }
   visible: Rect
   dpr: number
+  liveRef?: { current: number }
+  livePosRef?: { current: Map<string, { x: number; y: number }> }
+}
+
+function roundedElbow(
+  ctx: CanvasRenderingContext2D,
+  points: Array<{ x: number; y: number }>,
+  radius: number
+): void {
+  ctx.moveTo(points[0].x, points[0].y)
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const previous = points[index - 1]
+    const corner = points[index]
+    const next = points[index + 1]
+    const inX = corner.x - previous.x
+    const inY = corner.y - previous.y
+    const outX = next.x - corner.x
+    const outY = next.y - corner.y
+    const inLen = Math.hypot(inX, inY)
+    const outLen = Math.hypot(outX, outY)
+    if (inLen < 0.01 || outLen < 0.01) continue
+    const cut = Math.min(radius, inLen / 2, outLen / 2)
+    ctx.lineTo(corner.x - (inX / inLen) * cut, corner.y - (inY / inLen) * cut)
+    ctx.quadraticCurveTo(
+      corner.x,
+      corner.y,
+      corner.x + (outX / outLen) * cut,
+      corner.y + (outY / outLen) * cut
+    )
+  }
+  const last = points[points.length - 1]
+  ctx.lineTo(last.x, last.y)
 }
 
 function drawArrow(
@@ -71,7 +103,8 @@ export const ConnectorLayer = memo(function ConnectorLayer(props: ConnectorLayer
     const loop = (): void => {
       if (!running) return
       const current = props.viewRef.current
-      const signature = `${Math.round(current.x * 100)}:${Math.round(current.y * 100)}:${current.zoom.toFixed(4)}:${props.doc.items.length}:${props.size.width}x${props.size.height}`
+      const live = props.liveRef?.current ?? 0
+      const signature = `${Math.round(current.x * 100)}:${Math.round(current.y * 100)}:${current.zoom.toFixed(4)}:${props.doc.items.length}:${props.size.width}x${props.size.height}:${live}`
       if (signature !== lastRef.current) {
         lastRef.current = signature
         draw(canvas, props, current)
@@ -119,22 +152,36 @@ function draw(
 
     const byId = new Map<string, BoardItem>()
     for (const item of props.doc.items) byId.set(item.id, item)
+    for (const [id, position] of props.livePosRef?.current ?? []) {
+      const item = byId.get(id)
+      if (item) byId.set(id, { ...item, x: position.x, y: position.y } as BoardItem)
+    }
     const area = props.visible
     const margin = 200
 
     for (const item of props.doc.items) {
       if (item.kind !== 'connector') continue
-      if (
-        item.x > area.x + area.width + margin ||
-        item.x + Math.max(1, item.w) < area.x - margin ||
-        item.y > area.y + area.height + margin ||
-        item.y + Math.max(1, item.h) < area.y - margin
-      ) {
-        continue
-      }
       const connector = item
       const points = deriveConnectorPoints(connector, byId)
       if (points.length < 2) continue
+      let left = Infinity
+      let right = -Infinity
+      let top = Infinity
+      let bottom = -Infinity
+      for (const point of points) {
+        left = Math.min(left, point.x)
+        right = Math.max(right, point.x)
+        top = Math.min(top, point.y)
+        bottom = Math.max(bottom, point.y)
+      }
+      if (
+        left > area.x + area.width + margin ||
+        right < area.x - margin ||
+        top > area.y + area.height + margin ||
+        bottom < area.y - margin
+      ) {
+        continue
+      }
       const screen = points.map(toScreen)
       const lineWidth = Math.max(0.6, connector.lineWidth * zoom)
       ctx.strokeStyle = connector.color
@@ -147,19 +194,27 @@ function draw(
       ctx.beginPath()
       if (connector.shape === 'curved' && screen.length === 2) {
         const [a, b] = screen
+        const span = Math.hypot(b.x - a.x, b.y - a.y)
         const midX = (a.x + b.x) / 2
-        const midY = (a.y + b.y) / 2 - Math.abs(b.x - a.x) * 0.11
+        const midY = (a.y + b.y) / 2 - Math.min(span * 0.18, 60)
         ctx.moveTo(a.x, a.y)
         ctx.quadraticCurveTo(midX, midY, b.x, b.y)
       } else if (connector.shape === 'elbowed' && screen.length === 2) {
         const [a, b] = screen
         const midX = (a.x + b.x) / 2
-        ctx.moveTo(a.x, a.y)
-        ctx.lineTo(midX, a.y)
-        ctx.lineTo(midX, b.y)
-        ctx.lineTo(b.x, b.y)
+        roundedElbow(
+          ctx,
+          [
+            { x: a.x, y: a.y },
+            { x: midX, y: a.y },
+            { x: midX, y: b.y },
+            { x: b.x, y: b.y }
+          ],
+          Math.max(4, Math.min(18, Math.hypot(b.x - a.x, b.y - a.y) * 0.12))
+        )
       } else {
-        ctx.moveTo(screen[0].x, screen[0].y)
+        if (screen.length > 2) roundedElbow(ctx, screen, Math.max(4, Math.min(18, lineWidth * 3)))
+        else ctx.moveTo(screen[0].x, screen[0].y)
         for (let i = 1; i < screen.length; i++) ctx.lineTo(screen[i].x, screen[i].y)
       }
       ctx.stroke()

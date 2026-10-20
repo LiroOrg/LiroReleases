@@ -3,9 +3,10 @@ import type { CSSProperties, ReactNode } from 'react'
 import { parseRichText, type Block, type Run } from '@shared/richtext'
 import { contrastColor } from '@shared/color'
 import type { BoardDoc, BoardItem, Rect, SolidItem } from '@shared/types'
-import { smoothPoints } from '@shared/util'
+import { curvePath } from '@shared/curve'
 import { deriveConnectorPoints } from '@shared/geometry'
 import { solidBounds } from '@shared/three'
+import { TableView } from './tableView'
 import { shapePath, strokeDash } from './shapes'
 import { SolidView } from './solidView'
 import { GraphView } from './graphView'
@@ -70,6 +71,7 @@ const RichText = memo(function RichText(props: {
   html: string
   style: CSSProperties
   flush?: boolean
+  onLink?: (href: string) => void
 }): ReactNode {
   const blocks = useMemo(() => parseRichText(props.html), [props.html])
   const groups = useMemo(() => groupBlocks(blocks), [blocks])
@@ -82,7 +84,7 @@ const RichText = memo(function RichText(props: {
               {group.items.map((item, itemIndex) => (
                 <li key={itemIndex} style={item.level > 1 ? { paddingLeft: `${(item.level - 1) * 1.05}em` } : undefined}>
                   {item.runs.map((run, runIndex) => (
-                    <RunView key={runIndex} run={run} />
+                    <RunView key={runIndex} run={run} onLink={props.onLink} />
                   ))}
                 </li>
               ))}
@@ -92,14 +94,14 @@ const RichText = memo(function RichText(props: {
               {group.items.map((item, itemIndex) => (
                 <li key={itemIndex} style={item.level > 1 ? { paddingLeft: `${(item.level - 1) * 1.05}em` } : undefined}>
                   {item.runs.map((run, runIndex) => (
-                    <RunView key={runIndex} run={run} />
+                    <RunView key={runIndex} run={run} onLink={props.onLink} />
                   ))}
                 </li>
               ))}
             </ul>
           )
         ) : (
-          <BlockView key={index} block={group.block} />
+          <BlockView key={index} block={group.block} onLink={props.onLink} />
         )
       )}
     </div>
@@ -124,21 +126,21 @@ function groupBlocks(blocks: Block[]): BlockGroup[] {
   return groups
 }
 
-function BlockView(props: { block: Block }): ReactNode {
+function BlockView(props: { block: Block; onLink?: (href: string) => void }): ReactNode {
   const { block } = props
   if (block.type === 'li') {
     const Tag = block.ordered === false ? 'ul' : block.ordered ? 'ol' : 'div'
     return (
       <Tag style={block.level > 1 ? { paddingLeft: `${block.level * 1.05}em` } : undefined}>
-        <span>{block.runs.map((run, index) => <RunView key={index} run={run} />)}</span>
+        <span>{block.runs.map((run, index) => <RunView key={index} run={run} onLink={props.onLink} />)}</span>
       </Tag>
     )
   }
-  if (block.type === 'h') return <h4 style={{ margin: '0 0 .3em', fontSize: '1.15em' }}>{block.runs.map((run, index) => <RunView key={index} run={run} />)}</h4>
-  return <p>{block.runs.map((run, index) => <RunView key={index} run={run} />)}</p>
+  if (block.type === 'h') return <h4 style={{ margin: '0 0 .3em', fontSize: '1.15em' }}>{block.runs.map((run, index) => <RunView key={index} run={run} onLink={props.onLink} />)}</h4>
+  return <p>{block.runs.map((run, index) => <RunView key={index} run={run} onLink={props.onLink} />)}</p>
 }
 
-function RunView(props: { run: Run }): ReactNode {
+function RunView(props: { run: Run; onLink?: (href: string) => void }): ReactNode {
   const { run } = props
   const style: CSSProperties = {}
   if (run.size) style.fontSize = `${run.size}px`
@@ -150,7 +152,21 @@ function RunView(props: { run: Run }): ReactNode {
   if (run.u) decorations.push('underline')
   if (run.s) decorations.push('line-through')
   if (decorations.length) style.textDecoration = decorations.join(' ')
-  return <span style={style}>{run.href ? <a href={run.href}>{run.text}</a> : run.text}</span>
+  if (!run.href) return <span style={style}>{run.text}</span>
+  return (
+    <span style={style}>
+      <a
+        href={run.href}
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          props.onLink?.(run.href ?? '')
+        }}
+      >
+        {run.text}
+      </a>
+    </span>
+  )
 }
 
 export function fitFontSize(text: string, width: number, height: number, max: number, min = 6): number {
@@ -175,6 +191,43 @@ function clampFont(value: number): number {
   return Math.max(6, Math.min(72, Math.round(value)))
 }
 
+export const ItemLayer = memo(function ItemLayer(props: {
+  items: BoardItem[]
+  doc: BoardDoc
+  assetUrl: (file: string) => string
+  selection: Set<string>
+  selectable: boolean
+  moving: boolean
+  editable: boolean
+  onPatch?: (id: string, patch: Partial<BoardItem>) => void
+  onNode?: (id: string, node: HTMLDivElement | null) => void
+  onPointerDown?: (id: string, event: React.PointerEvent) => void
+  onDoubleClick?: (id: string) => void
+  onLink?: (href: string) => void
+}): ReactNode {
+  return (
+    <>
+      {props.items.map((item) => (
+        <ItemView
+          key={item.id}
+          item={item}
+          doc={props.doc}
+          assetUrl={props.assetUrl}
+          selected={props.selectable && props.selection.has(item.id)}
+          dimmed={false}
+          moving={props.moving && props.selection.has(item.id)}
+          editable={props.editable}
+          onPatch={props.onPatch}
+          onNode={props.onNode}
+          onPointerDown={props.selectable && !item.locked ? props.onPointerDown : undefined}
+          onDoubleClick={props.onDoubleClick}
+          onLink={props.onLink}
+        />
+      ))}
+    </>
+  )
+})
+
 export const ItemView = memo(function ItemView(props: {
   item: BoardItem
   doc: BoardDoc
@@ -182,9 +235,12 @@ export const ItemView = memo(function ItemView(props: {
   selected: boolean
   dimmed: boolean
   moving?: boolean
+  editable?: boolean
+  onPatch?: (id: string, patch: Partial<BoardItem>) => void
   onNode?: (id: string, node: HTMLDivElement | null) => void
   onPointerDown?: (id: string, event: React.PointerEvent) => void
   onDoubleClick?: (id: string) => void
+  onLink?: (href: string) => void
 }): ReactNode {
   const { item, doc, assetUrl, selected, dimmed } = props
   const style: CSSProperties = {
@@ -216,12 +272,28 @@ export const ItemView = memo(function ItemView(props: {
       data-kind={item.kind}
       {...interactiveProps}
     >
-      <ItemBody item={item} doc={doc} assetUrl={assetUrl} />
+      <ItemBody
+        item={item}
+        doc={doc}
+        assetUrl={assetUrl}
+        selected={selected}
+        editable={props.editable === true}
+        onPatch={props.onPatch}
+        onLink={props.onLink}
+      />
     </div>
   )
 })
 
-function ItemBody(props: { item: BoardItem; doc: BoardDoc; assetUrl: (file: string) => string }): ReactNode {
+function ItemBody(props: {
+  item: BoardItem
+  doc: BoardDoc
+  assetUrl: (file: string) => string
+  selected?: boolean
+  editable?: boolean
+  onPatch?: (id: string, patch: Partial<BoardItem>) => void
+  onLink?: (href: string) => void
+}): ReactNode {
   const { item, doc, assetUrl } = props
   switch (item.kind) {
     case 'frame': {
@@ -238,7 +310,9 @@ function ItemBody(props: { item: BoardItem; doc: BoardDoc; assetUrl: (file: stri
     }
     case 'sticky': {
       const imported = Boolean(item.sourceType)
-      const size = imported ? fitFontSize(item.plain, item.w, item.h, Math.max(10, item.fontSize * 1.5), 7) : item.fontSize
+      const size = imported
+        ? item.fontSize
+        : fitFontSize(item.plain, item.w, item.h, Math.max(10, item.fontSize * 1.5), 7)
       return (
         <div
           className="boarditem__text"
@@ -261,7 +335,7 @@ function ItemBody(props: { item: BoardItem; doc: BoardDoc; assetUrl: (file: stri
             wordBreak: 'break-word'
           }}
         >
-          {item.content ? <RichText html={item.content} style={{ fontSize: 'inherit', textAlign: 'inherit' }} /> : null}
+          {item.content ? <RichText html={item.content} style={{ fontSize: 'inherit', textAlign: 'inherit' }} onLink={props.onLink} /> : null}
         </div>
       )
     }
@@ -285,8 +359,8 @@ function ItemBody(props: { item: BoardItem; doc: BoardDoc; assetUrl: (file: stri
       const textColor = item.textColor ?? contrastColor(item.fillColor === 'transparent' ? '#ffffff' : item.fillColor)
       const imported = Boolean(item.sourceType)
       const size = imported
-        ? fitFontSize(item.plain, item.w - 12, item.h - 10, Math.max(10, item.fontSize * 1.4), 7)
-        : item.fontSize
+        ? item.fontSize
+        : fitFontSize(item.plain, item.w - 12, item.h - 10, Math.max(10, item.fontSize * 1.4), 7)
       const dash = strokeDash(item.borderStyle)
       return (
         <>
@@ -322,7 +396,7 @@ function ItemBody(props: { item: BoardItem; doc: BoardDoc; assetUrl: (file: stri
                 pointerEvents: 'none'
               }}
             >
-              <RichText html={item.content} style={{ color: textColor, fontSize: size, textAlign: item.textAlign, width: '100%' }} />
+              <RichText html={item.content} style={{ color: textColor, fontSize: size, textAlign: item.textAlign, width: '100%' }} onLink={props.onLink} />
             </div>
           ) : null}
         </>
@@ -379,12 +453,12 @@ function ItemBody(props: { item: BoardItem; doc: BoardDoc; assetUrl: (file: stri
           <div style={{ padding: '10px 12px', overflow: 'hidden' }}>
             {item.title ? (
               <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
-                <RichText html={item.title} style={{ fontSize: 14, fontWeight: 600 }} />
+                <RichText html={item.title} style={{ fontSize: 14, fontWeight: 600 }} onLink={props.onLink} />
               </div>
             ) : null}
             {item.description ? (
               <div style={{ fontSize: 12, color: '#52525b', lineHeight: 1.4 }}>
-                <RichText html={item.description} style={{ fontSize: 12 }} />
+                <RichText html={item.description} style={{ fontSize: 12 }} onLink={props.onLink} />
               </div>
             ) : null}
           </div>
@@ -451,42 +525,13 @@ function ItemBody(props: { item: BoardItem; doc: BoardDoc; assetUrl: (file: stri
       )
     }
     case 'table': {
-      const rows: Array<Array<number>> = []
-      for (let i = 0; i < item.rows; i++) {
-        const row: Array<number> = []
-        for (let j = 0; j < item.columns; j++) {
-          const index = i * item.columns + j
-          row.push(index)
-        }
-        rows.push(row)
-      }
       return (
-        <div style={{ width: '100%', height: '100%', overflow: 'hidden', border: '1px solid #d4d4d8' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: item.fontSize }}>
-            <tbody>
-              {rows.map((row, i) => (
-                <tr key={i}>
-                  {row.map((cell) => (
-                    <td
-                      key={cell}
-                      style={{
-                        border: '1px solid #e4e4e7',
-                        padding: '4px 6px',
-                        verticalAlign: 'top',
-                        overflow: 'hidden',
-                        height: item.rowHeights[i] ?? 32
-                      }}
-                    >
-                      {item.cells[cell] ? (
-                        <RichText html={item.cells[cell]} style={{ fontSize: item.fontSize }} />
-                      ) : null}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <TableView
+          item={item}
+          selected={props.selected === true}
+          editable={props.editable === true}
+          onChange={(patch) => props.onPatch?.(item.id, patch)}
+        />
       )
     }
     case 'vote': {
@@ -609,8 +654,7 @@ function ItemBody(props: { item: BoardItem; doc: BoardDoc; assetUrl: (file: stri
     }
     case 'path': {
       const source = item.points.length > 1 ? item.points : [{ x: 0, y: 0 }, { x: item.w, y: item.h }]
-      const points = smoothPoints(source)
-      const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ')
+      const path = curvePath(source)
       return (
         <svg width="100%" height="100%" viewBox={`0 0 ${Math.max(1, item.w)} ${Math.max(1, item.h)}`} style={{ position: 'absolute', inset: 0, overflow: 'visible' }}>
           <path d={item.closed ? `${path} Z` : path} fill="none" stroke={item.color} strokeWidth={item.lineWidth} strokeLinecap="round" strokeLinejoin="round" opacity={item.opacity ?? 1} />

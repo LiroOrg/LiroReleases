@@ -1,14 +1,16 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseRichText, toPlainText } from '@shared/richtext'
+import { linkHtml, parseRichText, toPlainText } from '@shared/richtext'
 import { normalizeItems } from './import/normalize'
+import { guessKind, previewSrc } from './preview'
 import { createZip, readZip } from './util/zip'
 import { buildStats } from './import/commit'
 import { normalizeColor, luminance } from '@shared/color'
 import type { ConnectorItem, ImageItem, ShapeItem, SolidItem, StickyItem } from '@shared/types'
 import { parseBoardRef, sanitizeFileName } from '@shared/util'
 import { deriveConnectorPoints } from '@shared/geometry'
+import { parseRoute } from '@shared/route'
 import {
   faceFrame,
   faceLocalToWorld,
@@ -78,6 +80,19 @@ export function runSelfTest(): SelfTestResult {
   const results: SelfTestResult = { passed: 0, failed: 0, failures: [] }
 
   check(results, 'коллектор не пуст', collectorSource.length > 4000, `${collectorSource.length} символов`)
+
+  check(results, 'ссылка: текст с адресом становится ссылкой', linkHtml('https://liro.app/docs') === '<p><a href="https://liro.app/docs">https://liro.app/docs</a></p>', linkHtml('https://liro.app/docs'))
+  check(results, 'ссылка: обычный текст остаётся текстом', linkHtml('просто слова') === '')
+  check(results, 'ссылка: адрес с пробелом не считается ссылкой', linkHtml('https://liro.app/ два слова') === '')
+
+  check(results, 'предпросмотр: ссылка остаётся ссылкой', previewSrc('https://site.ru/page') === 'https://site.ru/page')
+  check(results, 'предпросмотр: локальный путь становится адресом файла', previewSrc('C:\\docs\\file.pdf').startsWith('file:///C:/docs/file.pdf'), previewSrc('C:\\docs\\file.pdf'))
+  check(results, 'предпросмотр: чужой адрес не трогаем', previewSrc('lirofile://doc/img.png') === 'lirofile://doc/img.png')
+  check(results, 'предпросмотр: страница', guessKind('https://site.ru/page', 'file') === 'web')
+  check(results, 'предпросмотр: картинка по ссылке', guessKind('https://site.ru/photo.png', 'file') === 'image')
+  check(results, 'предпросмотр: pdf по файлу', guessKind('file:///C:/docs/file.pdf', 'file') === 'pdf')
+  check(results, 'предпросмотр: текст по файлу', guessKind('file:///C:/docs/notes.md', 'file') === 'text')
+  check(results, 'предпросмотр: видео по файлу', guessKind('file:///C:/docs/clip.mp4', 'file') === 'media')
 
   const zip = createZip([
     { name: 'a/текст.txt', data: Buffer.from('Привет, мир ✓', 'utf8') },
@@ -182,6 +197,9 @@ export function runSelfTest(): SelfTestResult {
   const shape = items.find((item) => item.id === 'shape1') as ShapeItem | undefined
   const connector = items.find((item) => item.id === 'conn1') as ConnectorItem | undefined
   const image = items.find((item) => item.id === 'img1') as ImageItem | undefined
+  const heading = items.find((item) => item.id === 'text1') as
+    | { fontSize?: number; h?: number; w?: number; plain?: string }
+    | undefined
 
   check(results, 'нормализация: количество', items.length === 6, `${items.length} [${kinds}]`)
   check(results, 'рамка: позиция', frame?.x === 500 && frame?.y === 400, `${frame?.x},${frame?.y}`)
@@ -216,10 +234,34 @@ export function runSelfTest(): SelfTestResult {
     JSON.stringify(points)
   )
   check(results, 'статистика: стили', buildStats(items, 0).items === 6)
+  check(
+    results,
+    'текст: размер шрифта из источника сохранён',
+    heading?.fontSize === 18,
+    `${heading?.fontSize}`
+  )
+  check(
+    results,
+    'текст: рамка вмещает строку',
+    (heading?.h ?? 0) >= Math.round((heading?.fontSize ?? 0) * 1.25) + 4,
+    `h=${heading?.h}, шрифт=${heading?.fontSize}`
+  )
 
   const unknown = normalizeItems([{ id: 'x1', type: 'kanban', x: 0, y: 0, width: 10, height: 10 }])
   check(results, 'неизвестный тип сохранён', unknown.items[0]?.kind === 'unknown')
   check(results, 'предупреждение о типе', unknown.warnings.some((text) => text.includes('kanban')))
+
+  const routeSearch = parseRoute('#/search/%D0%A5%D0%B8%D0%BC%D0%B8%D1%8F')
+  check(
+    results,
+    'маршрут поиска: слово в адресе',
+    routeSearch.name === 'search' && routeSearch.query === 'Химия',
+    JSON.stringify(routeSearch)
+  )
+  const routeQuery = parseRoute('#/search?%D0%A5%D0%B8%D0%BC%D0%B8%D1%8F')
+  check(results, 'маршрут поиска: старый вид', routeQuery.name === 'search' && routeQuery.query === 'Химия', JSON.stringify(routeQuery))
+  const routeBoard = parseRoute('#/board/bd_123')
+  check(results, 'маршрут доски', routeBoard.name === 'board' && routeBoard.docId === 'bd_123', JSON.stringify(routeBoard))
 
   const flatCube = makeSolid({ yaw: 0, pitch: 0 })
   const cubePolygons = solidPolygons(flatCube)

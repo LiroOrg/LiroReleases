@@ -1,6 +1,7 @@
 import { memo, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import type { SolidItem } from '@shared/types'
+import { curvePath } from '@shared/curve'
 import {
   faceColorOf,
   faceLocalToWorld,
@@ -165,8 +166,8 @@ function SketchView(props: {
     return <circle cx={only.x} cy={only.y} r={Math.max(0.4, lineWidth / 2)} fill={color} opacity={strokeOpacity} />
   }
   return (
-    <polyline
-      points={pointsAttribute(screen)}
+    <path
+      d={curvePath(screen)}
       fill="none"
       stroke={color}
       strokeWidth={lineWidth}

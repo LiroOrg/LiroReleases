@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { X } from 'lucide-react'
 import type { BoardDoc, ItemKind } from '@shared/types'
 import { formatBytes, formatDate, formatNumber } from '@shared/util'
-import { kindLabel } from './objectsPanel'
+import { kindLabel } from './itemKinds'
 
 const SOURCE_LABEL: Record<string, string> = {
   'server-api': 'Загрузка с сервера',

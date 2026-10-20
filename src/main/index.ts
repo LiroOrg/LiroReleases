@@ -73,6 +73,12 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!/^https?:/i.test(url)) return
+    event.preventDefault()
+    void shell.openExternal(url)
+  })
+
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (uiTest) {
     const target = (() => {
