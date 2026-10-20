@@ -1,28 +1,24 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
-import { boundsOfItems, roundRect, uid } from '@shared/util'
+import { uid } from '@shared/util'
 import type { BoardDoc, BoardMeta, LibraryIndex, Project, Settings } from '@shared/types'
 import { assetsDir, boardsDir, docDir, docFile, indexFile, readJson, settingsFile, thumbFile, writeAtomic } from './paths'
-import { assetsBytesOf, buildStats } from './import/commit'
 
 const SCHEMA = 1
 
 const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
-  grid: true,
   gridSize: 40,
   gridMode: 'dots',
   snapGrid: false,
+  alignSnap: true,
   userName: '',
-  showMinimap: true,
-  showStatusBar: true,
   exportScale: 2,
   exportBackground: 'white',
-  autoOpenLast: true,
   imageQuality: 'original',
   uiScale: 1,
-  reducedMotion: false,
+  toolbarPins: [],
   captureToken: ''
 }
 
@@ -69,6 +65,14 @@ export class Store {
       }
       if (!existsSync(docFile(board.id))) {
         board.archived = true
+        changed = true
+      }
+    }
+    const sessions = this.index.boards.filter((board) => board.tags?.includes('сессия'))
+    if (sessions.length) {
+      for (const board of sessions) {
+        rmSync(docDir(board.id), { recursive: true, force: true })
+        this.index.boards = this.index.boards.filter((item) => item.id !== board.id)
         changed = true
       }
     }
@@ -299,7 +303,6 @@ function migrateDoc(doc: BoardDoc): BoardDoc {
   doc.favorite ??= false
   doc.archived ??= false
   doc.stats ??= { items: doc.items.length, byKind: {}, frames: 0, images: 0, connectors: 0, texts: 0, sticky: 0, plainChars: 0, assetsBytes: 0 }
-  doc.viewport ??= { x: 0, y: 0, zoom: 1 }
   doc.bounds ??= { x: 0, y: 0, width: 2400, height: 1600 }
   for (const item of doc.items as unknown as Array<Record<string, unknown>>) {
     if (item.miroType !== undefined && item.sourceType === undefined) item.sourceType = item.miroType

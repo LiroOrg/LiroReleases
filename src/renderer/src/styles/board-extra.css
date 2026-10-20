@@ -13,6 +13,11 @@
   border-radius: var(--radius-s);
   background: var(--panel-2);
   cursor: pointer;
+  transition: border-color var(--dur-fast) ease;
+}
+
+.graphrow__swatch:hover {
+  border-color: var(--border-strong);
 }
 
 .graphrow__input {
@@ -32,6 +37,7 @@
 
 .graphrow__input:focus {
   border-color: var(--border-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .graphrow[data-broken] .graphrow__input {
@@ -44,6 +50,12 @@
   flex: none;
   width: 30px;
   height: 28px;
+  font-size: calc(11px * var(--ui-scale));
+}
+
+.toolpalette__dims {
+  font-size: calc(10px * var(--ui-scale));
+  font-variant-numeric: tabular-nums;
 }
 
 .graphpanel__row {
@@ -72,4 +84,5 @@
 .graphpanel__select:focus,
 .graphpanel__num:focus {
   border-color: var(--border-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 8%, transparent);
 }

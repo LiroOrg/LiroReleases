@@ -50,7 +50,7 @@ export function deriveConnectorPoints(connector: ConnectorItem, byId: Map<string
     a = anchorPoint(start, connector.startOffset, startMeta)
     b = anchorPoint(end, connector.endOffset, endMeta)
   } else if (connector.points.length >= 2) {
-    return connector.points
+    return connector.points.map((point) => ({ x: point.x + connector.x, y: point.y + connector.y }))
   } else {
     const rect = itemRect(connector)
     a = { x: rect.x, y: rect.y + rect.height / 2 }

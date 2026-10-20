@@ -3,6 +3,7 @@ import type {
   BoardDoc,
   BoardItem,
   BoardMeta,
+  BoardWorkspace,
   CaptureOptions,
   ExportOptions,
   ExportResult,
@@ -85,6 +86,7 @@ export interface ApiLiro {
   boardList: (archived?: boolean) => Promise<IpcResult<BoardMeta[]>>
   boardOpen: (docId: string) => Promise<IpcResult<BoardDoc>>
   boardCreate: (title: string, projectId?: string) => Promise<IpcResult<BoardDoc>>
+  boardCreateSession: (title: string) => Promise<IpcResult<BoardDoc>>
   boardRename: (docId: string, title: string) => Promise<IpcResult<BoardMeta>>
   boardUpdate: (
     docId: string,
@@ -107,6 +109,8 @@ export interface ApiLiro {
   }) => Promise<IpcResult<{ added: number; images: number }>>
   boardPasteItems: (payload: { docId: string; sourceDocId: string; items: BoardItem[] }) => Promise<IpcResult<{ added: number }>>
   boardLinkToSource: (docId: string) => Promise<IpcResult<string>>
+  boardWorkspaceGet: (docId: string) => Promise<IpcResult<BoardWorkspace>>
+  boardWorkspaceSet: (docId: string, patch: BoardWorkspace) => Promise<IpcResult<boolean>>
   assetUrl: (docId: string, file: string) => Promise<IpcResult<string>>
   assetMissing: (docId: string) => Promise<IpcResult<boolean>>
 
@@ -140,6 +144,7 @@ export interface ApiLiro {
   sourceBoards: (token: string, teamId: string) => Promise<IpcResult<SourceBoardSummary[]>>
   clipboardReadHtml: () => Promise<IpcResult<string>>
   clipboardWriteHtml: (html: string, text: string) => Promise<IpcResult<boolean>>
+  clipboardWriteText: (text: string) => Promise<IpcResult<boolean>>
   clipboardWriteImage: (dataUrl: string) => Promise<IpcResult<boolean>>
   clipboardReadImage: () => Promise<IpcResult<string>>
   pickImage: () => Promise<IpcResult<string>>
@@ -160,9 +165,29 @@ export interface ApiLiro {
   pickFiles: (filters?: { name: string; extensions: string[] }[]) => Promise<IpcResult<FileRef[]>>
   updateCheck: () => Promise<IpcResult<boolean>>
   updateApply: () => Promise<IpcResult<boolean>>
+
+  liveHostCreate: (offer: string, code?: string) => Promise<IpcResult<string>>
+  liveHostCode: () => Promise<IpcResult<string>>
+  liveHostWait: (code: string) => Promise<IpcResult<string | null>>
+  liveHostCleanup: (code: string) => Promise<IpcResult<boolean>>
+  liveGuestFetch: (code: string) => Promise<IpcResult<string | null>>
+  liveGuestAnswer: (code: string, answer: string) => Promise<IpcResult<boolean>>
+  livePendingCode: () => Promise<IpcResult<string>>
 }
 
 export type BoardCommand = 'undo' | 'redo' | 'duplicate' | 'delete' | 'select-all'
+
+export interface LiveOfferResult {
+  ok: boolean
+  code: string
+  error?: string
+}
+
+export interface LiveJoinResult {
+  ok: boolean
+  offer?: string
+  error?: string
+}
 
 export type UpdatePhase = 'checking' | 'downloading' | 'ready' | 'current' | 'error'
 
@@ -184,4 +209,5 @@ export interface Events {
   'board:command': BoardCommand
   'toast': { text: string; kind: 'info' | 'error' | 'success' }
   'update:status': UpdateStatus
+  'live:join': string
 }

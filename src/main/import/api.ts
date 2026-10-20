@@ -132,6 +132,7 @@ export interface ApiImportOptions {
   downloadImages: boolean
   withStyles: boolean
   maxImageBytes: number
+  imageQuality?: 'original' | 'high' | 'medium'
   signal?: AbortSignal
   onProgress: ProgressFn
 }
@@ -183,7 +184,7 @@ export async function importFromApi(options: ApiImportOptions): Promise<ApiImpor
   const normalized = normalizeItems(raws)
   warnings.push(...normalized.warnings)
 
-  const assets = new AssetStore(docId, { token, maxBytes: options.maxImageBytes, boardId }, 'original')
+  const assets = new AssetStore(docId, { token, maxBytes: options.maxImageBytes, boardId }, options.imageQuality ?? 'original')
   const mediaItems = normalized.items.filter((item) => hasMedia(item))
   let done = 0
   let failed = 0

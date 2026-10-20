@@ -651,12 +651,12 @@ export function isBoardClipboardHtml(html: string): boolean {
 
 export function decodeBoardClipboard(html: string): ClipboardPayload {
   const match = typeof html === 'string' ? DATA_PATTERN.exec(html) : null
-  if (!match) throw new Error('Буфер обмена не содержит блок miro-data-v')
+  if (!match) throw new Error('Буфер обмена не содержит данных доски')
   let parsed: unknown
   try {
     parsed = JSON.parse(decodePayloadString(match[2]))
   } catch (error) {
-    throw new Error(`Не удалось декодировать miro-data-v: ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`Не удалось прочитать данные доски: ${error instanceof Error ? error.message : String(error)}`)
   }
   return normalizePayload(parsed)
 }

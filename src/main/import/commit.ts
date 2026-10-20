@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { AssetRef, BoardDoc, BoardItem, BoardMeta, SourceInfo } from '@shared/types'
-import { boundsOfItems, clamp, mimeToExtension, roundRect, uid } from '@shared/util'
+import { boundsOfItems, mimeToExtension, roundRect, uid } from '@shared/util'
 import { store } from '../store'
 import { assetsDir } from '../paths'
 import { dataUrlToBuffer, type CollectedImage } from './server'
@@ -206,11 +206,6 @@ export function buildDoc(options: BuildDocOptions): BuildDocResult {
 
   const bounds = options.bounds ?? roundRect(boundsOfItems(normalized.items, 160))
   const title = options.title?.trim() || options.source.name || 'Доска'
-  const viewport = options.viewport ?? {
-    x: bounds.x,
-    y: bounds.y,
-    zoom: clamp(Math.min(bounds.width, bounds.height) / 1400, 0.02, 1)
-  }
 
   const source: SourceInfo = {
     kind: options.source.kind,
@@ -231,7 +226,6 @@ export function buildDoc(options: BuildDocOptions): BuildDocResult {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     bounds,
-    viewport,
     items: normalized.items,
     assets,
     stats: buildStats(normalized.items, assetBytes),

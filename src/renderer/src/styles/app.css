@@ -201,6 +201,9 @@
   font-size: calc(16px * var(--ui-scale));
   font-weight: 600;
   letter-spacing: -0.015em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .topbar__sub {
@@ -540,6 +543,9 @@
   font-size: calc(13.5px * var(--ui-scale));
   font-weight: 580;
   letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .boardcard__meta {
@@ -1028,6 +1034,9 @@
 .list__title {
   font-size: calc(13.5px * var(--ui-scale));
   font-weight: 560;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .list__meta {
@@ -1222,6 +1231,96 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+.join {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  background: var(--bg);
+}
+
+.join__box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 32px;
+  border-radius: var(--radius-l);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-1);
+  text-align: center;
+}
+
+.join__icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+
+.join__icon .spin {
+  animation: spin 1.1s linear infinite;
+}
+
+.join__title {
+  margin: 0;
+  font-size: calc(16px * var(--ui-scale));
+  font-weight: 600;
+}
+
+.join__text {
+  margin: 0;
+  font-size: calc(12.5px * var(--ui-scale));
+  color: var(--text-3);
+}
+
+.join__code {
+  font-family: var(--font-mono);
+  font-size: calc(13px * var(--ui-scale));
+  letter-spacing: 0.08em;
+  color: var(--text-2);
+}
+
+.join__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.join__field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  text-align: left;
+}
+
+.join__field span {
+  font-size: calc(11.5px * var(--ui-scale));
+  color: var(--text-3);
+}
+
+.join__field input {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: calc(13px * var(--ui-scale));
+  letter-spacing: 0.06em;
+}
+
+.join__field input:focus {
+  outline: none;
+  border-color: var(--border-strong);
 }
 
 @keyframes fade {
@@ -1602,5 +1701,4 @@
 
 .linkbtn:hover {
   color: var(--text);
-} 
-/* home */ 
+}

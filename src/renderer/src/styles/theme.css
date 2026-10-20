@@ -24,7 +24,6 @@
   --radius-xl: 20px;
   --font: 'Inter', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Roboto,
     'Helvetica Neue', Arial, sans-serif;
-  --font-display: 'Inter', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, 'SF Mono', 'Liberation Mono', monospace;
   --ui-scale: 1;
   --dur-fast: 110ms;
@@ -84,6 +83,21 @@ button:not(:disabled),
 label[for],
 summary {
   cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.toolbtn[data-active='true']:focus-visible,
+.seg[data-active='true']:focus-visible,
+.bbar__btn--solid:focus-visible,
+.toolmenu__pin[data-active='true']:focus-visible,
+.livepanel__toggleperm[data-active='true']:focus-visible,
+.calculator__key[data-kind='equal']:focus-visible,
+.textpanel .toolbtn[data-active='true']:focus-visible {
+  outline-color: var(--border-strong);
 }
 
 input,

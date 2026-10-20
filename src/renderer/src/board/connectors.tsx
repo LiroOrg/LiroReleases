@@ -12,6 +12,7 @@ export interface ConnectorLayerProps {
   dpr: number
   liveRef?: { current: number }
   livePosRef?: { current: Map<string, { x: number; y: number }> }
+  previewPositions?: Array<{ id: string; x: number; y: number }>
 }
 
 function roundedElbow(
@@ -95,6 +96,11 @@ function drawArrow(
 export const ConnectorLayer = memo(function ConnectorLayer(props: ConnectorLayerProps): ReactNode {
   const ref = useRef<HTMLCanvasElement | null>(null)
   const lastRef = useRef('')
+  const propsRef = useRef(props)
+
+  useEffect(() => {
+    propsRef.current = props
+  })
 
   useEffect(() => {
     const canvas = ref.current
@@ -102,12 +108,15 @@ export const ConnectorLayer = memo(function ConnectorLayer(props: ConnectorLayer
     let running = true
     const loop = (): void => {
       if (!running) return
-      const current = props.viewRef.current
-      const live = props.liveRef?.current ?? 0
-      const signature = `${Math.round(current.x * 100)}:${Math.round(current.y * 100)}:${current.zoom.toFixed(4)}:${props.doc.items.length}:${props.size.width}x${props.size.height}:${live}`
+      const live = propsRef.current
+      const current = live.viewRef.current
+      const previewKey = (live.previewPositions ?? [])
+        .map((position) => `${position.id}:${Math.round(position.x)}:${Math.round(position.y)}`)
+        .join(',')
+      const signature = `${Math.round(current.x * 100)}:${Math.round(current.y * 100)}:${current.zoom.toFixed(4)}:${live.doc.items.length}:${live.size.width}x${live.size.height}:${live.liveRef?.current ?? 0}:${previewKey}`
       if (signature !== lastRef.current) {
         lastRef.current = signature
-        draw(canvas, props, current)
+        draw(canvas, live, current)
       }
       requestAnimationFrame(loop)
     }
@@ -115,7 +124,7 @@ export const ConnectorLayer = memo(function ConnectorLayer(props: ConnectorLayer
     return () => {
       running = false
     }
-  }, [props.doc, props.size, props.viewRef, props.dpr])
+  }, [])
 
   return (
     <canvas
@@ -155,6 +164,10 @@ function draw(
     for (const [id, position] of props.livePosRef?.current ?? []) {
       const item = byId.get(id)
       if (item) byId.set(id, { ...item, x: position.x, y: position.y } as BoardItem)
+    }
+    for (const position of props.previewPositions ?? []) {
+      const item = byId.get(position.id)
+      if (item) byId.set(position.id, { ...item, x: position.x, y: position.y } as BoardItem)
     }
     const area = props.visible
     const margin = 200
@@ -221,7 +234,7 @@ function draw(
       ctx.setLineDash([])
       if (connector.captions?.length) {
         const mid = screen[Math.floor(screen.length / 2)]
-        ctx.font = `${Math.max(8, 12 * zoom)}px var(--font, sans-serif)`
+        ctx.font = `${Math.max(8, 12 * zoom)}px Inter, 'Segoe UI', sans-serif`
         ctx.fillStyle = connector.textColor ?? '#1a1a1a'
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'

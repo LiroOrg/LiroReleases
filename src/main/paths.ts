@@ -110,6 +110,10 @@ export function thumbFile(docId: string): string {
   return join(docDir(docId), 'thumb.png')
 }
 
+export function workspaceFile(docId: string): string {
+  return join(docDir(docId), 'workspace.json')
+}
+
 export function indexFile(): string {
   return join(getRoot(), 'index.json')
 }

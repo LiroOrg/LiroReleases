@@ -81,7 +81,7 @@ export function SettingsScreen(): ReactNode {
     }, 600)
   }, [saveName])
 
-  const storagePath = appInfo?.storage || settings?.storagePath || ''
+  const storagePath = appInfo?.storage || ''
 
   const reveal = async (): Promise<void> => {
     try {
@@ -138,7 +138,7 @@ export function SettingsScreen(): ReactNode {
     }
     setLibrary(await api.library.get())
     setThumbBusy(false)
-    toast(`Превью обновлены: ${formatNumber(done)}`, 'preview')
+    toast('Превью обновлены', 'preview')
   }
 
   const thumbPercent = useMemo(() => {
@@ -261,9 +261,14 @@ export function SettingsScreen(): ReactNode {
 
             <Row label="Сетка" hint="Фоновая сетка на досках помогает выравнивать объекты.">
               <Switch
-                value={settings.grid}
+                value={settings.gridMode !== 'none'}
                 label="Сетка"
-                onChange={(value) => void update({ grid: value }, value ? 'Сетка включена' : 'Сетка выключена')}
+                onChange={(value) =>
+                  void update(
+                    { gridMode: value ? 'dots' : 'none' },
+                    value ? 'Сетка включена' : 'Сетка выключена'
+                  )
+                }
               />
             </Row>
           </div>

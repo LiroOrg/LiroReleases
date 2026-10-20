@@ -7,7 +7,6 @@ import { docDir, getRoot } from '../paths'
 import { store } from '../store'
 
 const MAX_PIXELS = 36_000_000
-const MAX_SIDE = 9000
 const MAX_WINDOW = 8600
 
 export interface RenderParams {
@@ -55,7 +54,7 @@ export function measure(params: RenderParams): { width: number; height: number }
 export function fitScale(width: number, height: number, requested: number): number {
   let scale = Math.max(0.02, requested)
   let guard = 0
-  while ((width * scale) * (height * scale) > MAX_PIXELS || width * scale > MAX_SIDE || height * scale > MAX_SIDE) {
+  while ((width * scale) * (height * scale) > MAX_PIXELS || width * scale > MAX_WINDOW || height * scale > MAX_WINDOW) {
     scale *= 0.88
     guard += 1
     if (guard > 40 || scale < 0.02) break

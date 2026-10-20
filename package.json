@@ -1,7 +1,7 @@
 {
   "name": "liro",
   "productName": "Liro",
-  "version": "1.1.0",
+  "version": "1.13.1",
   "description": "Настольное приложение для досок. Работает офлайн",
   "main": "./out/main/index.js",
   "author": "Liro",
@@ -17,6 +17,7 @@
     "uitest": "electron-vite build && electron . --uitest",
     "tools": "electron-vite build && electron . --tools",
     "demo": "electron-vite build && electron . --demo",
+    "pair": "electron-vite build && electron . --dev-pair",
     "icon": "electron scripts/make-icon.cjs",
     "dist": "npm run build && electron-builder --win"
   },
@@ -47,6 +48,14 @@
       ],
       "language": "1049"
     },
+    "protocols": [
+      {
+        "name": "Liro",
+        "schemes": [
+          "liro"
+        ]
+      }
+    ],
     "portable": {
       "artifactName": "Liro-${version}-${arch}-portable.${ext}"
     },

@@ -14,12 +14,16 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
-  Sparkles
+  Sparkles,
+  Link2,
+  Save
 } from 'lucide-react'
 import { api } from '../lib/api'
 import logo from '../../../../resources/icon-512.png'
 import { useApp } from '../lib/store'
 import { selfTest } from '../lib/boardClipboard'
+import { usePrompt } from '../components/ui'
+import { navigate } from '../router'
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -58,10 +62,39 @@ const FEATURES: Array<{ icon: ReactNode; title: string; text: string }> = [
   }
 ]
 
+const SHORTCUTS: Array<{ keys: string; action: string }> = [
+  { keys: 'V', action: 'Выделение' },
+  { keys: 'H', action: 'Перемещение доски' },
+  { keys: 'T', action: 'Текст' },
+  { keys: 'N', action: 'Стикер' },
+  { keys: 'S', action: 'Фигуры' },
+  { keys: 'P', action: 'Рисование' },
+  { keys: 'E', action: 'Ластик' },
+  { keys: 'L', action: 'Связь' },
+  { keys: 'I', action: 'Картинка' },
+  { keys: 'B', action: 'Таблица' },
+  { keys: 'D', action: 'Трёхмерная фигура' },
+  { keys: 'R / O', action: 'Прямоугольник / круг' },
+  { keys: '1–9', action: 'Инструменты по порядку' },
+  { keys: '← / →', action: 'Переход между рамками в режиме докладчика' },
+  { keys: 'Shift', action: 'Ровная линия при рисовании' },
+  { keys: 'Пробел', action: 'Перетаскивание доски' },
+  { keys: 'Ctrl+Z / Ctrl+Y', action: 'Отменить / вернуть' },
+  { keys: 'Ctrl+C / Ctrl+V', action: 'Копировать / вставить' },
+  { keys: 'Ctrl+D', action: 'Дублировать' },
+  { keys: 'Ctrl+A', action: 'Выделить всё' },
+  { keys: 'Delete', action: 'Удалить выбранное' },
+  { keys: 'F', action: 'Вписать доску' },
+  { keys: 'G', action: 'Показать или скрыть сетку' },
+  { keys: 'Esc', action: 'Отменить выбор' }
+]
+
 export function About(): ReactNode {
   const appInfo = useApp((state) => state.appInfo)
   const toast = useApp((state) => state.toast)
+  const capture = useApp((state) => state.capture)
   const [storage, setStorage] = useState('')
+  const { ask, element: promptElement } = usePrompt()
 
   useEffect(() => {
     let alive = true
@@ -88,6 +121,35 @@ export function About(): ReactNode {
     try {
       const path = await api.storage.reveal()
       toast(`Папка: ${path}`, 'file')
+    } catch (error) {
+      toast(errorText(error), 'error')
+    }
+  }
+
+  const startCapture = async (): Promise<void> => {
+    const url = await ask('Ссылка на доску Miro', '', 'https://miro.com/app/board/...')
+    if (!url) return
+    try {
+      await api.capture.open(url, { url, autoSweep: false, downloadImages: true, maxImageBytes: 32 * 1024 * 1024 })
+      toast('Откроется окно сбора — дождитесь, пока доска соберётся', 'board')
+    } catch (error) {
+      toast(errorText(error), 'error')
+    }
+  }
+
+  const saveCapture = async (): Promise<void> => {
+    try {
+      const meta = await api.capture.save('local')
+      toast('Доска сохранена в библиотеку', 'board')
+      navigate({ name: 'board', docId: meta.id })
+    } catch (error) {
+      toast(errorText(error), 'error')
+    }
+  }
+
+  const openCaptureTools = async (): Promise<void> => {
+    try {
+      await api.capture.openTools('folder')
     } catch (error) {
       toast(errorText(error), 'error')
     }
@@ -142,6 +204,22 @@ export function About(): ReactNode {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+
+        <div className="section">
+          <div className="section__title">Горячие клавиши</div>
+          <div className="card">
+            <div className="rowlist">
+              {SHORTCUTS.map((item) => (
+                <div key={item.keys} className="rowitem">
+                  <span className="mono" style={{ minWidth: 150 }}>
+                    {item.keys}
+                  </span>
+                  <span className="rowitem__grow">{item.action}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -209,6 +287,49 @@ export function About(): ReactNode {
         </div>
 
         <div className="section">
+          <div className="section__title">Импорт с сайта Miro</div>
+          <div className="card">
+            <div className="stack">
+              <div className="field__row">
+                <Globe size={15} />
+                <span className="setrow__label">Сбор доски прямо из браузера</span>
+              </div>
+              <div className="field__hint">
+                Укажите ссылку на доску — откроется окно сбора. Войдите в Miro, пролистайте доску, и она сохранится
+                в библиотеку вместе с картинками.
+              </div>
+              <div className="field__row">
+                <button type="button" className="btn" onClick={() => void startCapture()}>
+                  <Link2 size={15} />
+                  Указать ссылку на доску
+                </button>
+                <button type="button" className="btn" onClick={() => void openCaptureTools()}>
+                  <Package size={15} />
+                  Файлы расширения
+                </button>
+                {capture && (capture.status === 'done' || capture.status === 'ready') ? (
+                  <button type="button" className="btn btn--primary" onClick={() => void saveCapture()}>
+                    <Save size={15} />
+                    Сохранить доску
+                  </button>
+                ) : null}
+              </div>
+              {capture ? (
+                <div className="field__hint">
+                  {capture.status === 'done' || capture.status === 'ready'
+                    ? `Собрано объектов: ${capture.items}`
+                    : capture.status === 'error'
+                      ? capture.message || 'Сбор не удался'
+                      : capture.needsLogin
+                        ? 'Нужен вход в Miro в окне сбора'
+                        : capture.message || 'Идёт сбор'}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <div className="section">
           <div className="card card--flat">
             <div className="stack">
               <div className="field__row">
@@ -248,6 +369,7 @@ export function About(): ReactNode {
           </div>
         </div>
       </div>
+      {promptElement}
     </div>
   )
 }

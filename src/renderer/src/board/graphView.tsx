@@ -1,7 +1,7 @@
-import { memo, useMemo } from 'react'
-import type { ReactNode } from 'react'
+import { memo, useMemo, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import type { GraphItem } from '@shared/types'
-import { compileFormula, sampleCurve } from '@shared/graph'
+import { compileFormula, curveSegments } from '@shared/graph'
 
 export interface GraphViewProps {
   item: GraphItem
@@ -17,52 +17,6 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value))
 }
 
-interface Point {
-  x: number
-  y: number
-}
-
-function curveSegments(
-  fn: (x: number) => number,
-  xFrom: number,
-  xTo: number,
-  toX: (x: number) => number,
-  toY: (y: number) => number,
-  width: number,
-  height: number
-): string[][] {
-  const samples = Math.min(8000, Math.max(1200, Math.round(width * 3)))
-  const raw = sampleCurve(fn, xFrom, xTo, samples)
-  const segments: string[][] = []
-  let current: string[] = []
-  const jumpLimit = Math.max(60, height * 2)
-  const flush = (): void => {
-    if (current.length >= 2) segments.push(current)
-    current = []
-  }
-  for (let index = 1; index < raw.length; index += 1) {
-    const a = raw[index - 1]
-    const b = raw[index]
-    if (!Number.isFinite(a.y) || !Number.isFinite(b.y)) {
-      flush()
-      continue
-    }
-    const ax = toX(a.x)
-    const ay = toY(a.y)
-    const bx = toX(b.x)
-    const by = toY(b.y)
-    if (current.length === 0) current.push(`${ax.toFixed(2)},${ay.toFixed(2)}`)
-    if (Math.abs(by - ay) > jumpLimit) {
-      flush()
-      current.push(`${bx.toFixed(2)},${by.toFixed(2)}`)
-      continue
-    }
-    current.push(`${bx.toFixed(2)},${by.toFixed(2)}`)
-  }
-  flush()
-  return segments
-}
-
 export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNode {
   const { item } = props
   const width = Math.max(1, item.w)
@@ -75,8 +29,6 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
   const toY = (y: number): number => (1 - originY) * height - y * item.scale
   const xFrom = (-originX * width) / item.scale
   const xTo = ((1 - originX) * width) / item.scale
-  const yTop = -((1 - originY) * height) / item.scale
-  const yBottom = (originY * height) / item.scale
   const tick = Math.max(9, Math.min(15, Math.round(Math.min(width, height) / 44)))
   const axisFont = Math.max(11, Math.min(18, Math.round(Math.min(width, height) / 30)))
   const clipId = `gclip-${item.id}`
@@ -90,10 +42,58 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
         .map((expression) => {
           const fn = compileFormula(expression.formula)
           const segments = fn ? curveSegments(fn, xFrom, xTo, toX, toY, width, height) : []
-          return { id: expression.id, segments, color: expression.color, lineWidth: expression.lineWidth }
+          return { id: expression.id, fn, segments, color: expression.color, lineWidth: expression.lineWidth }
         }),
     [item.expressions, item.scale, originX, originY, width, height, xFrom, xTo]
   )
+
+  const [hover, setHover] = useState<{ px: number; py: number; x: number; y: number; color: string } | null>(null)
+
+  const onHoverMove = (event: ReactPointerEvent<SVGSVGElement>): void => {
+    const target = event.currentTarget
+    const rect = target.getBoundingClientRect()
+    if (!rect.width || !rect.height) return
+    const px = ((event.clientX - rect.left) * width) / rect.width
+    const py = ((event.clientY - rect.top) * height) / rect.height
+    const gx = (px - originX * width) / item.scale
+    let best: { py: number; y: number; color: string } | null = null
+    let bestDistance = 14
+    for (const curve of curves) {
+      if (!curve.fn) continue
+      const value = curve.fn(gx)
+      if (!Number.isFinite(value)) continue
+      const sy = toY(value)
+      const distance = Math.abs(sy - py)
+      if (distance <= bestDistance) {
+        bestDistance = distance
+        best = { py: sy, y: value, color: curve.color }
+      }
+    }
+    if (!best) {
+      setHover(null)
+      return
+    }
+    setHover({ px, py: best.py, x: gx, y: best.y, color: best.color })
+  }
+
+  const onHoverLeave = (): void => setHover(null)
+
+  const hoverLabel = hover
+    ? `${formatTick(hover.x)}; ${formatTick(hover.y)}`
+    : ''
+  const hoverFontSize = tick
+  const hoverTextWidth = hoverLabel.length * hoverFontSize * 0.64 + 12
+  const hoverBox =
+    hover === null
+      ? null
+      : (() => {
+          const boxHeight = hoverFontSize + 8
+          const boxWidth = Math.max(hoverTextWidth, 34)
+          const left = Math.max(1, Math.min(width - boxWidth - 1, hover.px + 10))
+          const above = hover.py > boxHeight + 6
+          const top = above ? hover.py - boxHeight - 6 : hover.py + 10
+          return { left: Math.max(1, left), top: Math.max(1, Math.min(height - boxHeight - 1, top)), boxWidth, boxHeight }
+        })()
 
   const stepPx = Math.max(1, step * item.scale)
   const drawEvery = Math.max(1, Math.ceil(8 / stepPx))
@@ -144,6 +144,8 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
       viewBox={`0 0 ${width} ${height}`}
       shapeRendering="geometricPrecision"
       style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}
+      onPointerMove={onHoverMove}
+      onPointerLeave={onHoverLeave}
     >
       <defs>
         <clipPath id={clipId}>
@@ -218,7 +220,38 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
             />
           ))
         )}
+        {hover ? (
+          <g pointerEvents="none">
+            <line x1={hover.px} y1={hover.py} x2={hover.px} y2={axisY} stroke={hover.color} strokeWidth={1} strokeDasharray="4 4" opacity={0.7} />
+            <line x1={hover.px} y1={hover.py} x2={axisX} y2={hover.py} stroke={hover.color} strokeWidth={1} strokeDasharray="4 4" opacity={0.7} />
+            <circle cx={hover.px} cy={hover.py} r={3.2} fill={hover.color} stroke="#ffffff" strokeWidth={1.2} />
+          </g>
+        ) : null}
       </g>
+      {hover && hoverBox ? (
+        <g pointerEvents="none">
+          <rect
+            x={hoverBox.left}
+            y={hoverBox.top}
+            width={hoverBox.boxWidth}
+            height={hoverBox.boxHeight}
+            rx={4}
+            fill="#ffffff"
+            stroke="#111111"
+            strokeWidth={0.8}
+            opacity={0.96}
+          />
+          <text
+            x={hoverBox.left + 6}
+            y={hoverBox.top + hoverFontSize + 1}
+            fontSize={hoverFontSize}
+            fontFamily="var(--font)"
+            fill="#111111"
+          >
+            {hoverLabel}
+          </text>
+        </g>
+      ) : null}
       <rect
         x={item.lineWidth / 2}
         y={item.lineWidth / 2}

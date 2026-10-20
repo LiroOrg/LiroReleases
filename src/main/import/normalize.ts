@@ -301,8 +301,6 @@ function normalizeOne(raw: RawItem, index: number): BoardItem | null {
   const px = num(pick(position.x, raw.x, data.x), 0)
   const py = num(pick(position.y, raw.y, data.y), 0)
   const topLeftOrigin = origin === 'x_y' || origin === 'top_left' || relativeTo === 'parent_top_left'
-  const left = topLeftOrigin ? px : px - w / 2
-  const top = topLeftOrigin ? py : py - h / 2
 
   const rotation = num(pick(geometry.rotation, raw.rotation, data.rotation, style.rotation), 0)
   const parentId = pick(raw.parent?.id, raw.parentId, data.parentId, data.frameId)

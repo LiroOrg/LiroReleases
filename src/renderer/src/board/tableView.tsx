@@ -40,14 +40,14 @@ export function TableView(props: TableViewProps): ReactNode {
     return { x, y, width: columnWidths[column], height: rowHeights[row] }
   }
 
-  const startEdit = (index: number): void => {
-    if (!props.editable) return
-    setActive(index)
-    setDraft(item.cells[index] ?? '')
-  }
 
   const finishEdit = (): void => {
     if (active === null) return
+    const current = item.cells[active] ?? ''
+    if (draft === current) {
+      setActive(null)
+      return
+    }
     const cells = [...item.cells]
     cells[active] = draft
     while (cells.length < columns * rows) cells.push('')

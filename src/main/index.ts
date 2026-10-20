@@ -8,9 +8,21 @@ import { migrateLegacyData } from './paths'
 import { store } from './store'
 import { startUpdater, stopUpdater } from './updater'
 import { registerAssetProtocol } from './protocol'
+import { codeFromLink, linkFromArgv, onLiveLink, registerLiveProtocol, setPendingLink } from './live/protocol'
+import { startPairInstance } from './live/pair'
 
 const isDev = !app.isPackaged
 const windowIcon = join(__dirname, '../../resources/icon-256.png')
+
+function argValue(flag: string): string {
+  const prefix = `${flag}=`
+  for (const value of process.argv) {
+    if (value.startsWith(prefix)) return value.slice(prefix.length)
+  }
+  const at = process.argv.indexOf(flag)
+  if (at < 0) return ''
+  return process.argv[at + 1] ?? ''
+}
 
 let mainWindow: BrowserWindow | null = null
 
@@ -79,6 +91,16 @@ function createWindow(): void {
     void shell.openExternal(url)
   })
 
+  onLiveLink((url) => {
+    const code = codeFromLink(url)
+    if (!code) return
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+      mainWindow.webContents.send('event:live:join', code)
+    }
+  })
+
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (uiTest) {
     const target = (() => {
@@ -92,8 +114,7 @@ function createWindow(): void {
         }
       })
       if (demo) return `#/board/${demo.id}`
-      const last = store.index.lastOpenedBoardId ?? store.boards()[0]?.id
-      return last ? `#/board/${last}` : '#/'
+      return '#/'
     })()
     const sceneIndex = process.argv.indexOf('--scene')
     const sceneHash = sceneIndex >= 0 ? process.argv[sceneIndex + 1] : ''
@@ -243,10 +264,17 @@ migrateLegacyData()
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
+    }
+    const link = linkFromArgv(argv)
+    if (!link) return
+    const code = codeFromLink(link)
+    if (!code) return
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('event:live:join', code)
     }
   })
 
@@ -276,11 +304,25 @@ if (!app.requestSingleInstanceLock()) {
       return
     }
     store.load()
+    for (const board of store.index.boards.filter((item) => item.tags?.includes('сессия'))) {
+      try {
+        store.deleteDoc(board.id)
+      } catch {
+        continue
+      }
+    }
+    const forcedName = argValue('--user-name')
+    if (forcedName) {
+      store.settings.userName = forcedName
+      store.saveSettings()
+    }
     if (uiTest) {
-      const { resetDemoBoard } = await import('./demo')
+      const { ensureDemoBoard, resetDemoBoard } = await import('./demo')
+      ensureDemoBoard()
       resetDemoBoard()
     }
     registerAssetProtocol()
+    registerLiveProtocol()
     registerIpc()
     buildMenu()
     try {
@@ -289,8 +331,11 @@ if (!app.requestSingleInstanceLock()) {
       console.error('collector server', error)
     }
     session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+    const launchLink = linkFromArgv(process.argv)
+    if (launchLink) setPendingLink(launchLink)
     createWindow()
     startUpdater(() => mainWindow)
+    if (process.argv.includes('--dev-pair')) startPairInstance()
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

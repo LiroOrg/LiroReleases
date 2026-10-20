@@ -7,6 +7,7 @@ export type Route =
   | { name: 'about' }
   | { name: 'project'; projectId: string }
   | { name: 'search'; query: string }
+  | { name: 'join'; code: string }
 
 export function parseRoute(hash: string): Route {
   const clean = hash.replace(/^#/, '').replace(/^\/+/, '')
@@ -25,6 +26,7 @@ export function parseRoute(hash: string): Route {
   }
   if (head === 'project' && segments[1]) return { name: 'project', projectId: decodeURIComponent(segments[1]) }
   if (head === 'board' && segments[1]) return { name: 'board', docId: decodeURIComponent(segments[1]) }
+  if (head === 'join' && segments[1]) return { name: 'join', code: decodeURIComponent(segments[1]) }
   return { name: 'home' }
 }
 
@@ -46,6 +48,8 @@ export function buildHash(route: Route): string {
       return `#/search/${encodeURIComponent(route.query)}`
     case 'board':
       return `#/board/${encodeURIComponent(route.docId)}`
+    case 'join':
+      return `#/join/${encodeURIComponent(route.code)}`
     default:
       return '#/'
   }

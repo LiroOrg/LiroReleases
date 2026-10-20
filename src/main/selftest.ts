@@ -7,10 +7,14 @@ import { guessKind, previewSrc } from './preview'
 import { createZip, readZip } from './util/zip'
 import { buildStats } from './import/commit'
 import { normalizeColor, luminance } from '@shared/color'
-import type { ConnectorItem, ImageItem, ShapeItem, SolidItem, StickyItem } from '@shared/types'
-import { parseBoardRef, sanitizeFileName } from '@shared/util'
+import type { BoardDoc, BoardItem, ConnectorItem, ImageItem, ShapeItem, SolidItem, StickyItem } from '@shared/types'
+import { boundsOfItems, parseBoardRef, sanitizeFileName, withoutDanglingConnectors } from '@shared/util'
 import { deriveConnectorPoints } from '@shared/geometry'
+import { buildSvg } from './export/svg'
+import { fitScale } from './export/render'
 import { parseRoute } from '@shared/route'
+import { decryptRoom, encryptRoom, newCode, normalizeCode, roomId } from './live/crypto'
+import { codeFromLink, linkFromArgv } from './live/protocol'
 import {
   faceFrame,
   faceLocalToWorld,
@@ -22,6 +26,8 @@ import {
   solidPolygons,
   solidProjection,
   solidVertices,
+  polygonOverlapArea,
+  strokeIntersections,
   type Vec2
 } from '@shared/three'
 import collectorSource from '@shared/page-collector.js?raw'
@@ -122,6 +128,15 @@ export function runSelfTest(): SelfTestResult {
     'richtext: простой текст',
     toPlainText('<p>Строка 1</p><p>Строка 2</p>').replace(/\s+/g, ' ').trim() === 'Строка 1 Строка 2'
   )
+  const plainBlocks = parseRichText('Просто текст без тегов')
+  check(
+    results,
+    'richtext: текст без тегов виден',
+    plainBlocks.length === 1 && plainBlocks[0]?.runs[0]?.text === 'Просто текст без тегов',
+    JSON.stringify(plainBlocks)
+  )
+  const mixedBlocks = parseRichText('Строка<p>Вторая</p>')
+  check(results, 'richtext: смешанный текст виден', mixedBlocks.length >= 1, `${mixedBlocks.length}`)
 
   check(results, 'цвет: имя палитры', normalizeColor('light_yellow') === '#fff9b1', normalizeColor('light_yellow'))
   check(results, 'цвет: hex с альфой', normalizeColor('#ffffff00') === '#ffffff')
@@ -233,7 +248,106 @@ export function runSelfTest(): SelfTestResult {
     points.length === 2 && Math.abs(points[0].x - 1700) < 0.01 && Math.abs(points[0].y - 1300) < 0.01,
     JSON.stringify(points)
   )
+  const fitted = fitScale(9200, 7000, 2)
+  check(
+    results,
+    'png: кадр не больше окна рендера',
+    fitted * 9200 <= 8600 && fitted * 7000 <= 8600,
+    `масштаб ${fitted}`
+  )
   check(results, 'статистика: стили', buildStats(items, 0).items === 6)
+  const rotated = boundsOfItems([
+    { id: 'r1', kind: 'shape', x: 0, y: 0, w: 800, h: 100, rotation: 45, z: 0 },
+    { id: 'r2', kind: 'shape', x: 1000, y: 0, w: 100, h: 100, rotation: 0, z: 0 }
+  ] as unknown as BoardItem[], 0)
+  const flat = boundsOfItems([
+    { id: 'r3', kind: 'shape', x: 0, y: 0, w: 800, h: 100, rotation: 0, z: 0 }
+  ] as unknown as BoardItem[], 0)
+  check(
+    results,
+    'рамка доски учитывает поворот',
+    rotated.height > flat.height * 4 && rotated.y < 0 && flat.y === 0,
+    `повёрнутая ${Math.round(rotated.height)}px против ${Math.round(flat.height)}px`
+  )
+  const withoutSticky = withoutDanglingConnectors(items, new Set(['sticky1']))
+  const withoutFrame = withoutDanglingConnectors(items, new Set(['frame1']))
+  check(
+    results,
+    'связи удаляются вместе с концами',
+    withoutSticky.length === items.length - 1 &&
+      !withoutSticky.some((item) => item.id === 'conn1') &&
+      withoutFrame.length === items.length,
+    `${items.length} объектов → ${withoutSticky.length}, связь ${connector?.startItemId}→${connector?.endItemId}`
+  )
+  const svgOut = buildSvg(
+    { id: 'doc1', title: 'doc1', items, bounds: { x: 0, y: 0, width: 2400, height: 1800 } } as unknown as BoardDoc,
+    'doc1',
+    'white'
+  )
+  check(
+    results,
+    'svg: связь выходит по концам элементов',
+    points.length === 2 && svgOut.includes(`M ${points[0].x} ${points[0].y}`) && / Q /.test(svgOut),
+    `${points.length} точек, ${svgOut.match(/<path/g)?.length ?? 0} путей`
+  )
+  const rich = buildSvg(
+    {
+      id: 'doc2',
+      title: 'doc2',
+      bounds: { x: 0, y: 0, width: 900, height: 400 },
+      items: [
+        {
+          id: 'table:1',
+          kind: 'table',
+          x: 0,
+          y: 0,
+          w: 360,
+          h: 72,
+          rotation: 0,
+          z: 0,
+          columns: 2,
+          rows: 2,
+          columnWidths: [180, 180],
+          rowHeights: [36, 36],
+          cells: ['Заголовок', '1', 'очень длинное значение ячейки которое должно перенестись на вторую строку', '2'],
+          fontSize: 14
+        },
+        {
+          id: 'graph1',
+          kind: 'graph',
+          x: 400,
+          y: 0,
+          w: 400,
+          h: 300,
+          rotation: 0,
+          z: 1,
+          scale: 40,
+          originX: 0.5,
+          originY: 0.5,
+          gridStep: 1,
+          showGrid: true,
+          showLabels: true,
+          axisColor: '#1a1a1a',
+          lineWidth: 1.5,
+          expressions: [{ id: 'e1', formula: 'x*2', color: '#1a1a1a', lineWidth: 2, visible: true }]
+        }
+      ]
+    } as unknown as BoardDoc,
+    'doc2',
+    'white'
+  )
+  check(
+    results,
+    'svg: таблица с линиями и текстом',
+    rich.includes('Заголовок') && rich.includes('stroke="#e4e4e7"') && rich.includes('…'),
+    `${rich.match(/<text/g)?.length ?? 0} надписей`
+  )
+  check(
+    results,
+    'svg: график с осями и кривой',
+    rich.includes('<polyline') && rich.includes('clip-path="url(#graph-graph1)"'),
+    `${rich.match(/<polyline/g)?.length ?? 0} ломаных`
+  )
   check(
     results,
     'текст: размер шрифта из источника сохранён',
@@ -347,6 +461,105 @@ export function runSelfTest(): SelfTestResult {
     JSON.stringify(roundTrip)
   )
 
+  const labelSolid = makeSolid({ yaw: 0, pitch: 0, labels: [{ face: 'front', point: localPoint, text: 'Молекула', size: 18 }] })
+  const labelFace = solidPolygons(labelSolid).find((polygon) => polygon.id === 'front')
+  const labelSpot = labelFace ? projectPoint(faceLocalToWorld(labelFace, localPoint), solidProjection(labelSolid).camera) : null
+  const labelHit = labelFace ? hitTestFace(solidPolygons(labelSolid), labelSpot ?? { x: -1, y: -1 }) : null
+  check(
+    results,
+    'объём: надпись на грани попадает в ту же грань',
+    labelHit?.id === 'front',
+    `${labelHit?.id ?? 'нет'}`
+  )
+  const labelSvg = buildSvg(
+    { id: 'doc-label', title: 'doc-label', bounds: { x: 0, y: 0, width: 400, height: 400 }, items: [labelSolid] } as unknown as BoardDoc,
+    'doc-label',
+    'white'
+  )
+  check(
+    results,
+    'svg: текст на грани сохраняется',
+    labelSvg.includes('Молекула') && /<text[^>]*transform="translate\([^"]*\) rotate\([^"]*\) scale\([^"]*\)"/.test(labelSvg),
+    `${labelSvg.match(/<text/g)?.length ?? 0} надписей`
+  )
+
+  const crossing = strokeIntersections([
+    [
+      { x: 0, y: 0 },
+      { x: 10, y: 10 }
+    ],
+    [
+      { x: 0, y: 10 },
+      { x: 10, y: 0 }
+    ]
+  ])
+  check(
+    results,
+    'объём: пересечение штрихов найдено в точке скрещивания',
+    crossing.length === 1 && Math.abs(crossing[0].x - 5) < 1e-6 && Math.abs(crossing[0].y - 5) < 1e-6,
+    JSON.stringify(crossing)
+  )
+  const parallel = strokeIntersections([
+    [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 }
+    ],
+    [
+      { x: 0, y: 4 },
+      { x: 10, y: 4 }
+    ]
+  ])
+  check(results, 'объём: параллельные штрихи не пересекаются', parallel.length === 0, `${parallel.length}`)
+  const sameSelf = strokeIntersections([
+    [
+      { x: 0, y: 0 },
+      { x: 10, y: 10 },
+      { x: 10, y: 0 },
+      { x: 0, y: 10 }
+    ]
+  ])
+  const dedupe = strokeIntersections([
+    [
+      { x: 0, y: 0 },
+      { x: 10, y: 10 }
+    ],
+    [
+      { x: 10, y: 0 },
+      { x: 0, y: 10 }
+    ],
+    [
+      { x: 2, y: 8 },
+      { x: 8, y: 2 }
+    ]
+  ])
+  check(
+    results,
+    'объём: самопересечение найдено, кратные точки сведены',
+    sameSelf.length === 1 && dedupe.length === 1,
+    `само ${sameSelf.length}, сводно ${dedupe.length}`
+  )
+
+  const squareSilhouette = [
+    { x: -50, y: -50 },
+    { x: 50, y: -50 },
+    { x: 50, y: 50 },
+    { x: -50, y: 50 }
+  ]
+  const squareOver = squareSilhouette.map((point) => ({ x: point.x + 50, y: point.y }))
+  const squareTouch = squareSilhouette.map((point) => ({ x: point.x + 100, y: point.y }))
+  check(
+    results,
+    'фигуры: наложение силуэтов даёт площадь',
+    polygonOverlapArea(squareSilhouette, squareOver) > 2 && polygonOverlapArea(squareSilhouette, squareOver) < 5001,
+    `${polygonOverlapArea(squareSilhouette, squareOver).toFixed(1)}`
+  )
+  check(
+    results,
+    'фигуры: касание силуэтов не считается наложением',
+    polygonOverlapArea(squareSilhouette, squareTouch) < 0.01,
+    `${polygonOverlapArea(squareSilhouette, squareTouch).toFixed(3)}`
+  )
+
   const ink = normalizeItems([
     {
       id: 'p1',
@@ -430,6 +643,45 @@ export function runSelfTest(): SelfTestResult {
   const dir = mkdtempSync(join(tmpdir(), 'liro-test-'))
   check(results, 'временная папка', !!dir)
   rmSync(dir, { recursive: true, force: true })
+
+  const code = newCode()
+  check(results, 'код комнаты: формат', /^[a-z0-9]{3}-[a-z0-9]{3}-[a-z0-9]{3}$/.test(code), code)
+  check(results, 'код комнаты: уникальность', newCode() !== code)
+  check(results, 'код комнаты: нормализация', normalizeCode('  ABC-def_123  ') === 'abc-def123', normalizeCode('  ABC-def_123  '))
+  check(results, 'код комнаты: дефисы не важны для ключа', roomId('abc-def-ghi') === roomId('abcdefghi'))
+  check(
+    results,
+    'шифрование: дефисы не важны для ключа',
+    decryptRoom('abc-def-ghi', encryptRoom('abcdefghi', 'данные')) === 'данные'
+  )
+  check(results, 'ключ комнаты: один код — один id', roomId(code) === roomId(normalizeCode(code)))
+  check(results, 'ключ комнаты: разные коды — разные id', roomId(code) !== roomId(newCode()))
+  check(results, 'ключ комнаты: id это sha256', roomId(code).length === 64, roomId(code))
+
+  const secret = 'содержимое комнаты'
+  const packed = encryptRoom(code, secret)
+  check(results, 'шифрование: данные не видны', !packed.includes(secret))
+  check(results, 'шифрование: расшифровка верна', decryptRoom(code, packed) === secret)
+  let wrongKeyRejected = false
+  try {
+    decryptRoom(`${code}x`, packed)
+  } catch {
+    wrongKeyRejected = true
+  }
+  check(results, 'шифрование: чужой ключ не подходит', wrongKeyRejected)
+
+  check(results, 'ссылка подключения: код из адреса', codeFromLink(`liro://connect/${code}`) === code, codeFromLink(`liro://connect/${code}`))
+  check(results, 'ссылка подключения: путь со слешем', codeFromLink(`liro://connect/${code}/`) === code)
+  check(results, 'ссылка подключения: чужой адрес', codeFromLink('https://example.com') === '')
+  check(results, 'ссылка подключения: из аргументов', linkFromArgv(['Liro.exe', `liro://connect/${code}`]) === `liro://connect/${code}`)
+  check(results, 'ссылка подключения: нет ссылки', linkFromArgv(['Liro.exe']) === '')
+
+  check(
+    results,
+    'маршрут подключения',
+    parseRoute(`#/join/${code}`).name === 'join' &&
+      (parseRoute(`#/join/${code}`) as { code: string }).code === code
+  )
 
   return results
 }

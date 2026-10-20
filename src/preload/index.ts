@@ -13,6 +13,7 @@ const api: ApiLiro = {
   boardList: (archived) => invoke('board:list', archived),
   boardOpen: (docId) => invoke('board:open', docId),
   boardCreate: (title, projectId) => invoke('board:create', title, projectId),
+  boardCreateSession: (title) => invoke('board:create-session', title),
   boardRename: (docId, title) => invoke('board:rename', docId, title),
   boardUpdate: (docId, patch) => invoke('board:update', docId, patch),
   boardDelete: (docId, deleteFiles) => invoke('board:delete', docId, deleteFiles),
@@ -26,6 +27,8 @@ const api: ApiLiro = {
   boardAppendItems: (payload) => invoke('board:append', payload),
   boardPasteItems: (payload) => invoke('board:paste-items', payload),
   boardLinkToSource: (docId) => invoke('board:link-source', docId),
+  boardWorkspaceGet: (docId) => invoke('board:workspace-get', docId),
+  boardWorkspaceSet: (docId, patch) => invoke('board:workspace-set', docId, patch),
   assetUrl: (docId, file) => invoke('asset:url', docId, file),
   assetMissing: (docId) => invoke('asset:missing', docId),
 
@@ -54,6 +57,7 @@ const api: ApiLiro = {
   sourceBoards: (token, teamId) => invoke('source:boards', { token, teamId }),
   clipboardReadHtml: () => invoke('clipboard:read-html'),
   clipboardWriteHtml: (html, text) => invoke('clipboard:write-html', { html, text }),
+  clipboardWriteText: (text) => invoke('clipboard:write-text', text),
   clipboardWriteImage: (dataUrl) => invoke('clipboard:write-image', { dataUrl }),
   clipboardReadImage: () => invoke('clipboard:read-image'),
   pickImage: () => invoke('dialog:pick-image'),
@@ -73,7 +77,14 @@ const api: ApiLiro = {
   pickDirectory: () => invoke('dialog:pick-directory'),
   pickFiles: (filters) => invoke('dialog:pick-files', filters),
   updateCheck: () => invoke('update:check'),
-  updateApply: () => invoke('update:apply')
+  updateApply: () => invoke('update:apply'),
+  liveHostCreate: (offer, code) => invoke('live:host-create', offer, code),
+  liveHostCode: () => invoke('live:host-code'),
+  liveHostWait: (code) => invoke('live:host-wait', code),
+  liveHostCleanup: (code) => invoke('live:host-cleanup', code),
+  liveGuestFetch: (code) => invoke('live:guest-fetch', code),
+  liveGuestAnswer: (code, answer) => invoke('live:guest-answer', code, answer),
+  livePendingCode: () => invoke('live:pending-code')
 }
 
 const CHANNELS: Array<keyof Events> = [
@@ -86,7 +97,8 @@ const CHANNELS: Array<keyof Events> = [
   'nav:go',
   'board:command',
   'toast',
-  'update:status'
+  'update:status',
+  'live:join'
 ]
 
 contextBridge.exposeInMainWorld('liro', {

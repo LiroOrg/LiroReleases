@@ -155,6 +155,7 @@ export function openPreview(payload: PreviewPayload, devUrl: string | undefined)
     }
   })
   registry.set(win.id, normalized)
+  win.setTitle(normalized.title || 'Предпросмотр')
   win.on('closed', () => registry.delete(win.id))
   win.on('ready-to-show', () => win.show())
   win.webContents.setWindowOpenHandler(({ url }) => ({ action: 'deny' }))

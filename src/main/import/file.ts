@@ -1,10 +1,10 @@
 import { basename, extname, join } from 'node:path'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import type { BoardDoc, BoardMeta } from '@shared/types'
+import type { BoardDoc, BoardItem, BoardMeta } from '@shared/types'
 import { uid } from '@shared/util'
 import { assetsDir, docDir } from '../paths'
 import { isZip, readZip } from '../util/zip'
-import { buildDoc, commitDoc } from './commit'
+import { buildDoc, buildStats, commitDoc } from './commit'
 import type { RawItem } from './normalize'
 import { store } from '../store'
 
@@ -97,6 +97,47 @@ function guessMime(file: string): string {
   return MIME_BY_EXT[ext] ?? 'application/octet-stream'
 }
 
+function attachZipImages(items: BoardItem[], entries: Map<string, Buffer>, docId: string): number {
+  const files = [...entries.keys()].filter((name) => !name.toLowerCase().endsWith('.json'))
+  if (!files.length) return 0
+  mkdirSync(assetsDir(docId), { recursive: true })
+  let matched = 0
+  const used = new Set<string>()
+  for (const item of items) {
+    if (item.kind !== 'image') continue
+    const asset = item.asset
+    if (!asset || asset.local) continue
+    const sourceId = (asset.sourceId ?? '').toLowerCase()
+    const sourceName = asset.sourceUrl
+      ? decodeURIComponent(asset.sourceUrl.split('/').pop() ?? '').toLowerCase()
+      : ''
+    const found = files.find((name) => {
+      if (used.has(name)) return false
+      const base = basename(name).toLowerCase()
+      if (sourceId && base.includes(sourceId)) return true
+      if (sourceName && base === sourceName) return true
+      return false
+    })
+    if (!found) continue
+    const buffer = entries.get(found)!
+    const file = `${matched + 1}_${basename(found).replace(/[^\w.-]/g, '_')}`
+    writeFileSync(join(assetsDir(docId), file), buffer)
+    item.asset = {
+      file,
+      mime: guessMime(file),
+      bytes: buffer.byteLength,
+      sourceUrl: asset.sourceUrl,
+      sourceId: asset.sourceId,
+      width: asset.width,
+      height: asset.height,
+      local: true
+    }
+    used.add(found)
+    matched += 1
+  }
+  return matched
+}
+
 function importFromJsonText(text: string, options: FileImportOptions, zipEntries?: Map<string, Buffer>): FileImportResult {
   let parsed: unknown
   try {
@@ -163,6 +204,17 @@ function importFromJsonText(text: string, options: FileImportOptions, zipEntries
     source: { kind: 'file', name: fallbackTitle },
     projectId: options.projectId
   })
+  if (zipEntries) {
+    const matched = attachZipImages(result.doc.items, zipEntries, result.doc.id)
+    if (matched) {
+      result.warnings.push(`Восстановлено картинок из архива: ${matched}`)
+      let bytes = 0
+      for (const item of result.doc.items) {
+        if (item.kind === 'image' && item.asset?.local) bytes += item.asset.bytes ?? 0
+      }
+      result.doc.stats = buildStats(result.doc.items, bytes)
+    }
+  }
   const meta = commitDoc(result.doc)
   return { meta, warnings: result.warnings, docId: result.doc.id }
 }

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Copy, Trash2, X } from 'lucide-react'
 import type { BoardItem, TableItem } from '@shared/types'
@@ -8,6 +9,8 @@ export interface InspectorProps {
   docTitle: string
   onClose: () => void
   onPatch: (id: string, patch: Partial<BoardItem>) => void
+  onPatchMany: (ids: string[], patch: Partial<BoardItem>) => void
+  onPatchLive: (ids: string[], patch: Partial<BoardItem>) => void
   onDelete: (ids: string[]) => void
   onDuplicate: (ids: string[]) => void
   onNavigateTo: (id: string) => void
@@ -29,6 +32,8 @@ const PALETTE = [
 ]
 
 const TEXT_PALETTE = ['#1a1a1a', '#ffffff', '#7f1d1d', '#1d4ed8', '#15803d', '#b45309']
+
+const STICKY_PALETTE = ['#fff9b1', '#ffd8b1', '#cfe8fb', '#d9f2e3', '#f3e0ff']
 
 function strokeColorOf(item: BoardItem): string | null {
   if (item.kind === 'path' || item.kind === 'connector') return item.color
@@ -252,6 +257,9 @@ const KIND_LABEL: Record<string, string> = {
   embed: 'Вставка',
   video: 'Видео',
   table: 'Таблица',
+  solid: '3D-фигура',
+  graph: 'График',
+  path: 'Рисунок',
   vote: 'Голосование',
   group: 'Группа',
   tag: 'Метка',
@@ -269,20 +277,50 @@ const field = (label: string, value: string): ReactNode => (
   </div>
 )
 
-const numberField = (label: string, value: number, onChange: (value: number) => void): ReactNode => (
-  <label className="inspector__number">
-    <span className="inspector__label">{label}</span>
-    <input
-      className="input"
-      type="number"
-      value={Math.round(value * 100) / 100}
-      onChange={(event) => {
-        const parsed = Number(event.target.value)
-        if (Number.isFinite(parsed)) onChange(parsed)
-      }}
-    />
-  </label>
-)
+const rounded = (value: number): number => Math.round(value * 100) / 100
+
+function idsOf(items: BoardItem[], kinds: BoardItem['kind'][]): string[] {
+  return items.filter((item) => kinds.includes(item.kind)).map((item) => item.id)
+}
+
+function NumberField(props: {
+  label: string
+  value: number
+  onCommit: (value: number) => void
+}): ReactNode {
+  const [draft, setDraft] = useState<string | null>(null)
+  const commit = (): void => {
+    const text = draft?.trim() ?? ''
+    setDraft(null)
+    if (!text) return
+    const parsed = Number(text)
+    if (Number.isFinite(parsed) && rounded(parsed) !== props.value) props.onCommit(parsed)
+  }
+  return (
+    <label className="inspector__number">
+      <span className="inspector__label">{props.label}</span>
+      <input
+        className="input"
+        type="number"
+        value={draft ?? rounded(props.value)}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            commit()
+            event.currentTarget.blur()
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            setDraft(null)
+            event.currentTarget.blur()
+          }
+        }}
+      />
+    </label>
+  )
+}
 
 export function Inspector(props: InspectorProps): ReactNode {
   const { items } = props
@@ -311,17 +349,23 @@ export function Inspector(props: InspectorProps): ReactNode {
       {single ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div className="inspector__grid">
-            {numberField('X', single.x, (value) => props.onPatch(single.id, { x: Math.round(value) } as Partial<BoardItem>))}
-            {numberField('Y', single.y, (value) => props.onPatch(single.id, { y: Math.round(value) } as Partial<BoardItem>))}
-            {numberField('Ширина', single.w, (value) =>
-              props.onPatch(single.id, { w: Math.max(1, Math.round(value)) } as Partial<BoardItem>)
-            )}
-            {numberField('Высота', single.h, (value) =>
-              props.onPatch(single.id, { h: Math.max(1, Math.round(value)) } as Partial<BoardItem>)
-            )}
-            {numberField('Поворот', single.rotation, (value) =>
-              props.onPatch(single.id, { rotation: Math.round(value) } as Partial<BoardItem>)
-            )}
+            <NumberField label="X" value={single.x} onCommit={(value) => props.onPatch(single.id, { x: Math.round(value) } as Partial<BoardItem>)} />
+            <NumberField label="Y" value={single.y} onCommit={(value) => props.onPatch(single.id, { y: Math.round(value) } as Partial<BoardItem>)} />
+            <NumberField
+              label="Ширина"
+              value={single.w}
+              onCommit={(value) => props.onPatch(single.id, { w: Math.max(1, Math.round(value)) } as Partial<BoardItem>)}
+            />
+            <NumberField
+              label="Высота"
+              value={single.h}
+              onCommit={(value) => props.onPatch(single.id, { h: Math.max(1, Math.round(value)) } as Partial<BoardItem>)}
+            />
+            <NumberField
+              label="Поворот"
+              value={single.rotation}
+              onCommit={(value) => props.onPatch(single.id, { rotation: Math.round(value) } as Partial<BoardItem>)}
+            />
             {field('Слой', String(single.z + 1))}
           </div>
 
@@ -337,7 +381,7 @@ export function Inspector(props: InspectorProps): ReactNode {
                     .split(/\n{2,}/)
                     .map((chunk) => `<p>${chunk.replace(/\n/g, '<br>')}</p>`)
                     .join('')
-                  props.onPatch(single.id, { content: html, plain: event.target.value } as Partial<BoardItem>)
+                  props.onPatchLive([single.id], { content: html, plain: event.target.value } as Partial<BoardItem>)
                 }}
               />
             </label>
@@ -359,7 +403,7 @@ export function Inspector(props: InspectorProps): ReactNode {
           <ColorRow
             label="Заливка"
             value={fillColorOf(single)}
-            colors={PALETTE}
+            colors={single.kind === 'sticky' ? STICKY_PALETTE : PALETTE}
             onPick={(color) => {
               if (single.kind === 'shape') props.onPatch(single.id, { fillColor: color } as Partial<BoardItem>)
               else if (single.kind === 'sticky') props.onPatch(single.id, { color } as Partial<BoardItem>)
@@ -383,9 +427,9 @@ export function Inspector(props: InspectorProps): ReactNode {
             max={24}
             onChange={(value) => {
               if (single.kind === 'path' || single.kind === 'connector') {
-                props.onPatch(single.id, { lineWidth: value } as Partial<BoardItem>)
+                props.onPatchLive([single.id], { lineWidth: value } as Partial<BoardItem>)
               } else if (single.kind === 'shape') {
-                props.onPatch(single.id, { borderWidth: value } as Partial<BoardItem>)
+                props.onPatchLive([single.id], { borderWidth: value } as Partial<BoardItem>)
               }
             }}
           />
@@ -396,7 +440,7 @@ export function Inspector(props: InspectorProps): ReactNode {
             min={0.1}
             max={1}
             step={0.05}
-            onChange={(value) => props.onPatch(single.id, { opacity: value } as Partial<BoardItem>)}
+            onChange={(value) => props.onPatchLive([single.id], { opacity: value } as Partial<BoardItem>)}
           />
 
           <SliderRow
@@ -404,7 +448,7 @@ export function Inspector(props: InspectorProps): ReactNode {
             value={fontSizeOf(single)}
             min={8}
             max={72}
-            onChange={(value) => props.onPatch(single.id, { fontSize: Math.round(value) } as Partial<BoardItem>)}
+            onChange={(value) => props.onPatchLive([single.id], { fontSize: Math.round(value) } as Partial<BoardItem>)}
           />
 
           {alignOf(single) ? (
@@ -441,7 +485,7 @@ export function Inspector(props: InspectorProps): ReactNode {
               <input
                 className="input"
                 value={single.title}
-                onChange={(event) => props.onPatch(single.id, { title: event.target.value } as Partial<BoardItem>)}
+                onChange={(event) => props.onPatchLive([single.id], { title: event.target.value } as Partial<BoardItem>)}
               />
             </label>
           ) : null}
@@ -489,13 +533,8 @@ export function Inspector(props: InspectorProps): ReactNode {
             value={items.map(strokeColorOf).find((value) => value !== null) ?? null}
             colors={PALETTE}
             onPick={(color) => {
-              for (const item of items) {
-                if (item.kind === 'path' || item.kind === 'connector') {
-                  props.onPatch(item.id, { color } as Partial<BoardItem>)
-                } else if (item.kind === 'shape') {
-                  props.onPatch(item.id, { borderColor: color } as Partial<BoardItem>)
-                }
-              }
+              props.onPatchMany(idsOf(items, ['path', 'connector']), { color } as Partial<BoardItem>)
+              props.onPatchMany(idsOf(items, ['shape']), { borderColor: color } as Partial<BoardItem>)
             }}
           />
 
@@ -504,10 +543,8 @@ export function Inspector(props: InspectorProps): ReactNode {
             value={items.map(fillColorOf).find((value) => value !== null) ?? null}
             colors={PALETTE}
             onPick={(color) => {
-              for (const item of items) {
-                if (item.kind === 'shape') props.onPatch(item.id, { fillColor: color } as Partial<BoardItem>)
-                else if (item.kind === 'sticky') props.onPatch(item.id, { color } as Partial<BoardItem>)
-              }
+              props.onPatchMany(idsOf(items, ['shape']), { fillColor: color } as Partial<BoardItem>)
+              props.onPatchMany(idsOf(items, ['sticky']), { color } as Partial<BoardItem>)
             }}
           />
 
@@ -516,10 +553,8 @@ export function Inspector(props: InspectorProps): ReactNode {
             value={items.map(textColorOf).find((value) => value !== null) ?? null}
             colors={TEXT_PALETTE}
             onPick={(color) => {
-              for (const item of items) {
-                if (item.kind === 'text') props.onPatch(item.id, { color } as Partial<BoardItem>)
-                else if (item.kind === 'shape') props.onPatch(item.id, { textColor: color } as Partial<BoardItem>)
-              }
+              props.onPatchMany(idsOf(items, ['text']), { color } as Partial<BoardItem>)
+              props.onPatchMany(idsOf(items, ['shape']), { textColor: color } as Partial<BoardItem>)
             }}
           />
 
@@ -529,13 +564,8 @@ export function Inspector(props: InspectorProps): ReactNode {
             min={1}
             max={24}
             onChange={(value) => {
-              for (const item of items) {
-                if (item.kind === 'path' || item.kind === 'connector') {
-                  props.onPatch(item.id, { lineWidth: value } as Partial<BoardItem>)
-                } else if (item.kind === 'shape') {
-                  props.onPatch(item.id, { borderWidth: value } as Partial<BoardItem>)
-                }
-              }
+              props.onPatchLive(idsOf(items, ['path', 'connector']), { lineWidth: value } as Partial<BoardItem>)
+              props.onPatchLive(idsOf(items, ['shape']), { borderWidth: value } as Partial<BoardItem>)
             }}
           />
 
@@ -546,11 +576,7 @@ export function Inspector(props: InspectorProps): ReactNode {
             max={1}
             step={0.05}
             onChange={(value) => {
-              for (const item of items) {
-                if (item.kind === 'path' || item.kind === 'shape' || item.kind === 'image') {
-                  props.onPatch(item.id, { opacity: value } as Partial<BoardItem>)
-                }
-              }
+              props.onPatchLive(idsOf(items, ['path', 'shape', 'image']), { opacity: value } as Partial<BoardItem>)
             }}
           />
 
@@ -560,11 +586,7 @@ export function Inspector(props: InspectorProps): ReactNode {
             min={8}
             max={72}
             onChange={(value) => {
-              for (const item of items) {
-                if (item.kind === 'text' || item.kind === 'sticky' || item.kind === 'shape') {
-                  props.onPatch(item.id, { fontSize: Math.round(value) } as Partial<BoardItem>)
-                }
-              }
+              props.onPatchLive(idsOf(items, ['text', 'sticky', 'shape']), { fontSize: Math.round(value) } as Partial<BoardItem>)
             }}
           />
 

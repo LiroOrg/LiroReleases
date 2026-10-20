@@ -318,6 +318,7 @@ export interface PathItem extends ItemBase {
   lineWidth: number
   closed: boolean
   opacity?: number
+  widths?: number[]
 }
 
 export type SolidKind = 'cube' | 'pyramid' | 'prism' | 'cylinder' | 'cone' | 'sphere'
@@ -333,6 +334,14 @@ export interface SolidSketch {
   points: Array<{ x: number; y: number }>
   color: string
   lineWidth: number
+  through?: Array<{ face: string; point: { x: number; y: number } }>
+}
+
+export interface SolidLabel {
+  face: string
+  point: { x: number; y: number }
+  text: string
+  size: number
 }
 
 export interface SolidItem extends ItemBase {
@@ -344,6 +353,7 @@ export interface SolidItem extends ItemBase {
   faces: SolidFace[]
   tint?: string
   sketch: SolidSketch[]
+  labels?: SolidLabel[]
   lineWidth: number
   color: string
   showEdges: boolean
@@ -415,7 +425,7 @@ export interface BoardDoc {
   createdAt: string
   updatedAt: string
   bounds: Rect
-  viewport: { x: number; y: number; zoom: number }
+  viewport?: { x: number; y: number; zoom: number }
   items: BoardItem[]
   assets: Record<string, AssetRef>
   stats: DocStats
@@ -426,6 +436,13 @@ export interface BoardDoc {
   favorite: boolean
   archived: boolean
   color?: string
+}
+
+export interface BoardWorkspace {
+  calculator?: {
+    source?: string
+    history?: Array<{ expression: string; result: string }>
+  }
 }
 
 export interface Project {
@@ -474,20 +491,16 @@ export type GridMode = 'none' | 'lines' | 'dots'
 
 export interface Settings {
   theme: 'light' | 'dark' | 'system'
-  grid: boolean
   gridSize: number
   gridMode: GridMode
   snapGrid: boolean
+  alignSnap: boolean
   userName: string
-  showMinimap: boolean
-  showStatusBar: boolean
   exportScale: number
   exportBackground: 'white' | 'transparent' | 'board'
-  storagePath?: string
-  autoOpenLast: boolean
   imageQuality: 'original' | 'high' | 'medium'
   uiScale: number
-  reducedMotion: boolean
+  toolbarPins: string[]
   captureToken?: string
 }
 

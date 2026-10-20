@@ -2,11 +2,21 @@ import { app, BrowserWindow, ClipboardItem, clipboard, dialog, ipcMain, nativeIm
 import type { NativeImage } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ApiLiro, IpcResult } from '@shared/api'
-import type { ApiImportOptions, BoardItem, ExportOptions, ExportResult, LibraryIndex, Project, Settings } from '@shared/types'
+import type { IpcResult } from '@shared/api'
+import type {
+  ApiImportOptions,
+  BoardItem,
+  BoardWorkspace,
+  ExportOptions,
+  ExportResult,
+  LibraryIndex,
+  Project,
+  Settings
+} from '@shared/types'
 import { DEFAULT_SETTINGS, store } from './store'
-import { assetsDir, docDir, folderIconFile, getRoot, indexFile, setRoot, writeAtomic } from './paths'
+import { assetsDir, docDir, folderIconFile, getRoot, indexFile, readJson, setRoot, workspaceFile, writeAtomic } from './paths'
 import { assetUrl, revealPath, revealRoot } from './protocol'
+import { takePendingCode } from './live/protocol'
 import { CaptureManager } from './import/capture'
 import { buildExtensionFiles } from './import/extension'
 import { importFromFile } from './import/file'
@@ -20,6 +30,8 @@ import { sanitizeFileName } from '@shared/util'
 import type { RawItem } from './import/normalize'
 import { dataUrlToBuffer } from './import/server'
 import { boundsOfItems, extensionToMime, isImageMime, parseBoardRef, roundRect, uid } from '@shared/util'
+import { newCode, normalizeCode, pickRoomCode } from './live/crypto'
+import { createRoom, deleteRoom, readRoom, waitForAnswer, writeAnswer } from './live/signal'
 
 let mainWindow: BrowserWindow | null = null
 let capture: CaptureManager | null = null
@@ -154,6 +166,19 @@ export function registerIpc(): void {
     sendLibraryChanged()
     return ok(created.doc)
   })
+  ipcMain.handle('board:create-session', (_e, title: string) => {
+    const docId = uid('bd_')
+    const created = buildDoc({
+      docId,
+      title: title?.trim() || 'Совместная доска',
+      rawItems: [],
+      source: { kind: 'file' }
+    })
+    commitDoc(created.doc)
+    store.patchMeta(docId, { tags: [...(store.meta(docId)?.tags ?? []), 'сессия'] })
+    sendLibraryChanged()
+    return ok(created.doc)
+  })
   ipcMain.handle('board:rename', (_e, docId: string, title: string) => {
     const meta = store.patchMeta(docId, { title: title.trim() || 'Без названия' })
     sendLibraryChanged()
@@ -260,6 +285,13 @@ export function registerIpc(): void {
   })
   ipcMain.handle('asset:url', (_e, docId: string, file: string) => ok(assetUrl(docId, file)))
   ipcMain.handle('asset:missing', (_e, docId: string) => ok(store.boards().length > 0 && !indexFile().length ? true : false))
+  ipcMain.handle('board:workspace-get', (_e, docId: string) => ok(readJson<BoardWorkspace>(workspaceFile(docId), {})))
+  ipcMain.handle('board:workspace-set', (_e, docId: string, patch: BoardWorkspace) => {
+    const current = readJson<BoardWorkspace>(workspaceFile(docId), {})
+    const next: BoardWorkspace = { ...current, ...patch }
+    writeAtomic(workspaceFile(docId), JSON.stringify(next, null, 2))
+    return ok(true)
+  })
 
   ipcMain.handle('board:append', (_e, payload: { docId: string; items: unknown[]; images?: Array<{ itemId: string; dataUrl: string }>; offsetX?: number; offsetY?: number }) => {
     try {
@@ -383,6 +415,7 @@ export function registerIpc(): void {
         downloadImages: options.downloadImages !== false,
         withStyles: options.withStyles !== false,
         maxImageBytes: Number(options.maxImageBytes ?? 32 * 1024 * 1024),
+        imageQuality: store.settings.imageQuality,
         signal: controller.signal,
         onProgress: progress
       })
@@ -538,6 +571,10 @@ export function registerIpc(): void {
     await writeClipboard(payload.html, payload.text)
     return ok(true)
   })
+  ipcMain.handle('clipboard:write-text', (_e, text: string) => {
+    clipboard.writeText(String(text ?? ''))
+    return ok(true)
+  })
   ipcMain.handle('clipboard:write-image', async (_e, payload: { dataUrl: string }) => {
     const parsed = dataUrlToBuffer(payload.dataUrl)
     if (!parsed) return ok(false)
@@ -650,8 +687,8 @@ export function registerIpc(): void {
       return fail(error instanceof Error ? error.message : String(error), 'image')
     }
   })
-  ipcMain.handle('app:info', () =>
-    ok({
+  ipcMain.handle('live:pending-code', () => ok(takePendingCode()))
+  ipcMain.handle('app:info', () =>    ok({
       version: app.getVersion(),
       electron: process.versions.electron,
       storage: getRoot(),
@@ -674,6 +711,48 @@ export function registerIpc(): void {
   ipcMain.handle('shell:show-item', (_e, target: string) => {
     revealPath(target)
     return ok(true)
+  })
+  ipcMain.handle('live:host-code', () => ok(newCode()))
+  ipcMain.handle('live:host-create', async (_e, offer: string, wanted?: string) => {
+    try {
+      const code = pickRoomCode(wanted)
+      await createRoom(code, String(offer ?? ''))
+      return ok(code)
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error), 'live')
+    }
+  })
+  ipcMain.handle('live:host-wait', async (_e, code: string) => {
+    try {
+      const answer = await waitForAnswer(normalizeCode(String(code ?? '')), 120000)
+      return ok(answer)
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error), 'live')
+    }
+  })
+  ipcMain.handle('live:host-cleanup', async (_e, code: string) => {
+    try {
+      await deleteRoom(normalizeCode(String(code ?? '')))
+      return ok(true)
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error), 'live')
+    }
+  })
+  ipcMain.handle('live:guest-fetch', async (_e, code: string) => {
+    try {
+      const room = await readRoom(normalizeCode(String(code ?? '')))
+      return ok(room?.offer ?? null)
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error), 'live')
+    }
+  })
+  ipcMain.handle('live:guest-answer', async (_e, code: string, answer: string) => {
+    try {
+      await writeAnswer(normalizeCode(String(code ?? '')), String(answer ?? ''))
+      return ok(true)
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error), 'live')
+    }
   })
   ipcMain.handle('dialog:pick-directory', async () => {
     const result = await dialog.showOpenDialog(mainWindow ?? undefined!, { properties: ['openDirectory'] })

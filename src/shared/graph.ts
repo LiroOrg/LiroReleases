@@ -327,3 +327,44 @@ export function sampleCurve(fn: FormulaFn, xFrom: number, xTo: number, samples =
   }
   return out
 }
+
+export function curveSegments(
+  fn: FormulaFn,
+  xFrom: number,
+  xTo: number,
+  toX: (x: number) => number,
+  toY: (y: number) => number,
+  width: number,
+  height: number
+): string[][] {
+  const samples = Math.min(8000, Math.max(1200, Math.round(width * 3)))
+  const raw = sampleCurve(fn, xFrom, xTo, samples)
+  const segments: string[][] = []
+  let current: string[] = []
+  const jumpLimit = Math.max(60, height * 2)
+  const flush = (): void => {
+    if (current.length >= 2) segments.push(current)
+    current = []
+  }
+  for (let index = 1; index < raw.length; index += 1) {
+    const a = raw[index - 1]
+    const b = raw[index]
+    if (!Number.isFinite(a.y) || !Number.isFinite(b.y)) {
+      flush()
+      continue
+    }
+    const ax = toX(a.x)
+    const ay = toY(a.y)
+    const bx = toX(b.x)
+    const by = toY(b.y)
+    if (current.length === 0) current.push(`${ax.toFixed(2)},${ay.toFixed(2)}`)
+    if (Math.abs(by - ay) > jumpLimit) {
+      flush()
+      current.push(`${bx.toFixed(2)},${by.toFixed(2)}`)
+      continue
+    }
+    current.push(`${bx.toFixed(2)},${by.toFixed(2)}`)
+  }
+  flush()
+  return segments
+}

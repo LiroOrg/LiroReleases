@@ -14,9 +14,11 @@ export interface BoardSettingsProps {
   mode: GridMode
   size: number
   snap: boolean
+  alignSnap: boolean
   onMode: (mode: GridMode) => void
   onSize: (size: number) => void
   onSnap: (value: boolean) => void
+  onAlignSnap: (value: boolean) => void
   onClose: () => void
 }
 
@@ -76,6 +78,15 @@ export function BoardSettings(props: BoardSettingsProps): ReactNode {
         <input type="checkbox" checked={props.snap} onChange={(event) => props.onSnap(event.target.checked)} />
       </label>
       <div className="toolpalette__hint">Объекты встают на клетки при переносе и создании.</div>
+
+      <div className="boardsettings__sep" />
+
+      <label className="boardsettings__row boardsettings__row--switch">
+        <Magnet size={14} />
+        <span>Выравнивание по соседям</span>
+        <input type="checkbox" checked={props.alignSnap} onChange={(event) => props.onAlignSnap(event.target.checked)} />
+      </label>
+      <div className="toolpalette__hint">Объекты встают ровно по краям и центрам соседей.</div>
     </div>
   )
 }

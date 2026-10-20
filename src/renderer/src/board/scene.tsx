@@ -4,23 +4,12 @@ import { parseRichText, type Block, type Run } from '@shared/richtext'
 import { contrastColor } from '@shared/color'
 import type { BoardDoc, BoardItem, Rect, SolidItem } from '@shared/types'
 import { curvePath } from '@shared/curve'
-import { deriveConnectorPoints } from '@shared/geometry'
+import { rotatedBox } from '@shared/util'
 import { solidBounds } from '@shared/three'
 import { TableView } from './tableView'
 import { shapePath, strokeDash } from './shapes'
 import { SolidView } from './solidView'
 import { GraphView } from './graphView'
-
-export interface SceneProps {
-  doc: BoardDoc
-  assetUrl: (file: string) => string
-  visible: Rect
-  selection: Set<string>
-  onPointerDownItem?: (id: string, event: React.PointerEvent) => void
-  onDoubleClickItem?: (id: string) => void
-  interactive?: boolean
-  connectorLayer: ReactNode
-}
 
 const solidBoxCache = new WeakMap<SolidItem, Rect>()
 
@@ -53,7 +42,7 @@ export function visibleItems(doc: BoardDoc, visible: Rect): BoardItem[] {
   }
   const out: BoardItem[] = []
   for (const item of doc.items) {
-    const rect = itemBounds(item)
+    const rect = item.kind === 'solid' ? itemBounds(item) : rotatedBox(itemBounds(item), item.rotation)
     if (
       rect.x > area.x + area.width ||
       rect.x + rect.width < area.x ||
@@ -197,8 +186,10 @@ export const ItemLayer = memo(function ItemLayer(props: {
   assetUrl: (file: string) => string
   selection: Set<string>
   selectable: boolean
+  interactive: boolean
   moving: boolean
   editable: boolean
+  editingId?: string | null
   onPatch?: (id: string, patch: Partial<BoardItem>) => void
   onNode?: (id: string, node: HTMLDivElement | null) => void
   onPointerDown?: (id: string, event: React.PointerEvent) => void
@@ -217,9 +208,10 @@ export const ItemLayer = memo(function ItemLayer(props: {
           dimmed={false}
           moving={props.moving && props.selection.has(item.id)}
           editable={props.editable}
+          editingId={props.editingId}
           onPatch={props.onPatch}
           onNode={props.onNode}
-          onPointerDown={props.selectable && !item.locked ? props.onPointerDown : undefined}
+          onPointerDown={props.interactive && !item.locked ? props.onPointerDown : undefined}
           onDoubleClick={props.onDoubleClick}
           onLink={props.onLink}
         />
@@ -236,6 +228,7 @@ export const ItemView = memo(function ItemView(props: {
   dimmed: boolean
   moving?: boolean
   editable?: boolean
+  editingId?: string | null
   onPatch?: (id: string, patch: Partial<BoardItem>) => void
   onNode?: (id: string, node: HTMLDivElement | null) => void
   onPointerDown?: (id: string, event: React.PointerEvent) => void
@@ -278,6 +271,7 @@ export const ItemView = memo(function ItemView(props: {
         assetUrl={assetUrl}
         selected={selected}
         editable={props.editable === true}
+        editing={props.editingId === item.id}
         onPatch={props.onPatch}
         onLink={props.onLink}
       />
@@ -291,10 +285,11 @@ function ItemBody(props: {
   assetUrl: (file: string) => string
   selected?: boolean
   editable?: boolean
+  editing?: boolean
   onPatch?: (id: string, patch: Partial<BoardItem>) => void
   onLink?: (href: string) => void
 }): ReactNode {
-  const { item, doc, assetUrl } = props
+  const { item, assetUrl } = props
   switch (item.kind) {
     case 'frame': {
       const fill = item.fillColor && item.fillColor !== 'transparent' ? item.fillColor : 'transparent'
@@ -335,12 +330,15 @@ function ItemBody(props: {
             wordBreak: 'break-word'
           }}
         >
-          {item.content ? <RichText html={item.content} style={{ fontSize: 'inherit', textAlign: 'inherit' }} onLink={props.onLink} /> : null}
+          {item.content && !props.editing ? (
+            <RichText html={item.content} style={{ fontSize: 'inherit', textAlign: 'inherit' }} onLink={props.onLink} />
+          ) : null}
         </div>
       )
     }
     case 'text': {
       const color = item.color || '#1a1a1a'
+      if (props.editing) return null
       return (
         <RichText
           html={item.content}
@@ -379,7 +377,7 @@ function ItemBody(props: {
               strokeLinejoin="round"
             />
           </svg>
-          {item.content ? (
+          {item.content && !props.editing ? (
             <div
               style={{
                 position: 'absolute',
@@ -444,7 +442,7 @@ function ItemBody(props: {
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
-            boxShadow: '0 1px 2px rgba(0,0,0,.08)'
+            boxShadow: 'var(--shadow-1)'
           }}
         >
           {item.thumbnail?.file ? (
@@ -457,13 +455,13 @@ function ItemBody(props: {
               </div>
             ) : null}
             {item.description ? (
-              <div style={{ fontSize: 12, color: '#52525b', lineHeight: 1.4 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.4 }}>
                 <RichText html={item.description} style={{ fontSize: 12 }} onLink={props.onLink} />
               </div>
             ) : null}
           </div>
           {item.dueDate ? (
-            <div style={{ marginTop: 'auto', padding: '6px 12px', fontSize: 11, color: '#71717a' }}>
+            <div style={{ marginTop: 'auto', padding: '6px 12px', fontSize: 11, color: 'var(--text-3)' }}>
               Срок: {new Date(item.dueDate).toLocaleDateString('ru-RU')}
             </div>
           ) : null}
@@ -479,20 +477,20 @@ function ItemBody(props: {
           style={{
             width: '100%',
             height: '100%',
-            border: '1px solid #e4e4e7',
+            border: '1px solid var(--border)',
             borderRadius: 8,
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
-            background: '#fafafa'
+            background: 'var(--bg-subtle)'
           }}
         >
           {image ?? <div style={{ flex: 1 }} />}
-          <div style={{ padding: '8px 10px', fontSize: 12, borderTop: '1px solid #ededf0' }}>
+          <div style={{ padding: '8px 10px', fontSize: 12, borderTop: '1px solid var(--border-soft)' }}>
             <div className="truncate" style={{ fontWeight: 560 }}>
               {item.title || item.url}
             </div>
-            {item.provider ? <div style={{ color: '#71717a' }}>{item.provider}</div> : null}
+            {item.provider ? <div style={{ color: 'var(--text-3)' }}>{item.provider}</div> : null}
           </div>
         </div>
       )
@@ -513,7 +511,7 @@ function ItemBody(props: {
             margin: 0,
             padding: 10,
             background: item.color,
-            border: '1px solid #e4e4e7',
+            border: '1px solid var(--border)',
             borderRadius: 6,
             fontFamily: 'var(--font-mono)',
             fontSize: item.fontSize,
@@ -529,7 +527,7 @@ function ItemBody(props: {
         <TableView
           item={item}
           selected={props.selected === true}
-          editable={props.editable === true}
+          editable={props.editable === true && item.locked !== true}
           onChange={(patch) => props.onPatch?.(item.id, patch)}
         />
       )
@@ -551,7 +549,7 @@ function ItemBody(props: {
           }}
         >
           <div style={{ fontSize: Math.max(18, item.h * 0.28), fontWeight: 700 }}>{item.total}</div>
-          {item.title ? <div style={{ fontSize: 12, color: '#52525b' }}>{item.title}</div> : null}
+          {item.title ? <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{item.title}</div> : null}
         </div>
       )
     }
@@ -583,15 +581,15 @@ function ItemBody(props: {
             width: '100%',
             height: '100%',
             background: '#fff',
-            border: '1px solid #e4e4e7',
+            border: '1px solid var(--border)',
             borderRadius: 6,
-            boxShadow: '0 1px 2px rgba(0,0,0,.06)',
+            boxShadow: 'var(--shadow-1)',
             padding: 14,
             fontSize: 12,
-            color: '#71717a'
+            color: 'var(--text-3)'
           }}
         >
-          <div style={{ fontWeight: 600, color: '#18181b', marginBottom: 6 }}>{item.title}</div>
+          <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>{item.title}</div>
           <div>Документ{item.pages ? ` · ${item.pages} стр.` : ''}</div>
         </div>
       )
@@ -602,7 +600,7 @@ function ItemBody(props: {
           style={{
             width: '100%',
             height: '100%',
-            border: '1px solid #e4e4e7',
+            border: '1px solid var(--border)',
             borderRadius: 8,
             padding: 12,
             display: 'flex',
@@ -612,13 +610,13 @@ function ItemBody(props: {
           }}
         >
           <div style={{ fontWeight: 600, fontSize: 13 }}>{item.title || 'Приложение'}</div>
-          <div style={{ fontSize: 12, color: '#52525b', flex: 1, overflow: 'hidden' }}>
+          <div style={{ fontSize: 12, color: 'var(--text-2)', flex: 1, overflow: 'hidden' }}>
             <RichText html={item.description} style={{ fontSize: 12 }} />
           </div>
           {item.fields?.length ? (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
               {item.fields.slice(0, 6).map((field, index) => (
-                <span key={index} className="badge" style={{ background: field.fillColor ?? '#f4f4f5' }}>
+                <span key={index} className="badge" style={{ background: field.fillColor ?? 'var(--bg-muted)' }}>
                   {field.value}
                 </span>
               ))}
@@ -640,8 +638,8 @@ function ItemBody(props: {
           style={{
             width: '100%',
             height: '100%',
-            background: '#fdfdfd',
-            border: '1px solid #e4e4e7',
+            background: 'var(--panel-2)',
+            border: '1px solid var(--border)',
             borderRadius: 8,
             padding: 10,
             fontSize: 12
@@ -654,10 +652,17 @@ function ItemBody(props: {
     }
     case 'path': {
       const source = item.points.length > 1 ? item.points : [{ x: 0, y: 0 }, { x: item.w, y: item.h }]
-      const path = curvePath(source)
       return (
         <svg width="100%" height="100%" viewBox={`0 0 ${Math.max(1, item.w)} ${Math.max(1, item.h)}`} style={{ position: 'absolute', inset: 0, overflow: 'visible' }}>
-          <path d={item.closed ? `${path} Z` : path} fill="none" stroke={item.color} strokeWidth={item.lineWidth} strokeLinecap="round" strokeLinejoin="round" opacity={item.opacity ?? 1} />
+          <path
+            d={curvePath(source)}
+            fill="none"
+            stroke={item.color}
+            strokeWidth={item.lineWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            opacity={item.opacity ?? 1}
+          />
         </svg>
       )
     }
@@ -666,6 +671,9 @@ function ItemBody(props: {
     }
     case 'graph': {
       return <GraphView item={item} />
+    }
+    case 'connector': {
+      return null
     }
     default: {
       const unknown = item as { label?: string; raw?: unknown }
@@ -676,17 +684,4 @@ function ItemBody(props: {
       )
     }
   }
-}
-
-export interface ConnectorDrawProps {
-  connectors: BoardItem[]
-  byId: Map<string, BoardItem>
-}
-
-export function connectorPathOf(item: BoardItem, byId: Map<string, BoardItem>): {
-  points: Array<{ x: number; y: number }>
-  shape: 'straight' | 'curved' | 'elbowed'
-} {
-  if (item.kind !== 'connector') return { points: [], shape: 'straight' }
-  return { points: deriveConnectorPoints(item, byId), shape: item.shape }
 }

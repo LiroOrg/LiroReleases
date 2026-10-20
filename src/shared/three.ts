@@ -455,6 +455,83 @@ export function solidFaceAt(item: SolidItem, point: Vec2): SolidPolygon | null {
   return hitTestFace(solidPolygons(item), point)
 }
 
+export function polygonOverlapArea(a: Vec2[], b: Vec2[]): number {
+  const signedArea = (points: Vec2[]): number => {
+    let sum = 0
+    for (let index = 0; index < points.length; index += 1) {
+      const point = points[index]
+      const next = points[(index + 1) % points.length]
+      sum += point.x * next.y - next.x * point.y
+    }
+    return sum / 2
+  }
+  if (a.length < 3 || b.length < 3) return 0
+  const clip = signedArea(b) < 0 ? b.slice().reverse() : b
+  const sideOf = (start: Vec2, end: Vec2, point: Vec2): number =>
+    (end.x - start.x) * (point.y - start.y) - (end.y - start.y) * (point.x - start.x)
+  let output = a
+  for (let index = 0; index < clip.length; index += 1) {
+    const start = clip[index]
+    const end = clip[(index + 1) % clip.length]
+    const input = output
+    output = []
+    for (let step = 0; step < input.length; step += 1) {
+      const current = input[step]
+      const next = input[(step + 1) % input.length]
+      const currentSide = sideOf(start, end, current)
+      const nextSide = sideOf(start, end, next)
+      if (currentSide >= 0) output.push(current)
+      if ((currentSide >= 0) !== (nextSide >= 0)) {
+        const ratio = currentSide / (currentSide - nextSide)
+        output.push({
+          x: current.x + (next.x - current.x) * ratio,
+          y: current.y + (next.y - current.y) * ratio
+        })
+      }
+    }
+    if (!output.length) return 0
+  }
+  return Math.abs(signedArea(output))
+}
+
+export function strokeIntersections(strokes: Array<Array<Vec2>>): Vec2[] {
+  const found: Vec2[] = []
+  const segments: Array<{ a: Vec2; b: Vec2; stroke: number; index: number }> = []
+  strokes.forEach((points, stroke) => {
+    for (let index = 0; index + 1 < points.length; index += 1) {
+      segments.push({ a: points[index], b: points[index + 1], stroke, index })
+    }
+  })
+  for (let first = 0; first < segments.length; first += 1) {
+    for (let second = first + 1; second < segments.length; second += 1) {
+      const left = segments[first]
+      const right = segments[second]
+      if (left.stroke === right.stroke && Math.abs(left.index - right.index) <= 1) continue
+      const cross = (right.b.x - right.a.x) * (left.b.y - left.a.y) - (right.b.y - right.a.y) * (left.b.x - left.a.x)
+      if (Math.abs(cross) < 1e-9) continue
+      const sx = left.a.x - right.a.x
+      const sy = left.a.y - right.a.y
+      const t = (sx * (left.b.y - left.a.y) - sy * (left.b.x - left.a.x)) / cross
+      const s = (sx * (right.b.y - right.a.y) - sy * (right.b.x - right.a.x)) / cross
+      if (t < 0 || t > 1 || s < 0 || s > 1) continue
+      found.push({
+        x: right.a.x + (right.b.x - right.a.x) * t,
+        y: right.a.y + (right.b.y - right.a.y) * t
+      })
+    }
+  }
+  if (found.length < 2) return found
+  const seen = new Set<string>()
+  const unique: Vec2[] = []
+  for (const point of found) {
+    const key = `${Math.round(point.x * 1000)}:${Math.round(point.y * 1000)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(point)
+  }
+  return unique
+}
+
 export function faceFrame(face: SolidFaceMesh): SolidFrame {
   const origin = face.world[0] ?? vec(0, 0, 0)
   const second = face.world[1] ?? origin

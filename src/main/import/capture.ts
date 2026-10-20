@@ -18,7 +18,6 @@ export class CaptureManager {
   private window: BrowserWindow | null = null
   private lastError: string | null = null
   private lastBoardName = ''
-  private title = ''
   private url = ''
 
   constructor(

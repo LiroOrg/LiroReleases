@@ -220,6 +220,11 @@ export function parseRichText(html: string): Block[] {
     const done = stack.pop()!
     flushBlock(done)
   }
+  if (!blocks.length) {
+    const text = decodeEntities(source).replace(/\u00a0/g, ' ').trim()
+    if (text) return [{ type: 'p', level: 1, runs: [{ text }] }]
+    return []
+  }
   const cleaned = blocks
     .map((b) => ({ ...b, runs: b.runs.filter((r) => r.text.length > 0) }))
     .filter((b) => b.runs.length > 0)

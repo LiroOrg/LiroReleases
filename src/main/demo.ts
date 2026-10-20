@@ -82,6 +82,12 @@ export function seedDemoBoard(existingId?: string): string {
       style: { color: '#71717a', fontSize: '22', textAlign: 'center', fontFamily: 'open_sans' },
       data: { content: '<p>Стикеры, фигуры, связи, рамки, картинки и таблицы</p>' }
     },
+    ...cluster(
+      -1900,
+      -850,
+      ['light_yellow', 'light_blue', 'light_green'],
+      ['Починить загрузку картинок', 'Сделать поиск по доске', 'Собрать отчёт за неделю']
+    ),
     {
       id: 'demo_shape_rect',
       type: 'shape',

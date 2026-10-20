@@ -14,7 +14,6 @@ import {
 } from 'lucide-react'
 import type { BoardMeta } from '@shared/types'
 import { formatDate } from '@shared/util'
-import logo from '../../../../resources/icon-256.png'
 import { api } from '../lib/api'
 import { createBoardFromClipboard } from '../lib/paste'
 import { useApp } from '../lib/store'
@@ -210,6 +209,24 @@ export function Home(props: { onFail: (text: string) => void }): ReactNode {
             <span className="act__body">
               <span className="act__title">Все доски</span>
               <span className="act__text">Поиск, папки, архив</span>
+            </span>
+          </button>
+          <button type="button" className="act" onClick={() => void pasteClipboard()} disabled={busy === 'clip'}>
+            <span className="act__icon">
+              <ClipboardPaste size={18} />
+            </span>
+            <span className="act__body">
+              <span className="act__title">Вставить из буфера</span>
+              <span className="act__text">Объекты скопированной доски</span>
+            </span>
+          </button>
+          <button type="button" className="act" onClick={() => void openFile()} disabled={busy === 'file'}>
+            <span className="act__icon">
+              <FileUp size={18} />
+            </span>
+            <span className="act__body">
+              <span className="act__title">Открыть файл</span>
+              <span className="act__text">Доска из файла на диске</span>
             </span>
           </button>
         </div>

@@ -5,6 +5,7 @@ import type {
   BoardDoc,
   BoardItem,
   BoardMeta,
+  BoardWorkspace,
   ExportOptions,
   ExportResult,
   LibraryIndex,
@@ -44,6 +45,7 @@ export const api = {
   board: {
     open: (docId: string) => unwrap<BoardDoc>(window.liro.api.boardOpen(docId)),
     create: (title: string, projectId?: string) => unwrap<BoardDoc>(window.liro.api.boardCreate(title, projectId)),
+    createSession: (title: string) => unwrap<BoardDoc>(window.liro.api.boardCreateSession(title)),
     rename: (docId: string, title: string) => unwrap<BoardMeta>(window.liro.api.boardRename(docId, title)),
     update: (docId: string, patch: Partial<BoardMeta>) =>
       unwrap<BoardMeta>(window.liro.api.boardUpdate(docId, patch as never)),
@@ -66,7 +68,11 @@ export const api = {
     pasteItems: (payload: { docId: string; sourceDocId: string; items: BoardItem[] }) =>
       unwrap<{ added: number }>(window.liro.api.boardPasteItems(payload)),
     openSource: (docId: string) => unwrap(window.liro.api.boardLinkToSource(docId)),
-    assetUrl: (docId: string, file: string) => unwrap<string>(window.liro.api.assetUrl(docId, file))
+    assetUrl: (docId: string, file: string) => unwrap<string>(window.liro.api.assetUrl(docId, file)),
+    workspace: {
+      get: (docId: string) => unwrap<BoardWorkspace>(window.liro.api.boardWorkspaceGet(docId)),
+      set: (docId: string, patch: BoardWorkspace) => unwrap<boolean>(window.liro.api.boardWorkspaceSet(docId, patch))
+    }
   },
   project: {
     create: (name: string) => unwrap<Project>(window.liro.api.projectCreate(name)),
@@ -110,6 +116,7 @@ export const api = {
   clipboard: {
     readHtml: () => unwrap<string>(window.liro.api.clipboardReadHtml()),
     writeHtml: (html: string, text: string) => unwrap(window.liro.api.clipboardWriteHtml(html, text)),
+    writeText: (text: string) => unwrap(window.liro.api.clipboardWriteText(text)),
     writeImage: (dataUrl: string) => unwrap(window.liro.api.clipboardWriteImage(dataUrl)),
     readImage: () => unwrap<string>(window.liro.api.clipboardReadImage())
   },
@@ -139,6 +146,15 @@ export const api = {
   update: {
     check: () => unwrap(window.liro.api.updateCheck()),
     apply: () => unwrap(window.liro.api.updateApply())
+  },
+  live: {
+    hostCreate: (offer: string, code?: string) => unwrap<string>(window.liro.api.liveHostCreate(offer, code)),
+    hostCode: () => unwrap<string>(window.liro.api.liveHostCode()),
+    hostWait: (code: string) => unwrap<string | null>(window.liro.api.liveHostWait(code)),
+    hostCleanup: (code: string) => unwrap<boolean>(window.liro.api.liveHostCleanup(code)),
+    guestFetch: (code: string) => unwrap<string | null>(window.liro.api.liveGuestFetch(code)),
+    guestAnswer: (code: string, answer: string) => unwrap<boolean>(window.liro.api.liveGuestAnswer(code, answer)),
+    pendingCode: () => unwrap<string>(window.liro.api.livePendingCode())
   },
   shell: {
     open: (url: string) => unwrap(window.liro.api.openExternal(url)),

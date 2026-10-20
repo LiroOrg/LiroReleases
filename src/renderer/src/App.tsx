@@ -14,6 +14,7 @@ import { Library } from './screens/Library'
 import { SettingsScreen } from './screens/Settings'
 import { PreviewScreen } from './screens/Preview'
 import { About } from './screens/About'
+import { JoinScreen } from './screens/Join'
 import { WindowFrame } from './components/windowFrame'
 import { FolderTree } from './components/folderTree'
 import { api } from './lib/api'
@@ -31,7 +32,7 @@ async function pasteIntoNewBoard(html: string, text: string, toast: (text: strin
       fail('Не удалось разобрать данные из буфера')
       return
     }
-    toast(`Данные из буфера — новая доска, объектов: ${result.items}`, 'board')
+    toast('Данные из буфера — создана новая доска', 'board')
     navigate({ name: 'board', docId: result.id })
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error))
@@ -73,6 +74,9 @@ export function App(): ReactNode {
       window.dispatchEvent(new CustomEvent('liro:board-command', { detail: String(payload) }))
     })
     const offToast = window.liro.subscribe('toast', (payload) => toast(payload.text, payload.kind))
+    const offJoin = window.liro.subscribe('live:join', (code) => {
+      navigate({ name: 'join', code })
+    })
     let downloadToast = ''
     let version = ''
     const offUpdate = window.liro.subscribe('update:status', (payload) => {
@@ -114,8 +118,23 @@ export function App(): ReactNode {
       offCommand()
       offToast()
       offUpdate()
+      offJoin()
     }
   }, [setLibrary, setSettings, setCapture, setProgress, toast, patchToast])
+
+  useEffect(() => {
+    let alive = true
+    void api.live
+      .pendingCode()
+      .then((code) => {
+        if (!alive || !code) return
+        navigate({ name: 'join', code })
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
 
   useEffect(() => {
     const onPaste = (event: ClipboardEvent): void => {
@@ -133,6 +152,8 @@ export function App(): ReactNode {
   if (window.location.hash.replace(/^#/, '').startsWith('/render')) return <RenderMode />
 
   if (parseRoute(window.location.hash).name === 'preview') return <PreviewScreen />
+
+  if (route.name === 'join') return <JoinScreen code={route.code} />
 
   if (!ready) {
     return (

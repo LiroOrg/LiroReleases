@@ -14,7 +14,7 @@ const FORMATS: Array<{ id: ExportOptions['format']; title: string; text: string 
   { id: 'svg', title: 'SVG', text: 'Векторная картинка: открывается в браузере, Иллюстраторе и Inkscape.' }
 ]
 
-export function ExportDialog(props: { doc: BoardDoc; onClose: () => void }): ReactNode {
+export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?: () => Promise<void> }): ReactNode {
   const toast = useApp((state) => state.toast)
   const fail = useApp((state) => state.fail)
   const [format, setFormat] = useState<ExportOptions['format']>('png')
@@ -57,6 +57,7 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void }): Rea
   const run = async (saveAs: boolean): Promise<void> => {
     setBusy(true)
     try {
+      await props.flush?.()
       const result = saveAs
         ? await api.board.exportSaveAs(buildOptions())
         : await api.board.export(buildOptions())
