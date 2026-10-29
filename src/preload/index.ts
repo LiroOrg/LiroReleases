@@ -30,6 +30,7 @@ const api: ApiLiro = {
   boardWorkspaceGet: (docId) => invoke('board:workspace-get', docId),
   boardWorkspaceSet: (docId, patch) => invoke('board:workspace-set', docId, patch),
   assetUrl: (docId, file) => invoke('asset:url', docId, file),
+  assetData: (docId, file) => invoke('asset:data', docId, file),
   assetMissing: (docId) => invoke('asset:missing', docId),
 
   projectCreate: (name) => invoke('project:create', name),

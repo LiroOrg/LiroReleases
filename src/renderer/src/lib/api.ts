@@ -69,6 +69,7 @@ export const api = {
       unwrap<{ added: number }>(window.liro.api.boardPasteItems(payload)),
     openSource: (docId: string) => unwrap(window.liro.api.boardLinkToSource(docId)),
     assetUrl: (docId: string, file: string) => unwrap<string>(window.liro.api.assetUrl(docId, file)),
+    assetData: (docId: string, file: string) => unwrap<string | null>(window.liro.api.assetData(docId, file)),
     workspace: {
       get: (docId: string) => unwrap<BoardWorkspace>(window.liro.api.boardWorkspaceGet(docId)),
       set: (docId: string, patch: BoardWorkspace) => unwrap<boolean>(window.liro.api.boardWorkspaceSet(docId, patch))

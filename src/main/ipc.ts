@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ClipboardItem, clipboard, dialog, ipcMain, nativeImage, net, shell } from 'electron'
 import type { NativeImage } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { IpcResult } from '@shared/api'
 import type {
@@ -24,7 +24,7 @@ import { importFromApi, listBoards, type SourceBoardSummary } from './import/api
 import { buildDoc, buildStats, assetsBytesOf, commitDoc, persistInlineAssets } from './import/commit'
 import { exportBoard, exportToPath } from './export/exporter'
 import { exportFolder } from './export/render'
-import { openPreview, previewFor, readPreviewText, toLocalPath, type PreviewPayload } from './preview'
+import { openPreview, previewFor, readPreviewText, type PreviewPayload } from './preview'
 import { askToRestart, checkForUpdate } from './updater'
 import { sanitizeFileName } from '@shared/util'
 import type { RawItem } from './import/normalize'
@@ -118,6 +118,24 @@ async function fetchImage(url: string): Promise<{ dataUrl: string; mime: string;
   if (buffer.length > IMAGE_LIMIT) throw new Error('Картинка слишком большая')
   const mime = type || 'image/png'
   return { dataUrl: `data:${mime};base64,${buffer.toString('base64')}`, mime, name: nameFromUrl(value) }
+}
+
+const ASSET_SHARE_LIMIT = 12 * 1024 * 1024
+
+function readAssetDataUrl(docId: string, file: string): string | null {
+  const safeName = file.split('/').pop() ?? file
+  if (!docId || !safeName || safeName.includes('..')) return null
+  const assetFile = join(assetsDir(docId), safeName)
+  const docFile = join(docDir(docId), safeName)
+  const target = existsSync(assetFile) ? assetFile : existsSync(docFile) ? docFile : null
+  if (!target) return null
+  try {
+    if (statSync(target).size > ASSET_SHARE_LIMIT) return null
+    const ext = safeName.split('.').pop()?.toLowerCase() ?? ''
+    return `data:${extensionToMime(ext)};base64,${readFileSync(target).toString('base64')}`
+  } catch {
+    return null
+  }
 }
 
 export function registerIpc(): void {
@@ -284,6 +302,7 @@ export function registerIpc(): void {
     return ok(url)
   })
   ipcMain.handle('asset:url', (_e, docId: string, file: string) => ok(assetUrl(docId, file)))
+  ipcMain.handle('asset:data', (_e, docId: string, file: string) => ok(readAssetDataUrl(docId, file)))
   ipcMain.handle('asset:missing', (_e, docId: string) => ok(store.boards().length > 0 && !indexFile().length ? true : false))
   ipcMain.handle('board:workspace-get', (_e, docId: string) => ok(readJson<BoardWorkspace>(workspaceFile(docId), {})))
   ipcMain.handle('board:workspace-set', (_e, docId: string, patch: BoardWorkspace) => {
@@ -678,7 +697,7 @@ export function registerIpc(): void {
     return ok(previewFor(BrowserWindow.fromWebContents(event.sender)))
   })
   ipcMain.handle('preview:text', (_event, file: string) => {
-    return ok(readPreviewText(toLocalPath(file)))
+    return ok(readPreviewText(file))
   })
   ipcMain.handle('image:fetch', async (_event, url: string) => {
     try {

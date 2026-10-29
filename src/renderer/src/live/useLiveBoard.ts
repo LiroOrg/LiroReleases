@@ -17,6 +17,8 @@ export interface LiveBoardBridge {
   connected: boolean
   canEdit: boolean
   preparing: boolean
+  watching: boolean
+  following: boolean
   cursors: RemoteCursor[]
   preview: LivePreview | null
   startHost: (doc: BoardDoc) => Promise<void>
@@ -25,11 +27,12 @@ export interface LiveBoardBridge {
   leaveAndCleanup: () => void
   togglePermission: (canEdit: boolean) => void
   pullPartner: (viewport: { x: number; y: number; zoom: number }) => void
+  watchPartner: () => void
+  stopFollow: () => void
+  transferHost: () => void
   onRemoteOps: (handler: (message: LiveMessage) => void) => void
-  onRemoteViewport: (handler: (viewport: { x: number; y: number; zoom: number }) => void) => void
+  onRemoteViewport: (handler: (viewport: { x: number; y: number; zoom: number; ask?: boolean }) => void) => void
   onRemoteChunk: (handler: (id: string, payload: string) => void) => void
-  onRemoteSelection: (handler: (ids: string[]) => void) => void
-  sendSelection: (ids: string[]) => void
   sendCursor: (x: number, y: number) => void
   sendPreview: (preview: LivePreview) => void
   clearRemotePreview: () => void
@@ -53,13 +56,14 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
   const [connected, setConnected] = useState(false)
   const [canEdit, setCanEdit] = useState(false)
   const [preparing, setPreparing] = useState(false)
+  const [watching, setWatching] = useState(false)
+  const [following, setFollowing] = useState(false)
   const [cursors, setCursors] = useState<RemoteCursor[]>([])
   const [preview, setPreview] = useState<LivePreview | null>(null)
   const sessionRef = useRef<LiveSession | null>(null)
   const opsHandlerRef = useRef<((message: LiveMessage) => void) | null>(null)
   const chunkHandlerRef = useRef<((id: string, payload: string) => void) | null>(null)
-  const viewportHandlerRef = useRef<((viewport: { x: number; y: number; zoom: number }) => void) | null>(null)
-  const selectionHandlerRef = useRef<((ids: string[]) => void) | null>(null)
+  const viewportHandlerRef = useRef<((viewport: { x: number; y: number; zoom: number; ask?: boolean }) => void) | null>(null)
   const cursorTimerRef = useRef<number | null>(null)
   const pendingCursorRef = useRef<{ x: number; y: number; hidden: boolean } | null>(null)
   const selfIdRef = useRef(randomId())
@@ -75,6 +79,18 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       viewportHandlerRef.current?.(message)
       return
     }
+    if (message.t === 'watch') {
+      setWatching(message.on)
+      return
+    }
+    if (message.t === 'handover') {
+      roleRef.current = 'host'
+      setRole('host')
+      canEditRef.current = true
+      sessionRef.current?.applyHandover('host')
+      toast('Вы теперь ведущий совместной сессии', 'success')
+      return
+    }
     if (message.t === 'chunk') {
       chunkHandlerRef.current?.(message.id, message.payload)
       return
@@ -83,12 +99,8 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       setPreview(message.kind === 'clear' ? null : message)
       return
     }
-    if (message.t === 'select') {
-      selectionHandlerRef.current?.(message.ids)
-      return
-    }
     opsHandlerRef.current?.(message)
-  }, [])
+  }, [toast])
 
   const createSession = useCallback(
     (role: LiveRole): LiveSession => {
@@ -109,6 +121,8 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
             setPartner(null)
             setCursors([])
             setPreview(null)
+            setWatching(false)
+            setFollowing(false)
           }
         },
         onCursor: (cursor) => {
@@ -120,7 +134,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
         },
         onParticipant: (value) => setPartner(value),
         onPermission: (value) => {
-          setCanEdit(role === 'guest' ? value : canEditRef.current)
+          setCanEdit(roleRef.current === 'guest' ? value : canEditRef.current)
         }
       })
       sessionRef.current = session
@@ -218,6 +232,8 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
     setCanEdit(false)
     setPreparing(false)
     setCursors([])
+    setWatching(false)
+    setFollowing(false)
     if (cursorTimerRef.current !== null) {
       window.clearInterval(cursorTimerRef.current)
       cursorTimerRef.current = null
@@ -245,6 +261,30 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
     sessionRef.current?.sendOps({ t: 'viewport', x: viewport.x, y: viewport.y, zoom: viewport.zoom })
   }, [])
 
+  const watchPartner = useCallback((): void => {
+    const session = sessionRef.current
+    if (!session || !session.isConnected) return
+    setFollowing(true)
+    session.sendOps({ t: 'watch', on: true })
+    session.sendOps({ t: 'viewport', x: 0, y: 0, zoom: 0, ask: true })
+  }, [])
+
+  const stopFollow = useCallback((): void => {
+    setFollowing(false)
+    sessionRef.current?.sendOps({ t: 'watch', on: false })
+  }, [])
+
+  const transferHost = useCallback((): void => {
+    const session = sessionRef.current
+    if (!session || !session.isConnected) return
+    session.sendOps({ t: 'handover', hostId: selfIdRef.current, hostName: session.selfName })
+    roleRef.current = 'guest'
+    setRole('guest')
+    canEditRef.current = true
+    session.applyHandover('guest')
+    toast('Ведущим стал партнёр', 'info')
+  }, [toast])
+
   const onRemoteOps = useCallback((handler: (message: LiveMessage) => void): void => {
     opsHandlerRef.current = handler
   }, [])
@@ -255,14 +295,6 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
 
   const onRemoteChunk = useCallback((handler: (id: string, payload: string) => void): void => {
     chunkHandlerRef.current = handler
-  }, [])
-
-  const onRemoteSelection = useCallback((handler: (ids: string[]) => void): void => {
-    selectionHandlerRef.current = handler
-  }, [])
-
-  const sendSelection = useCallback((ids: string[]): void => {
-    sessionRef.current?.sendLive({ t: 'select', ids })
   }, [])
 
   const sendCursor = useCallback((x: number, y: number): void => {
@@ -330,6 +362,8 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       connected,
       canEdit,
       preparing,
+      watching,
+      following,
       cursors,
       preview,
       startHost,
@@ -338,11 +372,12 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       leaveAndCleanup,
       togglePermission,
       pullPartner,
+      watchPartner,
+      stopFollow,
+      transferHost,
       onRemoteOps,
       onRemoteViewport,
       onRemoteChunk,
-      onRemoteSelection,
-      sendSelection,
       sendCursor,
       sendPreview,
       clearRemotePreview,
@@ -358,6 +393,8 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       connected,
       canEdit,
       preparing,
+      watching,
+      following,
       cursors,
       preview,
       startHost,
@@ -366,11 +403,12 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       leaveAndCleanup,
       togglePermission,
       pullPartner,
+      watchPartner,
+      stopFollow,
+      transferHost,
       onRemoteOps,
       onRemoteViewport,
       onRemoteChunk,
-      onRemoteSelection,
-      sendSelection,
       sendCursor,
       sendPreview,
       clearRemotePreview,

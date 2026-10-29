@@ -48,7 +48,7 @@ export interface LiveSessionOptions {
 }
 
 export class LiveSession {
-  readonly role: 'host' | 'guest'
+  private currentRole: 'host' | 'guest'
   readonly selfId: string
   readonly selfName: string
   private readonly options: LiveSessionOptions
@@ -75,7 +75,7 @@ export class LiveSession {
 
   constructor(options: LiveSessionOptions) {
     this.options = options
-    this.role = options.role
+    this.currentRole = options.role
     this.selfId = options.selfId
     this.selfName = options.selfName
   }
@@ -88,13 +88,17 @@ export class LiveSession {
     return this.closed
   }
 
+  get role(): 'host' | 'guest' {
+    return this.currentRole
+  }
+
   get partner(): LiveParticipant | null {
     if (!this.partnerId) return null
     return {
       id: this.partnerId,
       name: this.partnerName,
       color: colorForId(this.partnerId),
-      canEdit: this.role === 'host' ? this.canEdit : !this.partnerIsHost,
+      canEdit: this.currentRole === 'host' ? this.canEdit : !this.partnerIsHost,
       host: this.partnerIsHost
     }
   }
@@ -105,6 +109,15 @@ export class LiveSession {
 
   get remoteCursors(): RemoteCursor[] {
     return [...this.cursors.values()]
+  }
+
+  applyHandover(role: 'host' | 'guest'): void {
+    this.currentRole = role
+    this.partnerIsHost = role === 'guest'
+    this.canEdit = true
+    const partner = this.partner
+    if (partner) this.options.onParticipant(partner)
+    this.options.onPermission(true)
   }
 
   async createOffer(): Promise<string> {
@@ -154,7 +167,7 @@ export class LiveSession {
       if (pc.iceConnectionState === 'failed') this.close()
     }
     pc.ondatachannel = (event) => this.bindChannel(event.channel)
-    if (this.role === 'host') {
+    if (this.currentRole === 'host') {
       this.bindChannel(pc.createDataChannel('liro-live', { ordered: false, maxRetransmits: 0 }))
       this.bindChannel(pc.createDataChannel('liro-ops', { ordered: true }))
     }
@@ -182,7 +195,7 @@ export class LiveSession {
     else this.opsChannel = channel
     channel.onopen = () => {
       this.markConnected()
-      this.sendOps({ t: 'hello', id: this.selfId, name: this.selfName, color: colorForId(this.selfId), host: this.role === 'host' })
+      this.sendOps({ t: 'hello', id: this.selfId, name: this.selfName, color: colorForId(this.selfId), host: this.currentRole === 'host' })
     }
     channel.onmessage = (event) => this.receive(String(event.data))
     channel.onclose = () => this.close()
@@ -352,7 +365,7 @@ export class LiveSession {
   }
 
   get partnerCanEdit(): boolean {
-    return this.role === 'host' ? this.canEdit : !this.partnerIsHost
+    return this.currentRole === 'host' ? this.canEdit : !this.partnerIsHost
   }
 
   private startPing(): void {

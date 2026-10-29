@@ -18,7 +18,8 @@ const DEFAULT_SETTINGS: Settings = {
   exportBackground: 'white',
   imageQuality: 'original',
   uiScale: 1,
-  toolbarPins: [],
+  toolbarOrder: [],
+  toolbarExtras: [],
   captureToken: ''
 }
 

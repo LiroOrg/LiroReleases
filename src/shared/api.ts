@@ -112,6 +112,7 @@ export interface ApiLiro {
   boardWorkspaceGet: (docId: string) => Promise<IpcResult<BoardWorkspace>>
   boardWorkspaceSet: (docId: string, patch: BoardWorkspace) => Promise<IpcResult<boolean>>
   assetUrl: (docId: string, file: string) => Promise<IpcResult<string>>
+  assetData: (docId: string, file: string) => Promise<IpcResult<string | null>>
   assetMissing: (docId: string) => Promise<IpcResult<boolean>>
 
   projectCreate: (name: string) => Promise<IpcResult<Project>>

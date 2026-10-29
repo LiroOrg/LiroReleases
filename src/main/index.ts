@@ -331,6 +331,12 @@ if (!app.requestSingleInstanceLock()) {
       console.error('collector server', error)
     }
     session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+    session.defaultSession.webRequest.onBeforeSendHeaders(
+      { urls: ['*://*.youtube.com/*', '*://*.youtube-nocookie.com/*'] },
+      (details, callback) => {
+        callback({ requestHeaders: { ...details.requestHeaders, Referer: 'https://liro.app/' } })
+      }
+    )
     const launchLink = linkFromArgv(process.argv)
     if (launchLink) setPendingLink(launchLink)
     createWindow()

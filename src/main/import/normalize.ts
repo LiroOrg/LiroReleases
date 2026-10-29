@@ -409,16 +409,20 @@ function normalizeOne(raw: RawItem, index: number): BoardItem | null {
       const url = str(pick(data.imageUrl, data.url, data.src, raw.imageUrl, raw.url), '')
       const resourceId = str(pick(data.resourceId, resource.id, raw.resourceId), '')
       const alt = str(pick(data.altText, data.alt, raw.altText), str(pick(data.title, raw.title), ''))
+      const naturalW = num(pick(resource.width, data.naturalWidth), 0)
+      const naturalH = num(pick(resource.height, data.naturalHeight), 0)
       const crop = data.crop as { x?: number; y?: number; width?: number; height?: number } | undefined
       const cropX = num(crop?.x, 0)
       const cropY = num(crop?.y, 0)
+      const cropW = num(pick(crop?.width, naturalW), 0)
+      const cropH = num(pick(crop?.height, naturalH), 0)
       const cropBox =
-        crop && (cropX > 0 || cropY > 0)
+        crop && naturalW > 0 && naturalH > 0 && (cropX > 0 || cropY > 0)
           ? {
-              top: cropY,
-              left: cropX,
-              right: Math.max(0, num(resource.width, num(crop?.width, 0)) - cropX - num(crop?.width, 0)),
-              bottom: Math.max(0, num(resource.height, num(crop?.height, 0)) - cropY - num(crop?.height, 0))
+              top: clamp01(cropY / naturalH),
+              left: clamp01(cropX / naturalW),
+              right: clamp01((naturalW - cropX - cropW) / naturalW),
+              bottom: clamp01((naturalH - cropY - cropH) / naturalH)
             }
           : undefined
       const asset = url || resourceId
@@ -428,8 +432,8 @@ function normalizeOne(raw: RawItem, index: number): BoardItem | null {
             bytes: 0,
             sourceUrl: url || undefined,
             sourceId: resourceId || undefined,
-            width: num(pick(resource.width, data.naturalWidth), 0) || undefined,
-            height: num(pick(resource.height, data.naturalHeight), 0) || undefined,
+            width: naturalW || undefined,
+            height: naturalH || undefined,
             local: false
           }
         : undefined

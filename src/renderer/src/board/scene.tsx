@@ -6,10 +6,13 @@ import type { BoardDoc, BoardItem, Rect, SolidItem } from '@shared/types'
 import { curvePath } from '@shared/curve'
 import { rotatedBox } from '@shared/util'
 import { solidBounds } from '@shared/three'
+import { youtubeId } from '../lib/youtube'
+import type { MediaBridge } from '../live/mediaSync'
 import { TableView } from './tableView'
 import { shapePath, strokeDash } from './shapes'
 import { SolidView } from './solidView'
 import { GraphView } from './graphView'
+import { YouTubePlayer } from './videoPlayer'
 
 const solidBoxCache = new WeakMap<SolidItem, Rect>()
 
@@ -195,6 +198,9 @@ export const ItemLayer = memo(function ItemLayer(props: {
   onPointerDown?: (id: string, event: React.PointerEvent) => void
   onDoubleClick?: (id: string) => void
   onLink?: (href: string) => void
+  media?: MediaBridge
+  livePos?: Map<string, { x: number; y: number }>
+  cropId?: string | null
 }): ReactNode {
   return (
     <>
@@ -214,6 +220,9 @@ export const ItemLayer = memo(function ItemLayer(props: {
           onPointerDown={props.interactive && !item.locked ? props.onPointerDown : undefined}
           onDoubleClick={props.onDoubleClick}
           onLink={props.onLink}
+          media={props.media}
+          live={props.livePos?.get(item.id)}
+          cropping={props.cropId === item.id}
         />
       ))}
     </>
@@ -234,15 +243,19 @@ export const ItemView = memo(function ItemView(props: {
   onPointerDown?: (id: string, event: React.PointerEvent) => void
   onDoubleClick?: (id: string) => void
   onLink?: (href: string) => void
+  media?: MediaBridge
+  live?: { x: number; y: number }
+  cropping?: boolean
 }): ReactNode {
   const { item, doc, assetUrl, selected, dimmed } = props
   const style: CSSProperties = {
-    left: item.x,
-    top: item.y,
+    left: props.live?.x ?? item.x,
+    top: props.live?.y ?? item.y,
     width: Math.max(1, item.w),
     height: Math.max(1, item.h),
     transform: item.rotation ? `rotate(${item.rotation}deg)` : undefined,
-    zIndex: item.z + 1
+    zIndex: item.z + 1,
+    visibility: props.cropping ? 'hidden' : undefined
   }
   const classes = ['boarditem']
   if (selected) classes.push(props.moving ? 'boarditem--moving' : 'boarditem--selected')
@@ -274,6 +287,7 @@ export const ItemView = memo(function ItemView(props: {
         editing={props.editingId === item.id}
         onPatch={props.onPatch}
         onLink={props.onLink}
+        media={props.media}
       />
     </div>
   )
@@ -288,6 +302,7 @@ function ItemBody(props: {
   editing?: boolean
   onPatch?: (id: string, patch: Partial<BoardItem>) => void
   onLink?: (href: string) => void
+  media?: MediaBridge
 }): ReactNode {
   const { item, assetUrl } = props
   switch (item.kind) {
@@ -331,7 +346,7 @@ function ItemBody(props: {
           }}
         >
           {item.content && !props.editing ? (
-            <RichText html={item.content} style={{ fontSize: 'inherit', textAlign: 'inherit' }} onLink={props.onLink} />
+            <RichText html={item.content} style={{ fontSize: 'inherit', textAlign: 'inherit', height: 'auto' }} onLink={props.onLink} />
           ) : null}
         </div>
       )
@@ -394,7 +409,7 @@ function ItemBody(props: {
                 pointerEvents: 'none'
               }}
             >
-              <RichText html={item.content} style={{ color: textColor, fontSize: size, textAlign: item.textAlign, width: '100%' }} onLink={props.onLink} />
+              <RichText html={item.content} style={{ color: textColor, fontSize: size, textAlign: item.textAlign, width: '100%', height: 'auto' }} onLink={props.onLink} />
             </div>
           ) : null}
         </>
@@ -417,7 +432,30 @@ function ItemBody(props: {
           </div>
         )
       }
-      return (
+      const crop = item.crop
+      const fx = crop ? Math.max(0.02, 1 - crop.left - crop.right) : 1
+      const fy = crop ? Math.max(0.02, 1 - crop.top - crop.bottom) : 1
+      const trimmed = !!crop && (fx < 0.995 || fy < 0.995)
+      return trimmed ? (
+        <div className="boarditem__imagebox">
+          <img
+            className="boarditem__image"
+            src={asset?.file ? assetUrl(asset.file) : direct}
+            alt={item.alt || item.title || ''}
+            style={{
+              opacity: item.opacity,
+              width: `${100 / fx}%`,
+              height: `${100 / fy}%`,
+              objectFit: 'fill',
+              marginLeft: `${(-crop.left / fx) * 100}%`,
+              marginTop: `${(-crop.top / fy) * 100}%`
+            }}
+            draggable={false}
+            decoding="async"
+            loading="lazy"
+          />
+        </div>
+      ) : (
         <img
           className="boarditem__image"
           src={asset?.file ? assetUrl(asset.file) : direct}
@@ -469,6 +507,9 @@ function ItemBody(props: {
       )
     }
     case 'embed': {
+      const media = props.media
+      const video = media ? youtubeId(item.url) : ''
+      if (media && video) return <YouTubePlayer video={video} media={media} interactive={props.selected === true} />
       const image = item.asset?.file ? (
         <img src={assetUrl(item.asset.file)} alt={item.title} className="boarditem__image boarditem__image--contain" decoding="async" loading="lazy" />
       ) : null
@@ -496,6 +537,9 @@ function ItemBody(props: {
       )
     }
     case 'video': {
+      const media = props.media
+      const video = media ? youtubeId(item.url) : ''
+      if (media && video) return <YouTubePlayer video={video} media={media} interactive={props.selected === true} />
       return (
         <div className="boarditem__placeholder" style={{ flexDirection: 'column', gap: 6 }}>
           <span style={{ fontSize: 22 }}>▶</span>

@@ -196,6 +196,7 @@ interface WidgetInfo {
   json: WidgetJson
   style: StyleMap
   box: WidgetBox
+  origin: SourcePoint
   center: SourcePoint
   width: number
   height: number
@@ -727,9 +728,9 @@ function readSize(json: WidgetJson, widgetType: string): [number, number] {
 }
 
 function widgetScale(json: WidgetJson): number {
+  const absolute = numOr(asRecord(json.scale).scale)
   const relative = numOr(json.relativeScale)
-  const scale = numOr(asRecord(json.scale).scale)
-  const value = relative ?? scale ?? 1
+  const value = absolute ?? relative ?? 1
   return value > 0 ? value : 1
 }
 
@@ -742,12 +743,12 @@ interface WidgetBox {
   topLeft: boolean
 }
 
-function widgetBox(json: WidgetJson, widgetType: string): WidgetBox {
+function widgetBox(json: WidgetJson, widgetType: string, origin?: SourcePoint): WidgetBox {
   const scale = widgetScale(json)
   const [baseWidth, baseHeight] = readSize(json, widgetType)
   const offset = asRecord(asRecord(json._position).offsetPx)
-  const offsetX = numOr(offset.x)
-  const offsetY = numOr(offset.y)
+  const offsetX = origin ? origin.x : numOr(offset.x)
+  const offsetY = origin ? origin.y : numOr(offset.y)
   if (offsetX !== undefined && offsetY !== undefined) {
     return {
       x: offsetX,
@@ -767,8 +768,8 @@ function widgetBox(json: WidgetJson, widgetType: string): WidgetBox {
   return { x: 0, y: 0, width: baseWidth, height: baseHeight, scale: 1, topLeft: true }
 }
 
-function strokeBox(widgetType: string, json: WidgetJson): WidgetBox {
-  const base = widgetBox(json, widgetType)
+function strokeBox(widgetType: string, json: WidgetJson, origin?: SourcePoint): WidgetBox {
+  const base = widgetBox(json, widgetType, origin)
   if (widgetType !== 'paint' && widgetType !== 'pen' && widgetType !== 'drawing') return base
   const scale = base.scale
   const points = readPoints(json.points).map((point) => ({ x: point.x * scale, y: point.y * scale }))
@@ -843,8 +844,8 @@ function connectorGeometry(info: WidgetInfo, byObjectId: Map<number, WidgetInfo>
   const primary = readAnchor(info.json.primary)
   const secondary = readAnchor(info.json.secondary)
   const waypoints = readPoints(info.json.points).map((point) => ({
-    x: point.x + info.center.x,
-    y: point.y + info.center.y
+    x: point.x + info.origin.x,
+    y: point.y + info.origin.y
   }))
   let start = anchorToWorld(primary, byObjectId) ?? waypoints[0] ?? { x: info.center.x, y: info.center.y }
   let end = anchorToWorld(secondary, byObjectId) ?? waypoints[waypoints.length - 1] ?? start
@@ -858,7 +859,8 @@ function connectorGeometry(info: WidgetInfo, byObjectId: Map<number, WidgetInfo>
   const box = boxOfPoints(info.points)
   info.width = box.width
   info.height = box.height
-  info.center = { x: box.x, y: box.y }
+  info.origin = { x: box.x, y: box.y }
+  info.center = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
 }
 
 function connectorAnchor(
@@ -1004,7 +1006,12 @@ function buildRawItem(info: WidgetInfo, byObjectId: Map<number, WidgetInfo>): Ra
       item.y = box.y
       item.width = box.width
       item.height = box.height
-      item.position = { x: box.x, y: box.y, origin: 'center', relativeTo: 'canvas_center' }
+      item.position = {
+        x: box.x + box.width / 2,
+        y: box.y + box.height / 2,
+        origin: 'center',
+        relativeTo: 'canvas_center'
+      }
       item.geometry = { width: box.width, height: box.height, rotation: info.rotation }
       const stroke = styleColor(info.style.lc)
       if (stroke) item.style.strokeColor = stroke
@@ -1074,6 +1081,48 @@ function uniqueId(object: ClipboardObject, used: Set<string>): string {
   return id
 }
 
+function widgetParentIndex(json: WidgetJson): number | undefined {
+  const parent = json._parent
+  if (typeof parent === 'number' && Number.isFinite(parent)) return parent
+  return numOr(asRecord(parent).index)
+}
+
+function resolveWidgetOrigins(list: ClipboardObject[]): Map<number, SourcePoint> {
+  const byId = new Map<number, ClipboardObject>()
+  for (const object of list) {
+    if (object.widgetData) byId.set(object.id, object)
+  }
+  const origins = new Map<number, SourcePoint>()
+  const visit = (object: ClipboardObject, trail: Set<number>): SourcePoint | null => {
+    const cached = origins.get(object.id)
+    if (cached) return cached
+    const json = object.widgetData?.json ?? {}
+    const position = asRecord(json._position)
+    const offset = asRecord(position.offsetPx)
+    const x = numOr(offset.x)
+    const y = numOr(offset.y)
+    if (x === undefined || y === undefined) return null
+    const parentIndex = widgetParentIndex(json)
+    const attached = str(position.schema) === 'parentOffsetPx'
+    let point = { x, y }
+    if (attached && parentIndex !== undefined && !trail.has(object.id)) {
+      const parent = byId.get(parentIndex)
+      if (parent && parent !== object) {
+        const next = new Set(trail)
+        next.add(object.id)
+        const base = visit(parent, next)
+        if (base) point = { x: base.x + x, y: base.y + y }
+      }
+    }
+    origins.set(object.id, point)
+    return point
+  }
+  for (const object of list) {
+    if (object.widgetData) visit(object, new Set())
+  }
+  return origins
+}
+
 export function clipboardObjectsToRawItems(
   objects: ClipboardObject[],
   shift?: { x: number; y: number }
@@ -1084,12 +1133,13 @@ export function clipboardObjectsToRawItems(
   const byObjectId = new Map<number, WidgetInfo>()
   const used = new Set<string>()
   const infos: WidgetInfo[] = []
+  const origins = resolveWidgetOrigins(list)
 
   for (const object of list) {
     if (!object.widgetData || object.type === GROUP_TYPE) continue
     const widgetType = str(object.widgetData.type).toLowerCase() || 'shape'
     const json = object.widgetData.json ?? {}
-    const box = strokeBox(widgetType, json)
+    const box = strokeBox(widgetType, json, origins.get(object.id))
     const width = Math.max(1, box.width)
     const height = Math.max(1, box.height)
     const info: WidgetInfo = {
@@ -1099,6 +1149,7 @@ export function clipboardObjectsToRawItems(
       json,
       style: parseStyle(json.style),
       box,
+      origin: { x: box.x - shiftX, y: box.y - shiftY },
       center: { x: box.x + width / 2 - shiftX, y: box.y + height / 2 - shiftY },
       width,
       height,
@@ -1130,7 +1181,7 @@ export function clipboardObjectsToRawItems(
   for (const info of infos) {
     const item = rawByObjectId.get(info.object.id)
     if (!item) continue
-    const parentId = numOr(info.json._parent)
+    const parentId = widgetParentIndex(info.json)
     if (parentId !== undefined && parentId !== null) {
       const parent = rawByObjectId.get(parentId)
       if (parent) item.parentId = parent.id
@@ -1370,6 +1421,58 @@ const SELF_TEST_SAMPLE = JSON.stringify({
   mixed: 'Привет, мир! 👋 你好'
 })
 
+const ANCHORED_SAMPLE: ClipboardPayload = {
+  isProtected: false,
+  boardId: 'anchored-board',
+  data: {
+    meta: {},
+    objects: [
+      {
+        type: WIDGET_TYPE,
+        id: 0,
+        initialId: '3458764687506648018',
+        widgetData: {
+          type: 'image',
+          json: {
+            _position: { offsetPx: { x: -4025.3798271710366, y: -2856.764850902663 }, schema: 'canvasOffsetPx' },
+            scale: { scale: 4.013175595583701 },
+            relativeScale: 4.013175595583701,
+            rotation: { rotation: 0 },
+            relativeRotation: 0,
+            _parent: null,
+            crop: { x: 0, y: 0, width: 343, height: 180, shape: 'custom' },
+            resource: { id: '3458764518276001096', name: 'image.png', width: 343, height: 180 }
+          }
+        }
+      },
+      {
+        type: WIDGET_TYPE,
+        id: 1,
+        initialId: '3458764687506648019',
+        widgetData: {
+          type: 'paint',
+          json: {
+            _position: { offsetPx: { x: 189.3, y: 26.5 }, schema: 'parentOffsetPx', containerType: 'CURVE_HOLDER' },
+            scale: { scale: 1 },
+            relativeScale: 0.2491792288133243,
+            rotation: { rotation: 0 },
+            relativeRotation: 0,
+            _parent: { index: 0 },
+            points: [
+              { x: 0, y: 0 },
+              { x: 80, y: 40 },
+              { x: 165.3, y: 110.2 }
+            ],
+            style: JSON.stringify({ lc: 0x1a1a1a, t: 2, lo: 1, e: 2.667 })
+          }
+        }
+      }
+    ]
+  },
+  version: DATA_VERSION,
+  host: SOURCE_HOST
+}
+
 export function selfTest(): boolean {
   try {
     if (decodePayloadString(encodePayloadString(SELF_TEST_SAMPLE)) !== SELF_TEST_SAMPLE) return false
@@ -1470,6 +1573,16 @@ export function selfTest(): boolean {
     if (str(reparsed.data.objects[0].widgetData?.json.text) !== sample.text) return false
     const reparsedRaw = clipboardObjectsToRawItems(reparsed.data.objects)
     if (reparsedRaw.length !== 1 || str(reparsedRaw[0].data.content) !== sample.text) return false
+    const anchoredRaw = clipboardObjectsToRawItems(ANCHORED_SAMPLE.data.objects)
+    if (anchoredRaw.length !== 2) return false
+    const anchoredImage = anchoredRaw[0]
+    const anchoredStroke = anchoredRaw[1]
+    if (Math.round(anchoredImage.width) !== 1377 || Math.round(anchoredImage.height) !== 722) return false
+    if (Math.round(anchoredImage.x) !== -4025 || Math.round(anchoredImage.y) !== -2857) return false
+    if (anchoredStroke.type !== 'path' || anchoredStroke.parentId !== anchoredImage.id) return false
+    if (Math.round(anchoredStroke.width) !== 165 || Math.round(anchoredStroke.height) !== 110) return false
+    if (Math.abs(anchoredStroke.position.x - -3753) > 1) return false
+    if (Math.abs(anchoredStroke.position.y - -2775) > 1) return false
     return true
   } catch {
     return false

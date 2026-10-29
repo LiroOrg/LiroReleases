@@ -500,7 +500,8 @@ export interface Settings {
   exportBackground: 'white' | 'transparent' | 'board'
   imageQuality: 'original' | 'high' | 'medium'
   uiScale: number
-  toolbarPins: string[]
+  toolbarOrder: string[]
+  toolbarExtras: string[]
   captureToken?: string
 }
 

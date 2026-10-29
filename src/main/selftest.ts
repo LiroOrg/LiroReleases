@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { linkHtml, parseRichText, toPlainText } from '@shared/richtext'
 import { normalizeItems } from './import/normalize'
 import { guessKind, previewSrc } from './preview'
+import { csvToHtml, documentFromZip, markdownToHtml, readDocumentHtml, wordDocumentToHtml } from './documentText'
 import { createZip, readZip } from './util/zip'
 import { buildStats } from './import/commit'
 import { normalizeColor, luminance } from '@shared/color'
@@ -99,6 +100,67 @@ export function runSelfTest(): SelfTestResult {
   check(results, 'предпросмотр: pdf по файлу', guessKind('file:///C:/docs/file.pdf', 'file') === 'pdf')
   check(results, 'предпросмотр: текст по файлу', guessKind('file:///C:/docs/notes.md', 'file') === 'text')
   check(results, 'предпросмотр: видео по файлу', guessKind('file:///C:/docs/clip.mp4', 'file') === 'media')
+
+  const wordXml =
+    '<w:document><w:body>' +
+    '<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>Заголовок &amp; точка</w:t></w:r></w:p>' +
+    '<w:p><w:r><w:t>Строка один</w:t></w:r><w:r><w:tab/><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">&lt;таб&gt;</w:t></w:r></w:p>' +
+    '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/></w:numPr></w:pPr><w:r><w:t>Пункт</w:t></w:r></w:p>' +
+    '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/></w:numPr></w:pPr><w:r><w:t>Ещё пункт</w:t></w:r></w:p>' +
+    '<w:p><w:r><w:t><script>alert(1)</script></w:t></w:r></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Ячейка</w:t></w:r></w:p></w:tc></w:tr></w:tbl>' +
+    '</w:body></w:document>'
+  const wordHtml = wordDocumentToHtml(wordXml)
+  check(results, 'документ: стиль заголовка и жирный', wordHtml.includes('<h3><strong>Заголовок &amp; точка</strong></h3>'), wordHtml)
+  check(results, 'документ: табуляция и курсив', wordHtml.includes('<em>\t&lt;таб&gt;</em>'))
+  check(results, 'документ: список соседних пунктов', wordHtml.includes('<ul class="doc-ul"><li>Пункт</li><li>Ещё пункт</li></ul>'))
+  check(results, 'документ: таблица', wordHtml.includes('<td>Ячейка</td>'))
+  check(results, 'документ: разметка из файла не исполняется', !wordHtml.includes('<script'))
+
+  const docxDir = mkdtempSync(join(tmpdir(), 'liro-doc-'))
+  try {
+    const docxFile = join(docxDir, 'документ.docx')
+    writeFileSync(docxFile, createZip([{ name: 'word/document.xml', data: Buffer.from(wordXml, 'utf8') }]))
+    check(results, 'документ: чтение docx целиком', (readDocumentHtml(docxFile) ?? '').includes('<td>Ячейка</td>'))
+    check(results, 'документ: определение типа', guessKind(`file:///${docxFile.replace(/\\/g, '/')}`, 'file') === 'text')
+  } finally {
+    rmSync(docxDir, { recursive: true, force: true })
+  }
+
+  const mdHtml = markdownToHtml(
+    '# Заголовок\n\nОбычный **жирный** и *курсив*, `код`.\n\n- первый\n- второй\n\n1. раз\n2. два\n\n> цитата\n\n```js\nconst a = 1 < 2\n```\n\n| Имя | Роль |\n| --- | --- |\n| Аня | админ |\n\n[ссылка](https://liro.app) и <script>плохо</script>\n'
+  )
+  check(results, 'markdown: заголовок', mdHtml.includes('<h1>Заголовок</h1>'), mdHtml)
+  check(results, 'markdown: выделение', mdHtml.includes('<strong>жирный</strong>') && mdHtml.includes('<em>курсив</em>') && mdHtml.includes('<code>код</code>'))
+  check(results, 'markdown: списки', mdHtml.includes('<ul class="doc-ul"><li>первый</li><li>второй</li></ul>') && mdHtml.includes('<li>раз</li>'))
+  check(results, 'markdown: цитата и код блока', mdHtml.includes('<blockquote>цитата</blockquote>') && mdHtml.includes('const a = 1 &lt; 2'))
+  check(results, 'markdown: таблица', mdHtml.includes('<th>Имя</th>') && mdHtml.includes('<td>админ</td>'))
+  check(results, 'markdown: ссылка', mdHtml.includes('<a href="https://liro.app">ссылка</a>'))
+  check(results, 'markdown: чужая разметка не исполняется', !mdHtml.includes('<script'))
+
+  const csvHtml = csvToHtml('имя;сумма\n"петя, вася";12\n"котя""";13\n', ',')
+  check(results, 'csv: разделитель по точке с запятой', csvHtml.html.includes('<th>сумма</th>'), csvHtml.html)
+  check(results, 'csv: кавычки и запятая внутри', csvHtml.html.includes('<td>петя, вася</td>') && csvHtml.html.includes('<td>котя"</td>'), csvHtml.html)
+  check(results, 'csv: без обрезки', !csvHtml.truncated)
+
+  const sheetZip = new Map<string, Buffer>([
+    ['xl/workbook.xml', Buffer.from('<workbook><sheets><sheet name="Лист1" sheetId="1" r:id="rId1"/></sheets></workbook>', 'utf8')],
+    ['xl/_rels/workbook.xml.rels', Buffer.from('<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>', 'utf8')],
+    ['xl/sharedStrings.xml', Buffer.from('<sst><si><t>Товар</t></si><si><t>Хлеб</t></si></sst>', 'utf8')],
+    ['xl/worksheets/sheet1.xml', Buffer.from('<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row><row r="2"><c r="A2"><v>12.5</v></c></row></sheetData></worksheet>', 'utf8')]
+  ])
+  const sheetHtml = documentFromZip('sheet', sheetZip)
+  check(results, 'таблица xlsx: имя листа и строки', sheetHtml.includes('<h2>Лист1</h2>') && sheetHtml.includes('<td>Хлеб</td>'), sheetHtml)
+  check(results, 'таблица xlsx: пустые ячейки на месте', sheetHtml.includes('<td></td><td>Хлеб</td>'), sheetHtml)
+
+  const slidesHtml = documentFromZip(
+    'slides',
+    new Map([
+      ['ppt/slides/slide1.xml', Buffer.from('<p:sld><a:p><a:r><a:t>Привет</a:t></a:r></a:p><a:p><a:r><a:t>Мир</a:t></a:r></a:p></p:sld>', 'utf8')],
+      ['ppt/slides/slide2.xml', Buffer.from('<p:sld><a:p><a:r><a:t>Вторая</a:t></a:r></a:p></p:sld>', 'utf8')]
+    ])
+  )
+  check(results, 'слайды pptx: текст по слайдам', slidesHtml.includes('<h2>Слайд 1</h2><p>Привет</p><p>Мир</p>') && slidesHtml.includes('Вторая'), slidesHtml)
 
   const zip = createZip([
     { name: 'a/текст.txt', data: Buffer.from('Привет, мир ✓', 'utf8') },

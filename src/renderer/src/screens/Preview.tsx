@@ -102,7 +102,7 @@ export function PreviewScreen(): ReactNode {
   }, [kind, src])
 
   const code = useMemo(() => {
-    if (!text) return ''
+    if (!text || text.language === 'document') return ''
     try {
       return hljs.highlight(text.content, { language: text.language, ignoreIllegals: true }).value
     } catch {
@@ -144,12 +144,19 @@ export function PreviewScreen(): ReactNode {
     )
   } else if (kind === 'text') {
     body = text ? (
-      <div className="preview__code">
-        <pre className="preview__code-body">
-          <code className="hljs" dangerouslySetInnerHTML={{ __html: code }} />
-        </pre>
-        {text.truncated ? <div className="preview__code-note">Файл большой — показано только начало</div> : null}
-      </div>
+      text.language === 'document' ? (
+        <div className="preview__doc-wrap">
+          <article className="preview__doc" dangerouslySetInnerHTML={{ __html: text.content }} />
+          {text.truncated ? <div className="preview__doc-note">Файл большой — показано только начало</div> : null}
+        </div>
+      ) : (
+        <div className="preview__code">
+          <pre className="preview__code-body">
+            <code className="hljs" dangerouslySetInnerHTML={{ __html: code }} />
+          </pre>
+          {text.truncated ? <div className="preview__code-note">Файл большой — показано только начало</div> : null}
+        </div>
+      )
     ) : textReady ? (
       <div className="preview__center preview__center--empty">
         <FileQuestion size={42} />

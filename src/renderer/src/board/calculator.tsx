@@ -29,27 +29,50 @@ const KEYS: Array<{ label: string; value: string; kind: 'digit' | 'action' | 'eq
 
 const HISTORY_LIMIT = 30
 
-function evaluate(source: string): string {
-  if (!source.trim()) return '0'
-  const normalized = source
+const DIVIDE_BY_ZERO = 'Деление на ноль'
+const UNREADABLE = 'Непонятное выражение'
+const TRAILING = 'Лишнее в конце выражения'
+
+export interface CalcOutcome {
+  text: string
+  ok: boolean
+}
+
+function evaluate(source: string): CalcOutcome {
+  let normalized = source
+    .trim()
     .replace(/,/g, '.')
     .replace(/×/g, '*')
     .replace(/÷/g, '/')
     .replace(/−/g, '-')
-  if (!/^[0-9+\-*/().\s]+$/.test(normalized)) return 'Ошибка'
+  if (!normalized) return { text: '0', ok: true }
+  while (/[-*/+(]$/.test(normalized)) normalized = normalized.slice(0, -1)
+  if (!normalized) return { text: '0', ok: true }
+  if (!/^[\d+\-*/(). ]+$/.test(normalized)) return { text: UNREADABLE, ok: false }
   const tokens = normalized.match(/\d+\.?\d*|[+\-*/()]/g)
-  if (!tokens) return 'Ошибка'
+  if (!tokens) return { text: UNREADABLE, ok: false }
   let pos = 0
+  let malformed = false
   const peek = (): string | undefined => tokens[pos]
   const factor = (): number => {
     const token = tokens[pos++]
+    if (token === undefined) return 0
     if (token === '(') {
       const value = expression()
-      if (tokens[pos] === ')') pos += 1
+      if (peek() === ')') pos += 1
       return value
     }
     if (token === '-') return -factor()
     if (token === '+') return factor()
+    if (token === ')') {
+      malformed = true
+      pos -= 1
+      return 0
+    }
+    if (!/^\d/.test(token)) {
+      malformed = true
+      return 0
+    }
     return Number(token)
   }
   const term = (): number => {
@@ -57,7 +80,11 @@ function evaluate(source: string): string {
     while (peek() === '*' || peek() === '/') {
       const op = tokens[pos++]
       const right = factor()
-      value = op === '*' ? value * right : value / right
+      if (op === '*') value = value * right
+      else {
+        if (right === 0 && !malformed) throw new Error(DIVIDE_BY_ZERO)
+        value = value / right
+      }
     }
     return value
   }
@@ -70,14 +97,16 @@ function evaluate(source: string): string {
     }
     return value
   }
-  let result = 0
   try {
-    result = expression()
-  } catch {
-    return 'Ошибка'
+    const result = expression()
+    if (malformed) return { text: UNREADABLE, ok: false }
+    if (pos !== tokens.length) return { text: TRAILING, ok: false }
+    if (!Number.isFinite(result)) return { text: DIVIDE_BY_ZERO, ok: false }
+    return { text: String(Math.round(result * 1e10) / 1e10), ok: true }
+  } catch (error) {
+    if (error instanceof Error && error.message === DIVIDE_BY_ZERO) return { text: DIVIDE_BY_ZERO, ok: false }
+    return { text: UNREADABLE, ok: false }
   }
-  if (pos !== tokens.length || !Number.isFinite(result)) return 'Ошибка'
-  return String(Math.round(result * 1e10) / 1e10)
 }
 
 export interface CalcView {
@@ -136,14 +165,18 @@ export function CalculatorPanel(props: {
     [props.docId]
   )
 
-  const result = useMemo(() => evaluate(source), [source])
+  const outcome = useMemo(() => evaluate(source), [source])
+
+  useEffect(() => {
+    if (loaded) inputRef.current?.focus()
+  }, [loaded])
 
   const onChangeRef = useRef(props.onChange)
   onChangeRef.current = props.onChange
 
   useEffect(() => {
-    onChangeRef.current({ source, result })
-  }, [source, result])
+    onChangeRef.current({ source, result: outcome.text })
+  }, [source, outcome])
 
   const remember = useCallback((expression: string, value: string): void => {
     setHistory((current) => {
@@ -168,9 +201,9 @@ export function CalculatorPanel(props: {
         }
         if (value === '=') {
           const computed = evaluate(current)
-          if (computed === 'Ошибка') return current
-          remember(current, computed)
-          return computed
+          if (!computed.ok) return current
+          remember(current, computed.text)
+          return computed.text
         }
         if (value === '.' && /\d,\d*$/.test(current)) return current
         if (/[+\-*/(]/.test(value) && /[+\-*/(]$/.test(current)) return current
@@ -242,14 +275,16 @@ export function CalculatorPanel(props: {
           ref={inputRef}
           className="calculator__input"
           value={source}
-          onChange={(event) => setSource(event.target.value)}
+          onChange={(event) => setSource(event.target.value.replace(/[^0-9+\-*/().,\s]/g, ''))}
           onKeyDown={(event) => {
             if (event.key === 'Enter') press('=')
           }}
           spellCheck={false}
           aria-label="Выражение"
         />
-        <div className="calculator__result">{result}</div>
+        <div className="calculator__result" data-error={outcome.ok ? undefined : 'true'}>
+          {outcome.text}
+        </div>
       </div>
       {props.partner && (props.partner.source || props.partner.result !== '0') ? (
         <div className="calculator__partner">

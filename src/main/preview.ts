@@ -1,8 +1,10 @@
 import { BrowserWindow, net } from 'electron'
-import { closeSync, openSync, readSync, statSync } from 'node:fs'
-import { extname, join } from 'node:path'
+import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs'
+import { basename, extname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { PreviewKind, PreviewPayload } from '@shared/api'
+import { DOCUMENT_LANGUAGE, csvToHtml, isDocumentFile, markdownToHtml, readDocumentHtml } from './documentText'
+import { assetsDir, docDir, foldersDir } from './paths'
 
 export type { PreviewKind, PreviewPayload }
 
@@ -44,7 +46,12 @@ function languageOf(file: string): string {
   return LANGUAGES[extname(file).toLowerCase()] ?? 'plaintext'
 }
 
-export function readPreviewText(file: string): PreviewText | null {
+export function readPreviewText(src: string): PreviewText | null {
+  const file = toLocalPath(src)
+  if (isDocumentFile(file)) {
+    const html = readDocumentHtml(file)
+    return html ? { content: html, language: DOCUMENT_LANGUAGE, truncated: false } : null
+  }
   let size = 0
   try {
     const stat = statSync(file)
@@ -70,7 +77,16 @@ export function readPreviewText(file: string): PreviewText | null {
   const truncated = raw.length > TEXT_LIMIT
   if (truncated) raw = raw.subarray(0, TEXT_LIMIT)
   if (raw.includes(0)) return null
-  return { content: raw.toString('utf8'), language: languageOf(file), truncated }
+  const text = raw.toString('utf8')
+  const ext = extname(file).toLowerCase()
+  if (ext === '.md' || ext === '.markdown' || ext === '.mdown') {
+    return { content: markdownToHtml(text), language: DOCUMENT_LANGUAGE, truncated }
+  }
+  if (ext === '.csv' || ext === '.tsv') {
+    const table = csvToHtml(text, ext === '.tsv' ? '\t' : ',')
+    return { content: table.html, language: DOCUMENT_LANGUAGE, truncated: truncated || table.truncated }
+  }
+  return { content: text, language: languageOf(file), truncated }
 }
 
 const registry = new Map<number, PreviewPayload>()
@@ -88,6 +104,7 @@ export function isRemoteSrc(src: string): boolean {
 
 export function toLocalPath(src: string): string {
   const value = src.trim()
+  if (/^lirofile:/i.test(value)) return liroAssetPath(value)
   if (!/^file:/i.test(value)) return value
   try {
     return fileURLToPath(value)
@@ -98,6 +115,22 @@ export function toLocalPath(src: string): string {
 
 function looksLikePath(value: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith('/') || value.startsWith('\\')
+}
+
+function liroAssetPath(src: string): string {
+  try {
+    const url = new URL(src)
+    const segments = url.pathname.split('/').filter(Boolean)
+    const docId = decodeURIComponent(url.hostname || segments.shift() || '')
+    const file = decodeURIComponent(segments.join('/'))
+    const name = basename(file)
+    if (!docId || !name || name.includes('..')) return ''
+    if (docId === 'folder') return join(foldersDir(), name)
+    const asset = join(assetsDir(docId), name)
+    return existsSync(asset) ? asset : join(docDir(docId), name)
+  } catch {
+    return ''
+  }
 }
 
 export function previewSrc(src: string): string {
@@ -119,7 +152,7 @@ export function guessKind(src: string, fallback: PreviewKind): PreviewKind {
   if (/\.(mp4|webm|ogv|mov|mkv|m4v|mp3|wav|ogg|oga|m4a|flac|aac)$/.test(clean)) return 'media'
   if (/^https?:\/\//.test(clean)) return 'web'
   if (
-    /\.(txt|md|markdown|json|csv|log|xml|ya?ml|html?|js|mjs|cjs|jsx|ts|tsx|css|scss|less|sh|bash|sql|diff|patch|ini|cfg|conf|toml|py|rb|go|rs|java|kt|swift|c|h|cpp|hpp)$/.test(
+    /\.(txt|md|markdown|json|csv|log|xml|ya?ml|html?|js|mjs|cjs|jsx|ts|tsx|css|scss|less|sh|bash|sql|diff|patch|ini|cfg|conf|toml|py|rb|go|rs|java|kt|swift|c|h|cpp|hpp|docx|docm|dotx|xlsx|xlsm|pptx)$/.test(
       clean
     )
   ) {

@@ -35,6 +35,12 @@ function px(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+function nodePoint(node: HTMLElement, style: CSSStyleDeclaration): { x: number; y: number } {
+  const rect = node.getBoundingClientRect()
+  if (rect.left || rect.top) return { x: rect.left + window.scrollX, y: rect.top + window.scrollY }
+  return { x: px(style.left), y: px(style.top) }
+}
+
 export function parseHtmlToItems(html: string): { items: RawTextItem[]; images: PasteImage[] } {
   const parsed = new DOMParser().parseFromString(html, 'text/html')
   const items: RawTextItem[] = []
@@ -43,6 +49,7 @@ export function parseHtmlToItems(html: string): { items: RawTextItem[]; images: 
   for (const node of nodes) {
     const style = window.getComputedStyle(node)
     const rect = node.getBoundingClientRect()
+    const point = nodePoint(node, style)
     const width = rect.width || px(style.width)
     const height = rect.height || px(style.height)
     if (node.tagName === 'IMG') {
@@ -55,11 +62,11 @@ export function parseHtmlToItems(html: string): { items: RawTextItem[]; images: 
       items.push({
         id,
         type: 'image',
-        x: rect.left + window.scrollX,
-        y: rect.top + window.scrollY,
+        x: point.x,
+        y: point.y,
         width: w,
         height: h,
-        position: { x: rect.left + w / 2, y: rect.top + h / 2, origin: 'center', relativeTo: 'canvas_center' },
+        position: { x: point.x + w / 2, y: point.y + h / 2, origin: 'center', relativeTo: 'canvas_center' },
         geometry: { width: w, height: h, rotation: 0 },
         data: { imageUrl: src, title: node.getAttribute('alt') ?? '' }
       })
@@ -70,8 +77,8 @@ export function parseHtmlToItems(html: string): { items: RawTextItem[]; images: 
     if (!content) continue
     const w = width || 260
     const h = height || 90
-    const x = rect.left + window.scrollX
-    const y = rect.top + window.scrollY
+    const x = point.x
+    const y = point.y
     items.push({
       id: `paste_txt_${items.length}`,
       type: 'text',
@@ -85,6 +92,59 @@ export function parseHtmlToItems(html: string): { items: RawTextItem[]; images: 
     })
   }
   return { items, images }
+}
+
+export interface PasteBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export function pastePayloadBounds(items: unknown[]): PasteBounds {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const raw of items) {
+    const item = raw as { x?: number; y?: number; width?: number; height?: number }
+    if (typeof item.x !== 'number' || typeof item.y !== 'number') continue
+    const width = typeof item.width === 'number' ? item.width : 0
+    const height = typeof item.height === 'number' ? item.height : 0
+    minX = Math.min(minX, item.x)
+    minY = Math.min(minY, item.y)
+    maxX = Math.max(maxX, item.x + width)
+    maxY = Math.max(maxY, item.y + height)
+  }
+  if (!Number.isFinite(minX)) return { x: 0, y: 0, width: 0, height: 0 }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+}
+
+export function shiftPastePayload(items: unknown[], dx: number, dy: number): void {
+  if (!dx && !dy) return
+  for (const raw of items) {
+    const item = raw as {
+      type?: string
+      x?: number
+      y?: number
+      position?: { x?: number; y?: number }
+      data?: { points?: unknown }
+    }
+    if (typeof item.x === 'number') item.x += dx
+    if (typeof item.y === 'number') item.y += dy
+    if (item.position && typeof item.position.x === 'number' && typeof item.position.y === 'number') {
+      item.position.x += dx
+      item.position.y += dy
+    }
+    const points = item.data?.points
+    if (item.type === 'connector' && Array.isArray(points)) {
+      for (const point of points) {
+        const target = point as { x?: number; y?: number }
+        if (typeof target.x === 'number') target.x += dx
+        if (typeof target.y === 'number') target.y += dy
+      }
+    }
+  }
 }
 
 export function parseClipboardHtml(html: string): PastePayload | null {

@@ -94,7 +94,7 @@ summary {
 .seg[data-active='true']:focus-visible,
 .bbar__btn--solid:focus-visible,
 .toolmenu__pin[data-active='true']:focus-visible,
-.livepanel__toggleperm[data-active='true']:focus-visible,
+.livepanel__tag[data-active='true']:focus-visible,
 .calculator__key[data-kind='equal']:focus-visible,
 .textpanel .toolbtn[data-active='true']:focus-visible {
   outline-color: var(--border-strong);

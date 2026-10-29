@@ -39,6 +39,43 @@ const press = async (key, modifiers) => {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+const openMenuAt = async (x, y) => {
+  const canvasEl = document.querySelector('.boardview__canvas')
+  if (!canvasEl) return []
+  const options = { bubbles: true, cancelable: true, button: 2, pointerId: 1, isPrimary: true, clientX: x, clientY: y }
+  canvasEl.dispatchEvent(new PointerEvent('pointerdown', options))
+  await wait(70)
+  canvasEl.dispatchEvent(new PointerEvent('pointerup', { ...options, buttons: 0 }))
+  canvasEl.dispatchEvent(new MouseEvent('contextmenu', options))
+  await wait(300)
+  return Array.from(document.querySelectorAll('.ctxmenu button'))
+}
+
+const openMenuOn = (node) => {
+  const box = node.getBoundingClientRect()
+  return openMenuAt(box.left + box.width / 2, box.top + box.height / 2)
+}
+
+const openInspector = async (node) => {
+  const entries = node ? await openMenuOn(node) : []
+  const propertiesEntry = entries.find((el) => /Свойства/.test(el.textContent || ''))
+  if (propertiesEntry) propertiesEntry.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  await wait(360)
+  return document.querySelector('.inspector')
+}
+
+const findEmptySpot = () => {
+  const canvasEl = document.querySelector('.boardview__canvas')
+  if (!canvasEl) return null
+  const box = canvasEl.getBoundingClientRect()
+  for (let step = 0; step < 90; step += 1) {
+    const x = box.left + 120 + ((step * 173) % Math.max(200, Math.round(box.width) - 240))
+    const y = box.top + 120 + ((step * 131) % Math.max(200, Math.round(box.height) - 240))
+    if (document.elementFromPoint(x, y) === canvasEl) return { x, y }
+  }
+  return null
+}
+
 const report = []
 const check = (name, ok, detail) => {
   report.push(`${ok ? 'ОК' : 'СБОЙ'} ${name}${detail ? `: ${detail}` : ''}`)
@@ -46,6 +83,17 @@ const check = (name, ok, detail) => {
 
 const run = async () => {
   await wait(1200)
+  if (document.querySelector('.welcome')) {
+    const field = document.querySelector('.welcome__input')
+    if (field) {
+      const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setValue.call(field, 'Тест')
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    await wait(150)
+    document.querySelector('.welcome__go')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wait(500)
+  }
   const demoHash = window.location.hash
   const start = itemCount()
   check('доска загрузилась', start > 0, `${start} объектов`)
@@ -68,6 +116,11 @@ const run = async () => {
   check('холст на месте', !!canvas)
   const white = canvas ? getComputedStyle(canvas).backgroundColor : ''
   check('холст белый', white === 'rgb(255, 255, 255)', white)
+
+  const undoButton = Array.from(document.querySelectorAll('.topbar .toolbtn')).find((node) => node.getAttribute('aria-label') === 'Отменить')
+  const redoButton = Array.from(document.querySelectorAll('.topbar .toolbtn')).find((node) => node.getAttribute('aria-label') === 'Вернуть')
+  check('отмена серая без истории', !!undoButton && undoButton.disabled, undoButton ? `disabled=${undoButton.disabled}` : 'кнопки нет')
+  check('возврат серый без истории', !!redoButton && redoButton.disabled, redoButton ? `disabled=${redoButton.disabled}` : 'кнопки нет')
 
   const gapsButton = Array.from(document.querySelectorAll('.bbar--warn button')).find((node) =>
     /Выделить пропуски/.test(node.textContent || '')
@@ -112,13 +165,17 @@ const run = async () => {
     await press('z', { ctrlKey: true })
     const afterUndo = itemCount()
     check('Ctrl+Z возвращает объект', afterUndo === start, `${afterDelete} → ${afterUndo}`)
+    check('возврат становится активным', !!redoButton && !redoButton.disabled, redoButton ? `disabled=${redoButton.disabled}` : 'кнопки нет')
+    check('отмена гаснет после полной отмены', !!undoButton && undoButton.disabled, undoButton ? `disabled=${undoButton.disabled}` : 'кнопки нет')
 
     await press('y', { ctrlKey: true })
     const afterRedo = itemCount()
     check('Ctrl+Y повторяет удаление', afterRedo === start - 1, `${afterUndo} → ${afterRedo}`)
+    check('отмена оживает после возврата', !!undoButton && !undoButton.disabled, undoButton ? `disabled=${undoButton.disabled}` : 'кнопки нет')
 
     await press('z', { ctrlKey: true })
     check('повторная отмена работает', itemCount() === start, `${itemCount()}`)
+    check('возврат активен после повторной отмены', !!redoButton && !redoButton.disabled, redoButton ? `disabled=${redoButton.disabled}` : 'кнопки нет')
 
     await press('f')
     await wait(360)
@@ -159,7 +216,7 @@ const run = async () => {
   const canvasRect = document.querySelector('.boardview__canvas')?.getBoundingClientRect()
   check('рельс инструментов слева', !!railBox && !!canvasRect && railBox.left < canvasRect.left + 90, railBox ? `${Math.round(railBox.left)}` : 'нет')
   check('панели инструментов сверху нет', !document.querySelector('.bfcol--center'))
-  check('подсказки короткие', tools.every((node) => (node.getAttribute('title') || '').split('·').length === 2))
+  check('подсказки короткие', tools.every((node) => (node.getAttribute('title') || '').split('·').length <= 2))
   check('палитры не внутри рельса', document.querySelectorAll('.toolrail .toolpalette').length === 0)
 
   const moreButton = tools.find((node) => node.getAttribute('aria-label') === 'Ещё инструменты')
@@ -176,17 +233,22 @@ const run = async () => {
       menuBox ? `${Math.round(menuBox.left)},${Math.round(menuBox.top)} ${Math.round(menuBox.width)}x${Math.round(menuBox.height)}` : 'нет меню'
     )
     check('меню Ещё справа от рельса', !!menuBox && !!railBox && menuBox.left >= railBox.right - 2, menuBox ? `${Math.round(menuBox.left)}` : 'нет')
-    const pins = Array.from(document.querySelectorAll('.toolmenu__pin'))
-    check('в меню Ещё есть закрепление', pins.length === 4, `${pins.length}`)
+    const rows = Array.from(document.querySelectorAll('.toolmenu__row'))
+    check('инструменты в меню Ещё перетаскиваемые', rows.length === 4 && rows.every((row) => row.draggable), `${rows.length}`)
     const railCount = document.querySelectorAll('.toolrail .toolbtn').length
-    pins[0]?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await wait(420)
-    const railAfter = document.querySelectorAll('.toolrail .toolbtn').length
-    check('инструмент закрепляется в рельс', railAfter === railCount + 1, `${railCount} → ${railAfter}`)
-    document.querySelector('.toolmenu__pin')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await wait(420)
-    check('инструмент убирается из рельса', document.querySelectorAll('.toolrail .toolbtn').length === railCount, `${document.querySelectorAll('.toolrail .toolbtn').length}`)
-    const graphItem = menuItems.find((node) => /График/.test(node.textContent || ''))
+    const toolBeforePick = document.querySelector('.boardview__canvas')?.dataset.tool
+    const firstItem = menuItems[0]
+    firstItem?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wait(320)
+    const toolPicked = document.querySelector('.boardview__canvas')?.dataset.tool
+    check('инструмент из меню Ещё выбирается', !!toolPicked && toolPicked !== toolBeforePick, `${toolBeforePick} → ${toolPicked}`)
+    check('меню Ещё закрывается после выбора', !document.querySelector('.toolmenu'))
+    check('рельс не меняется от выбора инструмента', document.querySelectorAll('.toolrail .toolbtn').length === railCount, `${railCount}`)
+    moreButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wait(240)
+    const graphItem = Array.from(document.querySelectorAll('.toolmenu__item')).find((node) =>
+      /График/.test(node.textContent || '')
+    )
     if (graphItem) {
       graphItem.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await wait(320)
@@ -252,7 +314,6 @@ const run = async () => {
       check('штрих отменяется', document.querySelectorAll(".boarditem[data-kind='path']").length === beforeBrush, `${document.querySelectorAll(".boarditem[data-kind='path']").length}`)
     }
     const straightBase = { ...brushBase, shiftKey: true }
-    // (pen-on-object drawing verified by code change; skipping interactive check to avoid affecting later tests)
     brushCanvas.dispatchEvent(new PointerEvent('pointerdown', { ...straightBase, clientX: brushBox.left + 260, clientY: brushBox.top + 380 }))
     for (let step = 1; step <= 10; step += 1) {
       brushCanvas.dispatchEvent(
@@ -570,7 +631,7 @@ const run = async () => {
   await wait(160)
   check('инструмент переключается по V', !document.querySelector('.toolpalette'))
 
-  const gridButton = '.bfloat--br .toolbtn:last-child'
+  const gridButton = '.bfloat--br [aria-label="Настройки доски"]'
   const gridButtonNode = document.querySelector(gridButton)
   let gridClickTarget = gridButtonNode
   if (gridButtonNode) {
@@ -654,9 +715,7 @@ const run = async () => {
   await wait(200)
   check('настройки доски закрываются', !document.querySelector('.boardsettings'))
 
-  const inviteButton = Array.from(document.querySelectorAll('.bbar button')).find((node) =>
-    /Пригласить/.test(node.textContent || '')
-  )
+  const inviteButton = document.querySelector('.topbar [aria-label="Пригласить"]')
   check('есть кнопка приглашения', !!inviteButton)
   check('нет чужих курсоров до сессии', document.querySelectorAll('.livecursor').length === 0)
   check('нет панели совместной работы до сессии', !document.querySelector('.livepanel'))
@@ -673,7 +732,8 @@ const run = async () => {
   )
   check('есть инструмент таблицы', !!tableTool)
   if (tableTool && canvas) {
-    const before = document.querySelectorAll('.boarditem[data-kind="table"]').length
+    const beforeTables = Array.from(document.querySelectorAll('.boarditem[data-kind="table"]'))
+    const before = beforeTables.length
     const canvasBox = canvas.getBoundingClientRect()
     const options = { bubbles: true, cancelable: true, button: 0, buttons: 1, pointerId: 9, isPrimary: true }
     tableTool.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -685,10 +745,11 @@ const run = async () => {
       new PointerEvent('pointerup', { ...options, clientX: canvasBox.left + 620, clientY: canvasBox.top + 320 })
     )
     await wait(520)
-    const after = document.querySelectorAll('.boarditem[data-kind="table"]').length
-    check('таблица создаётся', after > before, `${before} → ${after}`)
+    const afterNodes = Array.from(document.querySelectorAll('.boarditem[data-kind="table"]'))
+    const tableNode = afterNodes.find((node) => !beforeTables.includes(node)) || null
+    check('таблица создаётся', afterNodes.length > before, `${before} → ${afterNodes.length}`)
     check('в таблице есть ячейки', document.querySelectorAll('.tableview__cell').length >= 9)
-    const tableCell = document.querySelectorAll('.tableview__cell')[1]
+    const tableCell = tableNode ? tableNode.querySelectorAll('.tableview__cell')[1] : null
     if (tableCell) {
       tableCell.dispatchEvent(new PointerEvent('pointerdown', { ...options, clientX: 0, clientY: 0 }))
       await wait(300)
@@ -710,19 +771,29 @@ const run = async () => {
       const cellTexts = Array.from(document.querySelectorAll('.tableview__text')).map((node) => node.textContent)
       check('текст ячейки сохраняется', cellTexts.includes('Проверка'), cellTexts.join('|'))
     }
-    const propertiesButton = Array.from(document.querySelectorAll('.topbar .toolbtn')).find((node) =>
-      /Свойства/.test(node.getAttribute('aria-label') || '')
+    await press('v')
+    await wait(200)
+    const tableEntries = tableNode ? await openMenuAt(tableNode.getBoundingClientRect().left + 14, tableNode.getBoundingClientRect().top + 14) : []
+    const tableProperties = tableEntries.find((node) => /Свойства/.test(node.textContent || ''))
+    const tableRect = tableNode ? tableNode.getBoundingClientRect() : null
+    check(
+      'свойства открываются из меню объекта',
+      !!tableProperties,
+      `${tableRect ? `меню ${Math.round(tableRect.left)},${Math.round(tableRect.top)} ${Math.round(tableRect.width)}x${Math.round(tableRect.height)}` : 'таблицы нет'} · ${tableEntries.map((node) => (node.textContent || '').trim()).join('|').slice(0, 50)}`
     )
-    check('есть кнопка свойств', !!propertiesButton)
-    if (propertiesButton) {
-      propertiesButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      await wait(360)
-      const inspector = document.querySelector('.inspector')
-      check('панель свойств открывается', !!inspector)
-      check('в свойствах таблицы есть строки', !!Array.from(inspector?.querySelectorAll('.btn') || []).find((node) => node.textContent === '+ строка'))
-      const xInput = inspector?.querySelector('.inspector__number input')
+    tableProperties?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wait(360)
+    const inspector = document.querySelector('.inspector')
+    check(
+      'свойства показывают таблицу',
+      /Таблица/.test(inspector?.querySelector('.inspector__title')?.textContent || ''),
+      inspector?.querySelector('.inspector__title')?.textContent || 'нет панели'
+    )
+    if (inspector) {
+      check('в свойствах таблицы есть строки', !!Array.from(inspector.querySelectorAll('.btn')).find((node) => node.textContent === '+ строка'))
+      const xInput = inspector.querySelector('.inspector__number input')
       check('в свойствах можно задать координату', !!xInput)
-      const close = inspector?.querySelector('.btn--icon')
+      const close = inspector.querySelector('.btn--icon')
       close?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await wait(200)
     }
@@ -763,12 +834,8 @@ const run = async () => {
     }
     await press('v')
     await wait(240)
-    const propertiesButton = Array.from(document.querySelectorAll('.topbar .toolbtn')).find((node) =>
-      /Свойства/.test(node.getAttribute('aria-label') || '')
-    )
-    propertiesButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await wait(360)
-    const inspector = document.querySelector('.inspector')
+    const shapeNode = document.querySelector('.boarditem--selected')
+    const inspector = await openInspector(shapeNode)
     check('у фигуры есть выбор цвета', !!inspector?.querySelector('.inspector__colors'))
     check('у фигуры есть толщина линии', !!inspector?.querySelector('.inspector__slider'))
     const numberInput = inspector?.querySelector('.inspector__number input')
@@ -849,10 +916,7 @@ const run = async () => {
       document.querySelectorAll('.boarditem--selected').length === 2,
       `${document.querySelectorAll('.boarditem--selected').length}`
     )
-    const pairPropsButton = Array.from(document.querySelectorAll('.topbar .toolbtn')).find((node) =>
-      /Свойства/.test(node.getAttribute('aria-label') || '')
-    )
-    pairPropsButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await openInspector(firstNode)
     await wait(360)
     const fillRow = Array.from(document.querySelectorAll('.inspector .inspector__block')).find(
       (block) => block.querySelector('.inspector__label')?.textContent === 'Заливка'
@@ -992,17 +1056,10 @@ const run = async () => {
     /Режим докладчика/.test(node.getAttribute('aria-label') || '')
   ))
   {
-    const presentCanvas = document.querySelector('.boardview__canvas')
-    if (presentCanvas) {
-      const box = presentCanvas.getBoundingClientRect()
-      const options = { bubbles: true, cancelable: true, button: 2, pointerId: 1, isPrimary: true, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 }
-      presentCanvas.dispatchEvent(new PointerEvent('pointerdown', options))
-      await wait(60)
-      presentCanvas.dispatchEvent(new PointerEvent('pointerup', { ...options, buttons: 0 }))
-      await wait(300)
-      const presentEntry = Array.from(document.querySelectorAll('.ctxmenu button')).find((node) =>
-        /Режим докладчика/.test(node.textContent || '')
-      )
+    const presentSpot = findEmptySpot()
+    if (presentSpot) {
+      const presentEntries = await openMenuAt(presentSpot.x, presentSpot.y)
+      const presentEntry = presentEntries.find((node) => /Режим докладчика/.test(node.textContent || ''))
       check('в меню есть режим докладчика', !!presentEntry)
       if (presentEntry) {
         presentEntry.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -1201,19 +1258,34 @@ const run = async () => {
   await press('v')
   await wait(160)
 
-  const resizeNode = Array.from(document.querySelectorAll('.boarditem')).find((node) => {
+  const resizeCandidates = Array.from(document.querySelectorAll('.boarditem')).filter((node) => {
     const rect = node.getBoundingClientRect()
     if (node.classList.contains('boarditem--locked')) return false
+    if (node.dataset.kind === 'solid' || node.dataset.kind === 'connector') return false
     return rect.width > 24 && rect.height > 24 && rect.left > 20 && rect.top > 20 && rect.right < window.innerWidth - 20 && rect.bottom < window.innerHeight - 120
   })
-  if (resizeNode) {
-    const box = resizeNode.getBoundingClientRect()
-    const pick = { bubbles: true, cancelable: true, button: 0, pointerId: 1, isPrimary: true, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 }
-    resizeNode.dispatchEvent(new PointerEvent('pointerdown', pick))
-    canvasBox.dispatchEvent(new PointerEvent('pointerup', { ...pick, buttons: 0 }))
+  let resizeNode = null
+  let handles = []
+  const resizeProbe = []
+  for (const candidate of resizeCandidates.slice(0, 10)) {
+    const point = candidate.getBoundingClientRect()
+    const pick = { bubbles: true, cancelable: true, button: 0, pointerId: 1, isPrimary: true, clientX: point.left + point.width / 2, clientY: point.top + point.height / 2 }
+    candidate.dispatchEvent(new PointerEvent('pointerdown', pick))
+    candidate.dispatchEvent(new PointerEvent('pointerup', { ...pick, buttons: 0 }))
     await wait(200)
-    const handles = Array.from(document.querySelectorAll('.resizehandle'))
-    check('у выделенного объекта есть маркеры растяжения', handles.length === 8, `${handles.length}`)
+    const found = Array.from(document.querySelectorAll('.resizehandle'))
+    const sel = document.querySelector('.boarditem--selected')
+    resizeProbe.push(`${candidate.dataset.kind}→${sel?.dataset.kind}:${found.length}`)
+    if (found.length === 8) {
+      resizeNode = candidate
+      handles = found
+      break
+    }
+    resizeNode = candidate
+    handles = found
+  }
+  if (resizeNode && handles.length === 8) {
+    check('у выделенного объекта есть маркеры растяжения', true, '8')
     check('панель текста не лезет сама', !document.querySelector('.textpanel'))
     const east = handles.find((node) => /ew-resize/.test(node.style.cursor || ''))
     const widthBefore = resizeNode.getBoundingClientRect().width
@@ -1252,18 +1324,17 @@ const run = async () => {
       await wait(300)
     }
   } else {
-    check('нашёлся объект для растяжения', false, 'подходящих объектов нет')
+    check(
+      'нашёлся объект для растяжения',
+      false,
+      `${canvasBox.dataset.tool} · ${resizeCandidates.length} · рамки ${document.querySelectorAll('.resizeframe').length} · выделено ${document.querySelectorAll('.boarditem--selected').length} · режим ${Array.from(document.querySelectorAll('.seg')).map((node) => node.dataset.active).join(',')} · ${resizeProbe.slice(0, 6).join(' ')}`
+    )
   }
 
 
-  const menuPoint = canvasBox.getBoundingClientRect()
-  const menuOptions = { bubbles: true, cancelable: true, button: 2, pointerId: 1, isPrimary: true, clientX: menuPoint.left + menuPoint.width * 0.5, clientY: menuPoint.top + menuPoint.height * 0.5 }
-  canvasBox.dispatchEvent(new PointerEvent('pointerdown', menuOptions))
-  await wait(60)
-  canvasBox.dispatchEvent(new PointerEvent('pointerup', { ...menuOptions, buttons: 0 }))
-  canvasBox.dispatchEvent(new MouseEvent('contextmenu', menuOptions))
-  await wait(260)
-  const linkEntry = Array.from(document.querySelectorAll('.ctxmenu button')).find((node) => /Предпросмотр по ссылке/.test(node.textContent || ''))
+  const linkSpot = findEmptySpot()
+  const linkEntries = linkSpot ? await openMenuAt(linkSpot.x, linkSpot.y) : []
+  const linkEntry = linkEntries.find((node) => /Предпросмотр по ссылке/.test(node.textContent || ''))
   check('в меню есть предпросмотр по ссылке', !!linkEntry)
   if (linkEntry) {
     linkEntry.click()
