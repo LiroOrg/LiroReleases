@@ -6,7 +6,7 @@ import { buildExtensionFiles } from './import/extension'
 import uiTestSource from './uitest.js?raw'
 import { migrateLegacyData } from './paths'
 import { store } from './store'
-import { startUpdater, stopUpdater } from './updater'
+import { startUpdater, stopUpdater, waitForUpdate } from './updater'
 import { registerAssetProtocol } from './protocol'
 import { codeFromLink, linkFromArgv, onLiveLink, registerLiveProtocol, setPendingLink } from './live/protocol'
 import { startPairInstance } from './live/pair'
@@ -339,6 +339,7 @@ if (!app.requestSingleInstanceLock()) {
     )
     const launchLink = linkFromArgv(process.argv)
     if (launchLink) setPendingLink(launchLink)
+    await waitForUpdate()
     createWindow()
     startUpdater(() => mainWindow)
     if (process.argv.includes('--dev-pair')) startPairInstance()

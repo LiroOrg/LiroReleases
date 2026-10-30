@@ -77,23 +77,27 @@ export function App(): ReactNode {
     const offJoin = window.liro.subscribe('live:join', (code) => {
       navigate({ name: 'join', code })
     })
-    let downloadToast = ''
+    let progressId = ''
     let version = ''
+    let readyVersion = ''
+    let pending = false
     const offUpdate = window.liro.subscribe('update:status', (payload) => {
       if (payload.phase === 'downloading') {
+        pending = true
         if (payload.version) version = payload.version
-        const percent = payload.percent ?? 0
-        const text = percent > 0 ? `Скачивается обновление ${version} — ${percent}%` : `Скачивается обновление ${version}`
-        if (downloadToast) patchToast(downloadToast, text)
-        else downloadToast = toast(text, 'update')
+        const text = `Скачивается обновление ${version}`
+        if (progressId) patchToast(progressId, text, payload.percent ?? 0)
+        else progressId = toast(text, 'update', { sticky: true, progress: payload.percent ?? 0 })
         return
       }
-      if (downloadToast) {
-        useApp.getState().dismiss(downloadToast)
-        downloadToast = ''
+      if (progressId) {
+        useApp.getState().dismiss(progressId)
+        progressId = ''
       }
       if (payload.phase === 'ready') {
-        const name = payload.version ?? ''
+        const name = payload.version ?? version
+        pending = true
+        readyVersion = name
         toast(`Обновление ${name} скачано. Желаете ли перезагрузить приложение для применения обновлений?`, 'update', {
           sticky: true,
           actions: [
@@ -101,11 +105,19 @@ export function App(): ReactNode {
             { id: 'later', label: 'Позже', run: () => undefined }
           ]
         })
+        return
+      }
+      if (payload.phase === 'error' && pending) {
+        pending = false
+        fail(readyVersion ? `Не удалось применить обновление ${readyVersion}` : 'Обновление не скачалось')
+        return
       }
       if (payload.manual && payload.phase === 'current') {
+        pending = false
         toast('Установлена свежая версия', 'check')
       }
       if (payload.manual && payload.phase === 'error') {
+        pending = false
         toast('Не удалось проверить обновления', 'error')
       }
     })
@@ -120,7 +132,7 @@ export function App(): ReactNode {
       offUpdate()
       offJoin()
     }
-  }, [setLibrary, setSettings, setCapture, setProgress, toast, patchToast])
+  }, [setLibrary, setSettings, setCapture, setProgress, toast, patchToast, fail])
 
   useEffect(() => {
     let alive = true

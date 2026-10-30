@@ -67,7 +67,7 @@ const TOAST_ICONS: Record<ToastKind, ReactNode> = {
 export function Toasts(): ReactNode {
   const toasts = useApp((state) => state.toasts)
   const dismiss = useApp((state) => state.dismiss)
-  const visible = toasts.slice(-2)
+  const visible = [...toasts.filter((toast) => toast.sticky), ...toasts.filter((toast) => !toast.sticky).slice(-2)]
   return (
     <div className="toasts">
       {visible.map((toast) => (
@@ -76,6 +76,7 @@ export function Toasts(): ReactNode {
           className="toast"
           data-kind={toast.kind}
           data-sticky={toast.sticky ? 'true' : undefined}
+          data-progress={typeof toast.progress === 'number' ? 'true' : undefined}
           onClick={() => {
             if (!toast.actions) dismiss(toast.id)
           }}
@@ -99,6 +100,11 @@ export function Toasts(): ReactNode {
                   {action.label}
                 </button>
               ))}
+            </span>
+          ) : null}
+          {typeof toast.progress === 'number' ? (
+            <span className="toast__bar">
+              <i style={{ width: `${Math.max(2, Math.min(100, toast.progress))}%` }} />
             </span>
           ) : null}
         </div>

@@ -894,6 +894,7 @@
 
 .toast {
   pointer-events: auto;
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -907,6 +908,29 @@
   line-height: 1.35;
   box-shadow: var(--shadow-2);
   animation: toast-in var(--dur) cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.toast[data-progress='true'] {
+  padding-bottom: 11px;
+}
+
+.toast__bar {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, currentColor 20%, transparent);
+  flex: none;
+}
+
+.toast__bar i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: currentColor;
+  transition: width var(--dur) linear;
 }
 
 .toast[data-kind='error'] {

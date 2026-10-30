@@ -45,11 +45,13 @@ export interface Toast {
   text: string
   kind: ToastKind
   sticky?: boolean
+  progress?: number
   actions?: ToastAction[]
 }
 
 export interface ToastOptions {
   sticky?: boolean
+  progress?: number
   actions?: ToastAction[]
 }
 
@@ -80,7 +82,7 @@ interface AppState {
   toast: (text: string, kind?: Toast['kind'], options?: ToastOptions) => string
   fail: (text: string) => void
   dismiss: (id: string) => void
-  patchToast: (id: string, text: string) => void
+  patchToast: (id: string, text: string, progress?: number) => void
 }
 
 export const useApp = create<AppState>((set, get) => ({
@@ -119,9 +121,19 @@ export const useApp = create<AppState>((set, get) => ({
   setProgress: (progress) => set({ progress }),
 
   toast: (text, kind = 'info', options) => {
+    if (options?.sticky) {
+      const same = get().toasts.find((item) => item.sticky && item.text === text)
+      if (same) return same.id
+    }
     const id = `${Date.now()}${Math.random().toString(36).slice(2, 7)}`
+    const kept = get().toasts.filter((toast) => toast.sticky)
+    const rest = get().toasts.filter((toast) => !toast.sticky).slice(-2)
     set({
-      toasts: [...get().toasts.slice(-3), { id, text, kind, sticky: options?.sticky, actions: options?.actions }]
+      toasts: [
+        ...kept,
+        ...rest,
+        { id, text, kind, sticky: options?.sticky, progress: options?.progress, actions: options?.actions }
+      ]
     })
     if (!options?.sticky) {
       window.setTimeout(() => get().dismiss(id), kind === 'error' ? 8000 : 4000)
@@ -132,8 +144,12 @@ export const useApp = create<AppState>((set, get) => ({
     get().toast(text, 'error')
   },
   dismiss: (id) => set({ toasts: get().toasts.filter((toast) => toast.id !== id) }),
-  patchToast: (id, text) =>
-    set({ toasts: get().toasts.map((toast) => (toast.id === id ? { ...toast, text } : toast)) })
+  patchToast: (id, text, progress) =>
+    set({
+      toasts: get().toasts.map((toast) =>
+        toast.id === id ? { ...toast, text, progress: progress ?? toast.progress } : toast
+      )
+    })
 }))
 
 export function applyTheme(theme: Settings['theme']): void {
