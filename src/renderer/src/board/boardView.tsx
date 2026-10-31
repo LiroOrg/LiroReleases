@@ -4178,14 +4178,15 @@ const navigateTo = useCallback(
         .map((item) => (item as { id?: string }).id)
         .filter((id): id is string => typeof id === 'string' && id !== '')
       try {
-        await api.board.appendItems({ docId: props.docId, items: payload.items, images: payload.images })
+        const appended = await api.board.appendItems({ docId: props.docId, items: payload.items, images: payload.images })
+        const renamed = appended.renamed ?? {}
         const loaded = await api.board.open(props.docId)
         if (doc && live.connected) {
           shareImageAssets(payload.images)
           commitAgainst(doc.items, loaded.items)
         } else if (doc) remember(doc.items)
         setDoc(loaded)
-        setSelection(new Set(pastedIds))
+        setSelection(new Set(pastedIds.map((id) => renamed[id] ?? id)))
         if (placed.width > size.width / view.zoom || placed.height > size.height / view.zoom) {
           const zoom = clamp(
             Math.min(size.width / Math.max(1, placed.width), size.height / Math.max(1, placed.height)) * 0.94,

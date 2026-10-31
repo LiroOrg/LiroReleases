@@ -708,6 +708,11 @@ button.homefoot__item:hover {
   outline: 1px solid var(--border-strong);
 }
 
+.tree--dragging {
+  opacity: 0.55;
+  cursor: grabbing;
+}
+
 .tree__row {
   display: flex;
   align-items: center;

@@ -138,6 +138,35 @@ function readAssetDataUrl(docId: string, file: string): string | null {
   }
 }
 
+function uniqueItemIds(items: BoardItem[], taken: Set<string>): Map<string, string> {
+  const renamed = new Map<string, string>()
+  for (const item of items) {
+    let id = item.id
+    let counter = 2
+    while (taken.has(id)) {
+      id = `${item.id}_${counter}`
+      counter += 1
+    }
+    taken.add(id)
+    if (id !== item.id) {
+      renamed.set(item.id, id)
+      item.id = id
+    }
+  }
+  const follow = (item: BoardItem, key: 'parentId' | 'groupId' | 'startItemId' | 'endItemId'): void => {
+    const holder = item as unknown as Record<string, string | undefined>
+    const value = holder[key]
+    if (value) holder[key] = renamed.get(value) ?? value
+  }
+  for (const item of items) {
+    follow(item, 'parentId')
+    follow(item, 'groupId')
+    follow(item, 'startItemId')
+    follow(item, 'endItemId')
+  }
+  return renamed
+}
+
 export function registerIpc(): void {
   ipcMain.handle('settings:get', () => ok(store.settings))
   ipcMain.handle('settings:set', (_e, patch: Partial<Settings>) => {
@@ -333,9 +362,11 @@ export function registerIpc(): void {
       const offsetX = payload.offsetX ?? 0
       const offsetY = payload.offsetY ?? 0
       const baseZ = doc.items.length
+      const incoming = built.doc.items as BoardItem[]
+      const renamed = uniqueItemIds(incoming, new Set(doc.items.map((item) => item.id)))
       const merged = [
         ...doc.items,
-        ...built.doc.items.map((item, index) => ({
+        ...incoming.map((item, index) => ({
           ...item,
           x: item.x + offsetX,
           y: item.y + offsetY,
@@ -347,7 +378,7 @@ export function registerIpc(): void {
       doc.stats = buildStats(merged, doc.stats.assetsBytes + built.doc.stats.assetsBytes)
       store.writeDoc(doc)
       sendLibraryChanged()
-      return ok({ added: built.doc.items.length, images: images.size })
+      return ok({ added: built.doc.items.length, images: images.size, renamed: Object.fromEntries(renamed) })
     } catch (error) {
       return fail(error)
     }

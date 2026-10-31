@@ -139,6 +139,7 @@ export interface RawItem {
   style: RawItemStyle
   data: RawItemData
   parentId?: string
+  groupId?: string
   [key: string]: unknown
 }
 
@@ -866,18 +867,18 @@ function connectorGeometry(info: WidgetInfo, byObjectId: Map<number, WidgetInfo>
 function connectorAnchor(
   anchor: Anchor | null,
   world: SourcePoint,
-  fallbackId: string,
+  selfObjectId: number,
   box: { x: number; y: number; width: number; height: number },
   byObjectId: Map<number, WidgetInfo>
 ): RawItemAnchor {
   if (anchor && anchor.widgetIndex !== FREE_END_INDEX) {
     const target = byObjectId.get(anchor.widgetIndex)
-    if (target) {
+    if (target && target.object.id !== selfObjectId) {
       return { id: target.id, position: { x: clamp01(anchor.point.x), y: clamp01(anchor.point.y) } }
     }
   }
   return {
-    id: fallbackId,
+    id: '',
     position: {
       x: clamp01((world.x - box.x) / Math.max(1, box.width)),
       y: clamp01((world.y - box.y) / Math.max(1, box.height))
@@ -1022,8 +1023,8 @@ function buildRawItem(info: WidgetInfo, byObjectId: Map<number, WidgetInfo>): Ra
       item.style.startStrokeCap = startStroke
       item.style.endStrokeCap = endStroke
       item.data.shape = info.style.lt === undefined ? 'straight' : LINE_TYPE_FROM_CODE[num(info.style.lt, 0)]
-      const startRef = connectorAnchor(info.startAnchor, info.startWorld, info.id, box, byObjectId)
-      const endRef = connectorAnchor(info.endAnchor, info.endWorld, info.id, box, byObjectId)
+      const startRef = connectorAnchor(info.startAnchor, info.startWorld, info.object.id, box, byObjectId)
+      const endRef = connectorAnchor(info.endAnchor, info.endWorld, info.object.id, box, byObjectId)
       item.data.startItem = startRef
       item.data.endItem = endRef
       item.data.startOffset = { x: startRef.position.x, y: startRef.position.y }
@@ -1089,10 +1090,27 @@ function widgetParentIndex(json: WidgetJson): number | undefined {
 
 function resolveWidgetOrigins(list: ClipboardObject[]): Map<number, SourcePoint> {
   const byId = new Map<number, ClipboardObject>()
+  const groupMembers = new Map<number, number[]>()
   for (const object of list) {
     if (object.widgetData) byId.set(object.id, object)
+    else if (object.type === GROUP_TYPE && Array.isArray(object.items)) groupMembers.set(object.id, object.items)
   }
   const origins = new Map<number, SourcePoint>()
+  const attachedTo = (object: ClipboardObject): boolean =>
+    str(asRecord(asRecord(object.widgetData?.json)._position).schema) === 'parentOffsetPx'
+  const groupOrigin = (id: number): SourcePoint | null => {
+    const members = groupMembers.get(id)
+    if (!members) return null
+    let point: SourcePoint | null = null
+    for (const memberId of members) {
+      const member = byId.get(memberId)
+      if (!member || attachedTo(member)) continue
+      const resolved = visit(member, new Set([id]))
+      if (!resolved) continue
+      point = point ? { x: Math.min(point.x, resolved.x), y: Math.min(point.y, resolved.y) } : resolved
+    }
+    return point
+  }
   const visit = (object: ClipboardObject, trail: Set<number>): SourcePoint | null => {
     const cached = origins.get(object.id)
     if (cached) return cached
@@ -1107,12 +1125,10 @@ function resolveWidgetOrigins(list: ClipboardObject[]): Map<number, SourcePoint>
     let point = { x, y }
     if (attached && parentIndex !== undefined && !trail.has(object.id)) {
       const parent = byId.get(parentIndex)
-      if (parent && parent !== object) {
-        const next = new Set(trail)
-        next.add(object.id)
-        const base = visit(parent, next)
-        if (base) point = { x: base.x + x, y: base.y + y }
-      }
+      const next = new Set(trail)
+      next.add(object.id)
+      const base = parent && parent !== object ? visit(parent, next) : groupOrigin(parentIndex)
+      if (base) point = { x: base.x + x, y: base.y + y }
     }
     origins.set(object.id, point)
     return point
@@ -1192,48 +1208,14 @@ export function clipboardObjectsToRawItems(
   for (const object of list) {
     if (object.type !== GROUP_TYPE) continue
     const children = Array.isArray(object.items) ? object.items : []
-    const boxes: Array<{ x: number; y: number; width: number; height: number }> = []
-    for (const childId of children) {
-      const child = rawByObjectId.get(childId)
-      if (child) boxes.push({ x: child.x, y: child.y, width: child.width, height: child.height })
+    const members = children
+      .map((childId) => rawByObjectId.get(childId))
+      .filter((child): child is RawItem => child !== undefined)
+    if (members.length < 2) continue
+    const groupId = uniqueId(object, used)
+    for (const member of members) {
+      if (!member.parentId) member.groupId = groupId
     }
-    if (boxes.length === 0) continue
-    let minX = boxes[0].x
-    let maxX = boxes[0].x + boxes[0].width
-    let minY = boxes[0].y
-    let maxY = boxes[0].y + boxes[0].height
-    for (const box of boxes) {
-      if (box.x < minX) minX = box.x
-      if (box.x + box.width > maxX) maxX = box.x + box.width
-      if (box.y < minY) minY = box.y
-      if (box.y + box.height > maxY) maxY = box.y + box.height
-    }
-    const width = Math.max(1, maxX - minX)
-    const height = Math.max(1, maxY - minY)
-    const group: RawItem = {
-      id: uniqueId(object, used),
-      type: 'frame',
-      x: minX,
-      y: minY,
-      width,
-      height,
-      position: { x: minX + width / 2, y: minY + height / 2, origin: 'center', relativeTo: 'canvas_center' },
-      geometry: { width, height, rotation: 0 },
-      style: {},
-      data: {}
-    }
-    const order = new Map<RawItem, number>()
-    result.forEach((entry, index) => order.set(entry, index))
-    for (const childId of children) {
-      const child = rawByObjectId.get(childId)
-      if (child && !child.parentId) child.parentId = group.id
-    }
-    const firstChildIndex = children
-      .map((childId) => order.get(rawByObjectId.get(childId) as RawItem))
-      .filter((index): index is number => index !== undefined)
-      .reduce((min, index) => Math.min(min, index), Number.MAX_SAFE_INTEGER)
-    if (firstChildIndex === Number.MAX_SAFE_INTEGER) result.push(group)
-    else result.splice(firstChildIndex, 0, group)
   }
 
   return result
@@ -1583,6 +1565,68 @@ export function selfTest(): boolean {
     if (Math.round(anchoredStroke.width) !== 165 || Math.round(anchoredStroke.height) !== 110) return false
     if (Math.abs(anchoredStroke.position.x - -3753) > 1) return false
     if (Math.abs(anchoredStroke.position.y - -2775) > 1) return false
+    const groupObjects: ClipboardObject[] = [
+      {
+        type: WIDGET_TYPE,
+        id: 0,
+        initialId: 'group-shape',
+        widgetData: {
+          type: 'shape',
+          json: {
+            _position: { offsetPx: { x: 0, y: 0 }, schema: 'canvasOffsetPx' },
+            scale: { scale: 1 },
+            size: { width: 100, height: 50 },
+            text: 'а',
+            style: '{}'
+          }
+        }
+      },
+      {
+        type: WIDGET_TYPE,
+        id: 1,
+        initialId: 'group-relative',
+        widgetData: {
+          type: 'shape',
+          json: {
+            _position: { offsetPx: { x: 200, y: 50 }, schema: 'parentOffsetPx' },
+            scale: { scale: 1 },
+            _parent: { index: 2 },
+            size: { width: 100, height: 50 },
+            text: 'б',
+            style: '{}'
+          }
+        }
+      },
+      { type: GROUP_TYPE, id: 2, items: [0, 1] },
+      {
+        type: WIDGET_TYPE,
+        id: 3,
+        initialId: 'dangling-line',
+        widgetData: {
+          type: 'line',
+          json: {
+            _position: { offsetPx: { x: 0, y: 0 }, schema: 'canvasOffsetPx' },
+            scale: { scale: 1 },
+            points: [
+              { x: 0, y: 0 },
+              { x: 300, y: 100 }
+            ],
+            primary: { point: { x: 0.5, y: 1 }, positionType: 0, widgetIndex: 0 },
+            secondary: { point: { x: 3, y: 1 }, positionType: 0, widgetIndex: 77 },
+            style: '{}'
+          }
+        }
+      }
+    ]
+    const groupRaw = clipboardObjectsToRawItems(groupObjects)
+    if (groupRaw.length !== 3) return false
+    const plainShape = groupRaw.find((item) => item.id === 'group-shape')
+    const relativeShape = groupRaw.find((item) => item.id === 'group-relative')
+    const danglingLine = groupRaw.find((item) => item.id === 'dangling-line')
+    if (!plainShape || !relativeShape || !danglingLine) return false
+    if (str(plainShape.groupId) === '' || plainShape.groupId !== relativeShape.groupId) return false
+    if (Math.round(relativeShape.x) !== 200 || Math.round(relativeShape.y) !== 50) return false
+    if (str(danglingLine.data.endItem?.id) !== '') return false
     return true
   } catch {
     return false

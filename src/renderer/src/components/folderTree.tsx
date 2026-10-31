@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ChevronDown, ChevronRight, LayoutGrid, Pencil, Pin, Plus, Trash2 } from 'lucide-react'
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
+import { ChevronDown, ChevronRight, LayoutGrid, Pencil, Pin, PinOff, Plus, Trash2 } from 'lucide-react'
 import type { BoardMeta, LibraryIndex, Project } from '@shared/types'
 import { api } from '../lib/api'
 import { navigate, type Route } from '../router'
@@ -22,6 +23,12 @@ export function FolderTree(props: TreeProps): ReactNode {
   const [overId, setOverId] = useState<string | null>(null)
   const [open, setOpen] = useState<Set<string>>(() => new Set([NONE]))
   const [pendingDelete, setPendingDelete] = useState<{ project: Project; count: number } | null>(null)
+  const drag = useRef<{ id: string; x: number; y: number; live: boolean } | null>(null)
+  const over = useRef<string | null>(null)
+  const draggedAt = useRef(0)
+  const watchers = useRef<{ move: (event: PointerEvent) => void; up: () => void } | null>(null)
+
+  useEffect(() => () => stopWatch(), [])
 
   const boards = useMemo(
     () => props.library.boards.filter((board) => !board.archived).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
@@ -91,18 +98,66 @@ export function FolderTree(props: TreeProps): ReactNode {
     }
   }
 
-  const drop = (targetId: string): void => {
-    if (!dragId || dragId === targetId) {
-      setDragId(null)
-      setOverId(null)
-      return
-    }
-    const ids = props.library.projects.map((project) => project.id).filter((id) => id !== dragId)
+  const drop = (sourceId: string, targetId: string): void => {
+    if (sourceId === targetId) return
+    const ids = projects.map((project) => project.id).filter((id) => id !== sourceId)
     const at = ids.indexOf(targetId)
-    ids.splice(at < 0 ? ids.length : at, 0, dragId)
+    ids.splice(at < 0 ? ids.length : at, 0, sourceId)
     void api.project.reorder(ids).catch((error: unknown) => props.onFail(String(error)))
+  }
+
+  const beginDrag = (id: string, project: Project | null, event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (!project || event.button !== 0) return
+    stopWatch()
+    drag.current = { id, x: event.clientX, y: event.clientY, live: false }
+    const move = (native: PointerEvent): void => trackDrag(native.clientX, native.clientY)
+    const up = (): void => finishDrag()
+    watchers.current = { move, up }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+  }
+
+  const trackDrag = (x: number, y: number): void => {
+    const current = drag.current
+    if (!current) return
+    if (!current.live) {
+      if (Math.abs(x - current.x) + Math.abs(y - current.y) < 6) return
+      current.live = true
+      setDragId(current.id)
+    }
+    const node = document.elementFromPoint(x, y)?.closest('[data-tree-id]')
+    const target = node ? node.getAttribute('data-tree-id') : null
+    over.current = target
+    setOverId(target)
+  }
+
+  const stopWatch = (): void => {
+    const pair = watchers.current
+    if (!pair) return
+    window.removeEventListener('pointermove', pair.move)
+    window.removeEventListener('pointerup', pair.up)
+    window.removeEventListener('pointercancel', pair.up)
+    watchers.current = null
+  }
+
+  const finishDrag = (): void => {
+    const current = drag.current
+    stopWatch()
+    drag.current = null
+    const target = over.current
+    over.current = null
     setDragId(null)
     setOverId(null)
+    if (!current?.live) return
+    draggedAt.current = Date.now()
+    if (target) drop(current.id, target)
+  }
+
+  const swallowClick = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (Date.now() - draggedAt.current > 350) return
+    event.preventDefault()
+    event.stopPropagation()
   }
 
   const renderRow = (id: string, project: Project | null): ReactNode => {
@@ -111,25 +166,15 @@ export function FolderTree(props: TreeProps): ReactNode {
     const expanded = open.has(id)
     const classes = ['tree']
     if (active === id) classes.push('tree--active')
-    if (overId === id) classes.push('tree--over')
+    if (overId === id && dragId && dragId !== id) classes.push('tree--over')
+    if (dragId === id) classes.push('tree--dragging')
     return (
       <div
         key={id}
+        data-tree-id={id}
         className={classes.join(' ')}
-        draggable={Boolean(project)}
-        onDragStart={() => setDragId(id)}
-        onDragEnd={() => {
-          setDragId(null)
-          setOverId(null)
-        }}
-        onDragOver={(event) => {
-          event.preventDefault()
-          setOverId(id)
-        }}
-        onDrop={(event) => {
-          event.preventDefault()
-          drop(id)
-        }}
+        onPointerDown={(event) => beginDrag(id, project, event)}
+        onClickCapture={swallowClick}
       >
         <div className="tree__row">
           <button
@@ -154,7 +199,7 @@ export function FolderTree(props: TreeProps): ReactNode {
           {project ? (
             <div className="tree__tools">
               <button type="button" title={project.pinned ? 'Открепить' : 'Закрепить'} onClick={() => void togglePin(project)}>
-                {project.pinned ? <Pin size={13} /> : <ChevronRight size={13} style={{ opacity: 0 }} />}
+                {project.pinned ? <PinOff size={13} /> : <Pin size={13} />}
               </button>
               <button type="button" title="Настроить папку" onClick={() => setEditing(project)}>
                 <Pencil size={13} />

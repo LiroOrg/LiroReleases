@@ -64,7 +64,9 @@ export const api = {
       images?: Array<{ itemId: string; dataUrl: string }>
       offsetX?: number
       offsetY?: number
-    }) => unwrap<{ added: number; images: number }>(window.liro.api.boardAppendItems(payload)),
+    }) => unwrap<{ added: number; images: number; renamed?: Record<string, string> }>(
+      window.liro.api.boardAppendItems(payload)
+    ),
     pasteItems: (payload: { docId: string; sourceDocId: string; items: BoardItem[] }) =>
       unwrap<{ added: number }>(window.liro.api.boardPasteItems(payload)),
     openSource: (docId: string) => unwrap(window.liro.api.boardLinkToSource(docId)),

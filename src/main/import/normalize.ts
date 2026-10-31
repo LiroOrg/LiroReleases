@@ -261,7 +261,7 @@ export function resolvePositions(items: BoardItem[]): void {
     if (connector.startItemId && connector.endItemId) {
       const start = byId2.get(connector.startItemId)
       const end = byId2.get(connector.endItemId)
-      if (start && end) {
+      if (start && end && start.id !== connector.id && end.id !== connector.id) {
         a = pointOn(start, connector.startOffset)
         b = pointOn(end, connector.endOffset)
       }
@@ -304,12 +304,14 @@ function normalizeOne(raw: RawItem, index: number): BoardItem | null {
 
   const rotation = num(pick(geometry.rotation, raw.rotation, data.rotation, style.rotation), 0)
   const parentId = pick(raw.parent?.id, raw.parentId, data.parentId, data.frameId)
+  const groupId = str(pick(raw.groupId, data.groupId), '')
   const base = {
     id,
     sourceType,
     rotation,
     z: index,
     parentId,
+    groupId: groupId || undefined,
     relative: relativeTo === 'parent_top_left' ? ('parent_top_left' as const) : ('canvas_center' as const),
     createdAt: str(pick(raw.createdAt, data.createdAt)) || undefined,
     modifiedAt: str(pick(raw.modifiedAt, data.modifiedAt)) || undefined,
