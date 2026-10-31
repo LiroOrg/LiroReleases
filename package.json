@@ -1,7 +1,7 @@
 {
   "name": "liro",
   "productName": "Liro",
-  "version": "1.14.3",
+  "version": "1.14.4",
   "description": "Настольное приложение для досок. Работает офлайн",
   "main": "./out/main/index.js",
   "author": "Liro",
@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "updater": "node scripts/build-updater.cjs",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "selftest": "electron-vite build && electron . --selftest",
@@ -29,7 +30,14 @@
     },
     "files": [
       "out/**/*",
-      "resources/**/*"
+      "resources/**/*",
+      "!resources/updater/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/updater/Liro-Updater.exe",
+        "to": "updater/Liro-Updater.exe"
+      }
     ],
     "win": {
       "icon": "resources/icon-256.png",

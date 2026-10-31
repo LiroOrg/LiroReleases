@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { createWriteStream, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import https from 'node:https'
 import { join } from 'node:path'
 import { app, BrowserWindow } from 'electron'
@@ -22,7 +22,11 @@ interface Paths {
   backup: string
   lock: string
   report: string
-  script: string
+  request: string
+  started: string
+  work: string
+  bundled: string
+  downloaded: string
   exe: string
 }
 
@@ -30,8 +34,7 @@ const FIRST_DELAY = 9000
 const PERIOD = 10 * 60 * 1000
 const RELEASES = 'LiroOrg/LiroReleases'
 const MIN_ASAR = 1000000
-const WAIT_LIMIT = 45000
-const STALE_LOCK = 120000
+const MIN_UPDATER = 10000
 
 let win: BrowserWindow | null = null
 let timer: ReturnType<typeof setInterval> | null = null
@@ -62,14 +65,18 @@ function disabled(): boolean {
 
 function paths(): Paths | null {
   if (!app.isPackaged || !process.resourcesPath) return null
-  const work = app.getPath('userData')
+  const work = join(app.getPath('userData'), 'updater')
   return {
     target: join(process.resourcesPath, 'app.asar'),
-    staged: join(process.resourcesPath, 'app.asar.next'),
+    staged: join(work, 'app.asar'),
     backup: join(process.resourcesPath, 'app.asar.bak'),
-    lock: join(work, 'updating.json'),
-    report: join(work, 'update-result.txt'),
-    script: join(work, 'update-swap.ps1'),
+    lock: join(app.getPath('userData'), 'updating.json'),
+    report: join(app.getPath('userData'), 'update-result.txt'),
+    request: join(work, 'update-request.json'),
+    started: join(work, 'started.json'),
+    work,
+    bundled: join(process.resourcesPath, 'updater', 'Liro-Updater.exe'),
+    downloaded: join(work, 'Liro-Updater.exe'),
     exe: process.execPath
   }
 }
@@ -83,33 +90,59 @@ function stagedReady(where: Paths): boolean {
   }
 }
 
-function quote(value: string): string {
-  return value.replace(/'/g, "''")
+function updaterFile(where: Paths): string | null {
+  if (existsSync(where.bundled) && statSync(where.bundled).size > MIN_UPDATER) return where.bundled
+  if (existsSync(where.downloaded) && statSync(where.downloaded).size > MIN_UPDATER) return where.downloaded
+  return null
 }
 
-function swapScript(where: Paths, size: number, version: string): string {
-  const target = quote(where.target)
-  return [
-    '$ErrorActionPreference = \'SilentlyContinue\'',
-    `$deadline = (Get-Date).AddSeconds(${Math.round(WAIT_LIMIT / 1000)})`,
-    `while ((Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $deadline)) { Start-Sleep -Milliseconds 200 }`,
-    '$done = $false',
-    'for ($i = 0; $i -lt 200; $i++) {',
-    '  try {',
-    `    Copy-Item -LiteralPath '${target}' -Destination '${quote(where.backup)}' -Force -ErrorAction Stop`,
-    `    Copy-Item -LiteralPath '${quote(where.staged)}' -Destination '${target}' -Force -ErrorAction Stop`,
-    `    if ((Get-Item -LiteralPath '${target}').Length -eq ${size}) { $done = $true; break }`,
-    '  } catch {',
-    '    Start-Sleep -Milliseconds 250',
-    '  }',
-    '}',
-    `if (-not $done) { Copy-Item -LiteralPath '${quote(where.backup)}' -Destination '${target}' -Force }`,
-    `Remove-Item -LiteralPath '${quote(where.staged)}' -Force`,
-    `Set-Content -LiteralPath '${quote(where.report)}' -Value "$(if ($done) { 'ok' } else { 'fail' }) ${version}" -Encoding ascii`,
-    `Remove-Item -LiteralPath '${quote(where.lock)}' -Force`,
-    `Start-Process -FilePath '${quote(where.exe)}'`,
-    ''
-  ].join('\n')
+async function ensureUpdater(version: string): Promise<string | null> {
+  const where = paths()
+  if (!where) return null
+  const ready = updaterFile(where)
+  if (ready) return ready
+  mkdirSync(where.work, { recursive: true })
+  const link = `https://github.com/${RELEASES}/releases/download/v${version}/Liro-Updater.exe`
+  try {
+    await download(link, where.downloaded)
+    if (statSync(where.downloaded).size < MIN_UPDATER) throw new Error('апдейтер слишком мал')
+    return where.downloaded
+  } catch {
+    rmSync(where.downloaded, { force: true })
+    return null
+  }
+}
+
+function launchUpdater(where: Paths, file: string, version: string): void {
+  const job = {
+    version,
+    staged: where.staged,
+    target: where.target,
+    backup: where.backup,
+    exe: where.exe,
+    pid: process.pid,
+    report: where.report,
+    lock: where.lock,
+    started: where.started,
+    at: Date.now()
+  }
+  rmSync(where.report, { force: true })
+  writeFileSync(where.lock, JSON.stringify({ pid: process.pid, version, at: Date.now() }))
+  mkdirSync(where.work, { recursive: true })
+  writeFileSync(where.request, JSON.stringify(job))
+  const child = spawn(file, [], {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, LIRO_UPDATE_REQUEST: where.request }
+  })
+  child.on('error', () => {
+    rmSync(where.lock, { force: true })
+    rmSync(where.request, { force: true })
+    asked = false
+    send({ phase: 'error' }, true)
+  })
+  child.unref()
+  setTimeout(() => app.exit(0), 400)
 }
 
 function check(): void {
@@ -233,64 +266,6 @@ function wire(): void {
   })
 }
 
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function waitingPage(): string {
-  return [
-    '<!doctype html><meta charset="utf-8">',
-    '<style>',
-    'html,body{height:100%;margin:0}',
-    'body{display:grid;place-items:center;background:#ffffff;color:#111114;',
-    "font:13px/1.5 'Segoe UI',system-ui,sans-serif;-webkit-user-select:none;user-select:none}",
-    '.c{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center}',
-    '.t{font-weight:600}',
-    '.p{font-size:11.5px;color:#5f5f66}',
-    '.s{width:22px;height:22px;border-radius:50%;border:2px solid #d8d8dd;border-top-color:#111114;',
-    'animation:r .8s linear infinite}',
-    '@keyframes r{to{transform:rotate(360deg)}}',
-    '</style>',
-    '<div class="c"><div class="s"></div><div class="t">Liro обновляется</div>',
-    '<div class="p">Приложение откроется через несколько секунд</div></div>'
-  ].join('')
-}
-
-export async function waitForUpdate(): Promise<void> {
-  if (disabled()) return
-  const where = paths()
-  if (!where || !existsSync(where.lock)) return
-  try {
-    const info = JSON.parse(readFileSync(where.lock, 'utf8')) as { at?: number }
-    if (Date.now() - Number(info.at ?? 0) > STALE_LOCK) {
-      rmSync(where.lock, { force: true })
-      return
-    }
-  } catch {
-    rmSync(where.lock, { force: true })
-    return
-  }
-  const box = new BrowserWindow({
-    width: 340,
-    height: 132,
-    show: true,
-    frame: false,
-    resizable: false,
-    movable: false,
-    minimizable: false,
-    maximizable: false,
-    alwaysOnTop: true,
-    backgroundColor: '#ffffff',
-    autoHideMenuBar: true,
-    center: true,
-    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
-  })
-  await box.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(waitingPage())}`)
-  const limit = Date.now() + WAIT_LIMIT
-  while (existsSync(where.lock) && Date.now() < limit && !box.isDestroyed()) await wait(400)
-  if (!box.isDestroyed()) box.close()
-}
-
 export function takeSwapReport(): { ok: boolean; version: string } | null {
   if (!app.isPackaged) return null
   const where = paths()
@@ -338,30 +313,28 @@ export function askToRestart(): void {
     send({ phase: 'error' }, true)
     return
   }
-  const size = stagedSize
   const version = stagedVersion
+  void (async () => {
+    const file = await ensureUpdater(version)
+    if (!file) {
+      asked = false
+      send({ phase: 'error' }, true)
+      return
+    }
+    launchUpdater(where, file, version)
+  })()
+}
+
+export function markAppStarted(): void {
+  if (disabled()) return
+  const where = paths()
+  if (!where) return
   try {
-    rmSync(where.report, { force: true })
-    writeFileSync(where.lock, JSON.stringify({ pid: process.pid, version, size, at: Date.now() }))
-    writeFileSync(where.script, swapScript(where, size, version))
+    mkdirSync(where.work, { recursive: true })
+    writeFileSync(where.started, JSON.stringify({ pid: process.pid, at: Date.now() }))
   } catch {
-    rmSync(where.lock, { force: true })
-    asked = false
-    send({ phase: 'error' }, true)
     return
   }
-  const child = spawn(
-    'powershell.exe',
-    ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', where.script],
-    { detached: true, stdio: 'ignore' }
-  )
-  child.on('error', () => {
-    rmSync(where.lock, { force: true })
-    asked = false
-    send({ phase: 'error' }, true)
-  })
-  child.unref()
-  setTimeout(() => app.exit(0), 400)
 }
 
 export function checkForUpdate(byHand = false): void {
