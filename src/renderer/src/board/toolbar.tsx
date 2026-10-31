@@ -42,16 +42,27 @@ const ENTRIES: Record<Tool, ToolEntry> = {
   graph: { id: 'graph', label: 'График', key: '', icon: <LineChart size={18} />, editing: true }
 }
 
-export const TOOL_ORDER: Tool[] = ['pen', 'select', 'pan', 'text', 'sticky', 'create', 'link', 'erase', 'solid', 'image', 'table', 'graph']
-export const TOOL_EXTRAS: Tool[] = ['solid', 'image', 'table', 'graph']
+export const TOOL_ORDER: Tool[] = ['pen', 'select', 'pan', 'text', 'sticky', 'create', 'solid', 'erase', 'link', 'image', 'table', 'graph']
+export const TOOL_EXTRAS: Tool[] = ['link', 'image', 'table', 'graph']
 
 export function toolEntry(id: Tool): ToolEntry {
   return ENTRIES[id]
 }
 
+const CARRIED_ORDER = ['pen', 'select', 'pan', 'text', 'sticky', 'create', 'link', 'erase', 'solid', 'image', 'table', 'graph']
+const CARRIED_EXTRAS = ['solid', 'image', 'table', 'graph']
+
+function sameLayout(order: string[] | undefined, extras: string[] | undefined): boolean {
+  const same = (list: string[] | undefined, reference: string[]): boolean => {
+    const values = list ?? []
+    return values.length === reference.length && reference.every((id, index) => values[index] === id)
+  }
+  return same(order, CARRIED_ORDER) && same(extras, CARRIED_EXTRAS)
+}
+
 export function normalizeToolLayout(order?: string[], extras?: string[]): { order: Tool[]; extras: Tool[] } {
   const known = (list?: string[]): Tool[] => (list ?? []).filter((id): id is Tool => id in ENTRIES)
-  if (!(order ?? []).length && !(extras ?? []).length) return { order: [...TOOL_ORDER], extras: [...TOOL_EXTRAS] }
+  if (!(order ?? []).length && !(extras ?? []).length || sameLayout(order, extras)) return { order: [...TOOL_ORDER], extras: [...TOOL_EXTRAS] }
   const stored = known(order)
   const merged: Tool[] = [...stored, ...TOOL_ORDER.filter((id) => !stored.includes(id))]
   const storedExtras = known(extras)

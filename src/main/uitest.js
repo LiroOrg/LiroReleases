@@ -209,7 +209,7 @@ const run = async () => {
   check('в рельсе инструментов есть кнопки', tools.length >= 8, `${tools.length}`)
   const toolLabels = tools.map((node) => node.getAttribute('aria-label') || '')
   check('в рельсе есть кисть', toolLabels.includes('Рисовать'), toolLabels.join(', '))
-  check('в рельсе есть связь', toolLabels.includes('Связь'))
+  check('в рельсе есть 3D-фигура', toolLabels.includes('3D-фигура'))
   check('в рельсе есть ластик', toolLabels.includes('Ластик'))
   check('в рельсе есть меню Ещё', toolLabels.includes('Ещё инструменты'))
   const railBox = document.querySelector('.toolrail')?.getBoundingClientRect()
