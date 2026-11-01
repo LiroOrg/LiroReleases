@@ -876,6 +876,27 @@ button.homefoot__item:hover {
   color: var(--text);
 }
 
+.tree__board .truncate {
+  min-width: 0;
+}
+
+.tree__kill {
+  display: grid;
+  place-items: center;
+  flex: none;
+  margin-left: auto;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-s);
+  color: var(--danger);
+  cursor: pointer;
+}
+
+.tree__kill:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
 .tree__hint {
   padding: 3px 6px;
   font-size: calc(11px * var(--ui-scale));

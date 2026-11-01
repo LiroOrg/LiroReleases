@@ -67,6 +67,7 @@ export function FolderTree(props: TreeProps): ReactNode {
   const [pop, setPop] = useState<Pop>(null)
   const [dragging, setDragging] = useState<Drag | null>(null)
   const [open, setOpen] = useState<Set<string>>(() => new Set([NONE]))
+  const [shiftHeld, setShiftHeld] = useState(false)
 
   const listRef = useRef<HTMLDivElement>(null)
   const blocks = useRef(new Map<string, HTMLElement>())
@@ -78,6 +79,20 @@ export function FolderTree(props: TreeProps): ReactNode {
   const watchers = useRef<{ move: (event: PointerEvent) => void; up: () => void } | null>(null)
 
   useEffect(() => () => stopWatch(), [])
+
+  useEffect(() => {
+    const press = (event: KeyboardEvent): void => setShiftHeld(event.shiftKey || event.key === 'Shift')
+    const release = (event: KeyboardEvent): void => setShiftHeld(event.shiftKey)
+    const reset = (): void => setShiftHeld(false)
+    window.addEventListener('keydown', press)
+    window.addEventListener('keyup', release)
+    window.addEventListener('blur', reset)
+    return () => {
+      window.removeEventListener('keydown', press)
+      window.removeEventListener('keyup', release)
+      window.removeEventListener('blur', reset)
+    }
+  }, [])
 
   const boards = useMemo(
     () => props.library.boards.filter((board) => !board.archived).sort(byOrder),
@@ -177,6 +192,15 @@ export function FolderTree(props: TreeProps): ReactNode {
     try {
       await api.board.remove(board.id, !keepFiles)
       setRemoving(null)
+      props.onToast('Доска удалена', 'delete')
+    } catch (error) {
+      props.onFail(message(error))
+    }
+  }
+
+  const eraseBoard = async (board: BoardMeta): Promise<void> => {
+    try {
+      await api.board.remove(board.id, true)
       props.onToast('Доска удалена', 'delete')
     } catch (error) {
       props.onFail(message(error))
@@ -500,6 +524,21 @@ export function FolderTree(props: TreeProps): ReactNode {
             >
               <LayoutGrid size={12} />
               <span className="truncate">{board.title}</span>
+              {shiftHeld ? (
+                <span
+                  className="tree__kill"
+                  role="button"
+                  tabIndex={-1}
+                  title="Удалить доску и её файлы"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void eraseBoard(board)
+                  }}
+                >
+                  <Trash2 size={12} />
+                </span>
+              ) : null}
             </button>
           )
         })}
