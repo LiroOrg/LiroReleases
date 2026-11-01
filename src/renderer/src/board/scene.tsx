@@ -1,8 +1,8 @@
-import { memo, useMemo } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { parseRichText, type Block, type Run } from '@shared/richtext'
 import { contrastColor } from '@shared/color'
-import type { BoardDoc, BoardItem, Rect, SolidItem } from '@shared/types'
+import type { BoardDoc, BoardItem, Rect, SolidItem, TextItem } from '@shared/types'
 import { curvePath } from '@shared/curve'
 import { rotatedBox } from '@shared/util'
 import { solidBounds } from '@shared/three'
@@ -63,12 +63,17 @@ const RichText = memo(function RichText(props: {
   html: string
   style: CSSProperties
   flush?: boolean
+  nodeRef?: (node: HTMLDivElement | null) => void
   onLink?: (href: string) => void
 }): ReactNode {
   const blocks = useMemo(() => parseRichText(props.html), [props.html])
   const groups = useMemo(() => groupBlocks(blocks), [blocks])
   return (
-    <div className={props.flush ? 'boarditem__text boarditem__text--flush' : 'boarditem__text'} style={props.style}>
+    <div
+      ref={props.nodeRef}
+      className={props.flush ? 'boarditem__text boarditem__text--flush' : 'boarditem__text'}
+      style={props.style}
+    >
       {groups.map((group, index) =>
         group.kind === 'list' ? (
           group.ordered ? (
@@ -99,6 +104,52 @@ const RichText = memo(function RichText(props: {
     </div>
   )
 })
+
+function TextFlow(props: {
+  item: TextItem
+  onFit?: (id: string, height: number) => void
+  onLink?: (href: string) => void
+}): ReactNode {
+  const { item } = props
+  const nodeRef = useRef<HTMLDivElement | null>(null)
+  const fitRef = useRef(props.onFit)
+  fitRef.current = props.onFit
+  const attach = useCallback((node: HTMLDivElement | null) => {
+    nodeRef.current = node
+  }, [])
+
+  useEffect(() => {
+    if (!fitRef.current) return
+    const node = nodeRef.current
+    if (!node) return
+    const report = (): void => {
+      const height = Math.round(node.offsetHeight)
+      if (height > 0 && Math.abs(height - item.h) > 1) fitRef.current?.(item.id, height)
+    }
+    report()
+    const observer = new ResizeObserver(report)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [item.id, item.h, item.w, item.fontSize, item.content])
+
+  return (
+    <RichText
+      html={item.content}
+      flush
+      nodeRef={attach}
+      onLink={props.onLink}
+      style={{
+        color: item.color || '#1a1a1a',
+        fontSize: item.fontSize,
+        textAlign: item.align,
+        fontFamily: item.fontFamily,
+        height: 'auto',
+        minHeight: Math.round(item.fontSize * 1.34),
+        overflow: 'visible'
+      }}
+    />
+  )
+}
 
 type BlockGroup =
   | { kind: 'single'; block: Block }
@@ -193,7 +244,8 @@ export const ItemLayer = memo(function ItemLayer(props: {
   moving: boolean
   editable: boolean
   editingId?: string | null
-  onPatch?: (id: string, patch: Partial<BoardItem>) => void
+  onPatch?: (id: string, patch: Partial<BoardItem>, silent?: boolean) => void
+  onFit?: (id: string, height: number) => void
   onNode?: (id: string, node: HTMLDivElement | null) => void
   onPointerDown?: (id: string, event: React.PointerEvent) => void
   onDoubleClick?: (id: string) => void
@@ -217,6 +269,7 @@ export const ItemLayer = memo(function ItemLayer(props: {
           editable={props.editable}
           editingId={props.editingId}
           onPatch={props.onPatch}
+          onFit={props.editable ? props.onFit : undefined}
           onNode={props.onNode}
           onPointerDown={props.interactive && !item.locked ? props.onPointerDown : undefined}
           onDoubleClick={props.onDoubleClick}
@@ -240,7 +293,8 @@ export const ItemView = memo(function ItemView(props: {
   moving?: boolean
   editable?: boolean
   editingId?: string | null
-  onPatch?: (id: string, patch: Partial<BoardItem>) => void
+  onPatch?: (id: string, patch: Partial<BoardItem>, silent?: boolean) => void
+  onFit?: (id: string, height: number) => void
   onNode?: (id: string, node: HTMLDivElement | null) => void
   onPointerDown?: (id: string, event: React.PointerEvent) => void
   onDoubleClick?: (id: string) => void
@@ -290,6 +344,7 @@ export const ItemView = memo(function ItemView(props: {
         editable={props.editable === true}
         editing={props.editingId === item.id}
         onPatch={props.onPatch}
+        onFit={props.onFit}
         onLink={props.onLink}
         media={props.media}
         loading={props.loading}
@@ -305,7 +360,8 @@ function ItemBody(props: {
   selected?: boolean
   editable?: boolean
   editing?: boolean
-  onPatch?: (id: string, patch: Partial<BoardItem>) => void
+  onPatch?: (id: string, patch: Partial<BoardItem>, silent?: boolean) => void
+  onFit?: (id: string, height: number) => void
   onLink?: (href: string) => void
   media?: MediaBridge
   loading?: { done: number; total: number }
@@ -358,20 +414,8 @@ function ItemBody(props: {
       )
     }
     case 'text': {
-      const color = item.color || '#1a1a1a'
       if (props.editing) return null
-      return (
-        <RichText
-          html={item.content}
-          flush
-          style={{
-            color,
-            fontSize: item.fontSize,
-            textAlign: item.align,
-            fontFamily: item.fontFamily
-          }}
-        />
-      )
+      return <TextFlow item={item} onFit={props.onFit} onLink={props.onLink} />
     }
     case 'shape': {
       const fill = item.fillColor === 'transparent' ? 'none' : item.fillColor
@@ -592,7 +636,7 @@ function ItemBody(props: {
           item={item}
           selected={props.selected === true}
           editable={props.editable === true && item.locked !== true}
-          onChange={(patch) => props.onPatch?.(item.id, patch)}
+          onChange={(patch, silent) => props.onPatch?.(item.id, patch, silent)}
         />
       )
     }

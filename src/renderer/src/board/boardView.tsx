@@ -64,13 +64,14 @@ import { contrastColor, shadesOf } from '@shared/color'
 import { faceLocalToWorld, faceWorldToLocal, polygonOverlapArea, projectPoint, solidProjection, solidScreenToLocal } from '@shared/three'
 import { snapBox, unionBox } from './align'
 import type { Guide, Placed } from './align'
-import { boundsOfItems, clamp, fitTextBox, rotatedBox, uid, withoutDanglingConnectors } from '@shared/util'
+import { boundsOfItems, clamp, fitTextBox, measureTextBox, rotatedBox, uid, withoutDanglingConnectors } from '@shared/util'
 import { curvePath } from '@shared/curve'
 import { buildStroke, distanceToStroke, straightStroke } from '@shared/stroke'
 import { api } from '../lib/api'
 import { useApp } from '../lib/store'
 import { navigate } from '../router'
 import { ItemLayer, itemBounds, visibleItems } from './scene'
+import { sheetSize } from './tableView'
 import { shapePath } from './shapes'
 import { ConnectorLayer } from './connectors'
 import { BoardDetails } from './boardDetails'
@@ -146,6 +147,7 @@ type DragMode =
       startX: number
       startY: number
       origin: Rect
+      base: BoardItem
       moved: boolean
     }
   | {
@@ -180,6 +182,13 @@ const RESIZE_HANDLES: Array<{ id: ResizeHandle; cx: number; cy: number; cursor: 
 
 const RESIZE_MIN = 16
 
+const LINK_DOTS: Array<{ id: string; cx: number; cy: number; dx: number; dy: number }> = [
+  { id: 'n', cx: 0.5, cy: 0, dx: 0, dy: -1 },
+  { id: 'e', cx: 1, cy: 0.5, dx: 1, dy: 0 },
+  { id: 's', cx: 0.5, cy: 1, dx: 0, dy: 1 },
+  { id: 'w', cx: 0, cy: 0.5, dx: -1, dy: 0 }
+]
+
 const CROP_HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
 function rotatePoint(point: { x: number; y: number }, degrees: number): { x: number; y: number } {
@@ -197,7 +206,7 @@ interface ResizeBox {
   height: number
 }
 
-function resizedItem(item: BoardItem, origin: Rect, next: ResizeBox): BoardItem {
+function resizedItem(item: BoardItem, origin: Rect, next: ResizeBox, handle: ResizeHandle): BoardItem {
   const width = Math.max(RESIZE_MIN, Math.round(next.width))
   const height = Math.max(RESIZE_MIN, Math.round(next.height))
   const x = Math.round(next.x)
@@ -216,14 +225,12 @@ function resizedItem(item: BoardItem, origin: Rect, next: ResizeBox): BoardItem 
     }
   }
   if (item.kind === 'text') {
-    const fit = fitTextBox(item.plain, {
-      width,
-      minHeight: Math.round(item.fontSize * 1.3),
-      fontSize: item.fontSize,
-      padX: 2,
-      padY: 2
-    })
-    return { ...item, x, y, w: width, h: fit.height, fontSize: fit.fontSize }
+    const corner = handle.length > 1
+    const scale = corner
+      ? Math.max(width / Math.max(1, origin.width), height / Math.max(1, origin.height))
+      : 1
+    const fontSize = corner ? Math.round(clamp(item.fontSize * scale, 6, 400)) : item.fontSize
+    return { ...item, x, y, w: width, h: height, fontSize }
   }
   if (item.kind === 'sticky') {
     const fit = fitTextBox(item.plain, { width, minHeight: height, fontSize: item.fontSize, padX: 8, padY: 6 })
@@ -452,23 +459,7 @@ function changed(base: BoardItem[], next: BoardItem[]): boolean {
 
 function withPatch(item: BoardItem, patch: Partial<BoardItem>): BoardItem {
   if (item.locked && patch.locked === undefined) return item
-  const merged = { ...item, ...patch } as BoardItem
-  if (merged.kind !== 'table') return merged
-  const width = patch.w
-  const height = patch.h
-  if (width !== undefined && !('columnWidths' in patch)) {
-    const total = merged.columnWidths.reduce((sum, value) => sum + value, 0)
-    if (total > 0) {
-      merged.columnWidths = merged.columnWidths.map((value) => Math.max(60, Math.round((value * width) / total)))
-    }
-  }
-  if (height !== undefined && !('rowHeights' in patch)) {
-    const total = merged.rowHeights.reduce((sum, value) => sum + value, 0)
-    if (total > 0) {
-      merged.rowHeights = merged.rowHeights.map((value) => Math.max(28, Math.round((value * height) / total)))
-    }
-  }
-  return merged
+  return { ...item, ...patch } as BoardItem
 }
 
 const GRID_MODES: Array<{ id: GridMode; label: string }> = [
@@ -570,6 +561,10 @@ export function BoardView(props: { docId: string }): ReactNode {
   const [railGutter, setRailGutter] = useState(56)
   const [selection, setSelection] = useState<Set<string>>(new Set())
   const [drag, setDrag] = useState<DragMode>({ kind: 'idle' })
+  const dragKindRef = useRef<DragMode['kind']>('idle')
+  useEffect(() => {
+    dragKindRef.current = drag.kind
+  }, [drag.kind])
   const [readOnlyLocal, setReadOnlyLocal] = useState(false)
   const [hostLocked, setHostLocked] = useState(false)
   const { ask, element: promptElement } = usePrompt()
@@ -609,6 +604,17 @@ export function BoardView(props: { docId: string }): ReactNode {
     replaces: number | null
     value: string
   } | null>(null)
+
+  useEffect(() => {
+    if (!moreOpen) return
+    const onPointerDown = (event: PointerEvent): void => {
+      const node = event.target as HTMLElement | null
+      if (node?.closest('.toolrail')) return
+      setMoreOpen(false)
+    }
+    window.addEventListener('pointerdown', onPointerDown, true)
+    return () => window.removeEventListener('pointerdown', onPointerDown, true)
+  }, [moreOpen])
 
   const toggleOverlay = useCallback(
     (kind: 'calculator' | 'details' | 'inspector' | 'settings' | 'export'): void => {
@@ -938,6 +944,7 @@ export function BoardView(props: { docId: string }): ReactNode {
   useEffect(() => {
     let alive = true
     setLoading(true)
+    void api.update.check(true)
     api.board
       .open(props.docId)
       .then((loaded) => {
@@ -1391,8 +1398,9 @@ export function BoardView(props: { docId: string }): ReactNode {
   const graphSelection = useMemo(() => selectedItems.filter((item): item is GraphItem => item.kind === 'graph'), [selectedItems])
   const selectionLocked = selectedItems.length > 0 && selectedItems.every((item) => item.locked)
   const editingItem = editing ? byId.get(editing.id) : undefined
+  const movingItems = drag.kind === 'move' && drag.moved
   const resizeTargets =
-    tool === 'select' && !readOnly && !editingItem
+    tool === 'select' && !readOnly && !editingItem && !movingItems && !cropEdit
       ? selectedItems.filter((item) => !item.locked && item.kind !== 'solid' && item.kind !== 'connector')
       : []
   const panelKind: 'none' | 'selection' | 'solid' | 'graph' | 'create' | 'erase' | 'link' | 'text' | 'sticky' | 'image' | 'table' | 'pen' = (() => {
@@ -2194,16 +2202,18 @@ export function BoardView(props: { docId: string }): ReactNode {
       if (kind === 'table') {
         const columns = 3
         const rows = 3
-        const columnWidth = 160
+        const columnWidth = 168
         const rowHeight = 48
+        const fontSize = 14
         const id = uid('tbl_')
+        const box = sheetSize(columns, rows, columnWidth, rowHeight, fontSize)
         const item: BoardItem = {
           id,
           kind: 'table',
-          x: Math.round(point.x - (columnWidth * columns) / 2),
-          y: Math.round(point.y - (rowHeight * rows) / 2),
-          w: columnWidth * columns,
-          h: rowHeight * rows,
+          x: Math.round(point.x - box.width / 2),
+          y: Math.round(point.y - box.height / 2),
+          w: box.width,
+          h: box.height,
           rotation: 0,
           z: doc.items.length,
           columns,
@@ -2211,7 +2221,7 @@ export function BoardView(props: { docId: string }): ReactNode {
           columnWidths: new Array(columns).fill(columnWidth),
           rowHeights: new Array(rows).fill(rowHeight),
           cells: new Array(columns * rows).fill(''),
-          fontSize: 14
+          fontSize
         }
         commit([...doc.items, item])
         setSelection(new Set([id]))
@@ -2277,6 +2287,7 @@ export function BoardView(props: { docId: string }): ReactNode {
         }
         commit([...doc.items, item])
         setSelection(new Set([id]))
+        setTool('select')
         return
       }
       if (kind === 'image') {
@@ -2285,6 +2296,7 @@ export function BoardView(props: { docId: string }): ReactNode {
           toast('Картинка не выбрана', 'image')
           return
         }
+        setTool('select')
         await addImageAt(dataUrl, point)
         return
       }
@@ -2318,6 +2330,9 @@ export function BoardView(props: { docId: string }): ReactNode {
         setSelection(new Set([id]))
         setEditing({ id, html: '<p>Текст</p>', plain: 'Текст' })
         freshEditingRef.current = id
+        editingBaseRef.current = null
+        editingDirtyRef.current = false
+        setTool('select')
         return
       }
       const stickyFit = fitTextBox('Заметка', { width: 200, minHeight: 200, fontSize: textSize, padX: 8, padY: 6 })
@@ -2340,6 +2355,9 @@ export function BoardView(props: { docId: string }): ReactNode {
       setSelection(new Set([id]))
       setEditing({ id, html: '<p>Заметка</p>', plain: 'Заметка' })
       freshEditingRef.current = id
+      editingBaseRef.current = null
+      editingDirtyRef.current = false
+      setTool('select')
     },
     [doc, readOnly, commit, toast, solidKind, strokeColor, size, textColor, textSize, addImageAt]
   )
@@ -2441,7 +2459,20 @@ export function BoardView(props: { docId: string }): ReactNode {
       const point = toWorld(event.clientX, event.clientY)
       dragBaseRef.current = doc.items
       event.currentTarget.setPointerCapture?.(event.pointerId)
-      setDrag({ kind: 'resize', id, handle, startX: point.x, startY: point.y, origin: box, moved: false })
+      setDrag({ kind: 'resize', id, handle, startX: point.x, startY: point.y, origin: box, base: item, moved: false })
+    },
+    [byId, doc, readOnly, toWorld]
+  )
+
+  const startLinkDot = useCallback(
+    (id: string, event: React.PointerEvent): void => {
+      event.stopPropagation()
+      if (readOnly || !doc) return
+      const item = byId.get(id)
+      if (!item || item.locked) return
+      const point = toWorld(event.clientX, event.clientY)
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+      setDrag({ kind: 'link', fromId: id, point })
     },
     [byId, doc, readOnly, toWorld]
   )
@@ -3091,7 +3122,9 @@ export function BoardView(props: { docId: string }): ReactNode {
         const y = centerY - height / 2
         setDoc({
           ...doc,
-          items: doc.items.map((entry) => (entry.id === drag.id ? resizedItem(entry, drag.origin, { x, y, width, height }) : entry))
+          items: doc.items.map((entry) =>
+            entry.id === drag.id ? resizedItem(drag.base, drag.origin, { x, y, width, height }, drag.handle) : entry
+          )
         })
         pushPreview({
           t: 'preview',
@@ -3706,13 +3739,15 @@ export function BoardView(props: { docId: string }): ReactNode {
   )
 
   const patchItem = useCallback(
-    (id: string, patch: Partial<BoardItem>) => {
+    (id: string, patch: Partial<BoardItem>, silent?: boolean) => {
       if (!doc || readOnly) return
       const base = itemsRef.current
       const next = base.map((item) => (item.id === id ? withPatch(item, patch) : item))
-      if (changed(base, next)) commit(next)
+      if (!changed(base, next)) return
+      if (silent) persist(next)
+      else commit(next)
     },
-    [doc, commit, readOnly]
+    [doc, commit, persist, readOnly]
   )
 
   const patchItems = useCallback(
@@ -3724,6 +3759,17 @@ export function BoardView(props: { docId: string }): ReactNode {
       if (changed(base, next)) commit(next)
     },
     [doc, commit, readOnly]
+  )
+
+  const patchItemsSilent = useCallback(
+    (ids: string[], patch: Partial<BoardItem>) => {
+      if (!doc || readOnly || !ids.length) return
+      const target = new Set(ids)
+      const base = itemsRef.current
+      const next = base.map((item) => (target.has(item.id) ? withPatch(item, patch) : item))
+      if (changed(base, next)) persist(next)
+    },
+    [doc, persist, readOnly]
   )
 
   const livePatchTimerRef = useRef<number | null>(null)
@@ -3756,6 +3802,18 @@ export function BoardView(props: { docId: string }): ReactNode {
       applyLivePatch(next, base)
     },
     [doc, readOnly, applyLivePatch]
+  )
+
+  const fitTextHeight = useCallback(
+    (id: string, height: number) => {
+      if (readOnly || dragKindRef.current !== 'idle') return
+      if (editing && editing.id === id) return
+      const item = itemsRef.current.find((entry) => entry.id === id)
+      if (!item || item.kind !== 'text' || item.locked) return
+      if (Math.abs(item.h - height) <= 1) return
+      patchItemsSilent([id], { h: height })
+    },
+    [readOnly, editing, patchItemsSilent]
   )
 
   const patchSolid = useCallback(
@@ -4031,6 +4089,9 @@ const navigateTo = useCallback(
   )
 
   const editorSizeRef = useRef<{ width: number; height: number } | null>(null)
+  const editingBaseRef = useRef<BoardItem[] | null>(null)
+  const editingDirtyRef = useRef(false)
+  const autosaveTimerRef = useRef<number | null>(null)
 
   const startEditing = useCallback(
     (id: string) => {
@@ -4038,7 +4099,10 @@ const navigateTo = useCallback(
       if (!item || readOnly || item.locked) return
       if (item.kind === 'image') {
         setSelection(new Set([id]))
-        void replaceImage(id, 'clipboard')
+        const asset = item.asset
+        const src = asset?.file ? assetUrl(asset.file) : asset?.dataUrl ?? asset?.sourceUrl ?? ''
+        if (src) void startCrop(id)
+        else void replaceImage(id, 'clipboard')
         return
       }
       if (item.kind !== 'text' && item.kind !== 'sticky' && item.kind !== 'shape') return
@@ -4046,34 +4110,42 @@ const navigateTo = useCallback(
       const html = sanitizeRichHtml(item.content || '') || richHtmlFromPlain(item.plain || '')
       editorSizeRef.current = null
       freshEditingRef.current = null
+      editingBaseRef.current = itemsRef.current
+      editingDirtyRef.current = false
       setEditing({ id, html, plain: plainFromRichHtml(html) })
     },
-    [byId, readOnly, replaceImage]
+    [byId, readOnly, replaceImage, startCrop, assetUrl]
   )
 
-  const commitEditing = useCallback(() => {
-    if (!editing || !doc) return
-    const html = sanitizeRichHtml(editing.html)
-    const value = plainFromRichHtml(html)
-    const measured = editorSizeRef.current
-    editorSizeRef.current = null
-    setEditing(null)
-    setTextFormat(emptyFormat)
-    clearPreview()
-    const item = byId.get(editing.id)
-    if (!item) return
-    if (!value && !item.sourceType && (item.kind === 'text' || item.kind === 'sticky')) {
-      setSelection(new Set())
-      commit(doc.items.filter((entry) => entry.id !== editing.id))
-      return
-    }
-    const untouched =
-      (item.kind === 'text' || item.kind === 'sticky' || item.kind === 'shape') &&
-      item.plain === value &&
-      item.content === html
-    if (untouched) return
-    commit(
-      doc.items.map((entry) => {
+  const writeEditing = useCallback(
+    (close: boolean) => {
+      if (!editing || !doc) return
+      const html = sanitizeRichHtml(editing.html)
+      const value = plainFromRichHtml(html)
+      const measured = editorSizeRef.current
+      editorSizeRef.current = null
+      const item = byId.get(editing.id)
+      if (close) {
+        setEditing(null)
+        setTextFormat(emptyFormat)
+        clearPreview()
+        if (autosaveTimerRef.current !== null) {
+          window.clearTimeout(autosaveTimerRef.current)
+          autosaveTimerRef.current = null
+        }
+      }
+      if (!item) return
+      if (item.kind !== 'text' && item.kind !== 'sticky' && item.kind !== 'shape') return
+      if (!value && !item.sourceType && (item.kind === 'text' || item.kind === 'sticky')) {
+        if (!close) return
+        setSelection(new Set())
+        editingBaseRef.current = null
+        commit(doc.items.filter((entry) => entry.id !== editing.id))
+        return
+      }
+      const untouched = item.plain === value && item.content === html
+      if (untouched && !editingDirtyRef.current) return
+      const next = doc.items.map((entry) => {
         if (entry.id !== editing.id) return entry
         if (entry.kind === 'text' || entry.kind === 'sticky' || entry.kind === 'shape') {
           const base = { ...entry, content: html, plain: value }
@@ -4086,14 +4158,8 @@ const navigateTo = useCallback(
                 h: clamp(Math.round(measured.height), Math.round(entry.fontSize * 1.3), 4000)
               } as BoardItem
             }
-            const fit = fitTextBox(value, {
-              width: entry.w,
-              minHeight: Math.round(entry.fontSize * 1.3),
-              fontSize: entry.fontSize,
-              padX: 2,
-              padY: 2
-            })
-            return { ...base, h: fit.height, fontSize: fit.fontSize } as BoardItem
+            const inner = measureTextBox(value, entry.fontSize, entry.w - 4)
+            return { ...base, h: Math.max(Math.round(entry.fontSize * 1.3), inner.height + 4) } as BoardItem
           }
           if (entry.kind === 'sticky') {
             const fit = fitTextBox(value, { width: entry.w, minHeight: entry.h, fontSize: entry.fontSize, padX: 8, padY: 6 })
@@ -4104,8 +4170,28 @@ const navigateTo = useCallback(
         }
         return entry
       })
-    )
-  }, [editing, doc, byId, commit, clearPreview])
+      if (!close) {
+        editingDirtyRef.current = true
+        persist(next)
+        return
+      }
+      const base = editingBaseRef.current
+      editingBaseRef.current = null
+      if (base) commitAgainst(base, next)
+      else commit(next)
+    },
+    [editing, doc, byId, commit, commitAgainst, persist, clearPreview]
+  )
+
+  const commitEditing = useCallback(() => writeEditing(true), [writeEditing])
+
+  const autosaveEditing = useCallback(() => {
+    if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current)
+    autosaveTimerRef.current = window.setTimeout(() => {
+      autosaveTimerRef.current = null
+      writeEditing(false)
+    }, 700)
+  }, [writeEditing])
 
   const editingBox = editingItem ? itemBounds(editingItem) : null
   const faceLabelItem = faceLabel ? byId.get(faceLabel.itemId) : undefined
@@ -5417,6 +5503,7 @@ const navigateTo = useCallback(
             editable={!readOnly}
             editingId={editing?.id ?? null}
             onPatch={patchItem}
+            onFit={fitTextHeight}
             onNode={registerNode}
             onPointerDown={onItemPointerDown}
             onDoubleClick={readOnly ? undefined : startEditing}
@@ -5430,6 +5517,15 @@ const navigateTo = useCallback(
             const box = itemBounds(target)
             const grip = 11 / Math.max(0.05, liveZoom)
             const half = grip / 2
+            const dot = 10 / Math.max(0.05, liveZoom)
+            const dotGap = 13 / Math.max(0.05, liveZoom)
+            const handles =
+              target.kind === 'image'
+                ? RESIZE_HANDLES.filter((handle) => handle.id.length > 1)
+                : target.kind === 'text'
+                  ? RESIZE_HANDLES.filter((handle) => handle.id === 'e' || handle.id === 'w' || handle.id.length > 1)
+                  : RESIZE_HANDLES
+            const dots = resizeTargets.length === 1 ? LINK_DOTS : []
             return (
               <div
                 key={`rs${target.id}`}
@@ -5442,7 +5538,7 @@ const navigateTo = useCallback(
                   transform: target.rotation ? `rotate(${target.rotation}deg)` : undefined
                 }}
               >
-                {RESIZE_HANDLES.map((handle) => (
+                {handles.map((handle) => (
                   <span
                     key={handle.id}
                     className="resizehandle"
@@ -5454,6 +5550,20 @@ const navigateTo = useCallback(
                       cursor: handle.cursor
                     }}
                     onPointerDown={(event) => startResize(target.id, handle.id, event)}
+                  />
+                ))}
+                {dots.map((link) => (
+                  <span
+                    key={link.id}
+                    className="linkdot"
+                    style={{
+                      left: `calc(${link.cx * 100}% + ${link.dx * dotGap - dot / 2}px)`,
+                      top: `calc(${link.cy * 100}% + ${link.dy * dotGap - dot / 2}px)`,
+                      width: dot,
+                      height: dot
+                    }}
+                    title="Стрелка"
+                    onPointerDown={(event) => startLinkDot(target.id, event)}
                   />
                 ))}
                 <span
@@ -5688,7 +5798,10 @@ const navigateTo = useCallback(
               autoWidth={editingItem.kind === 'text'}
               box={{ x: editingBox.x, y: editingBox.y }}
               minWidth={120}
-              onInput={(html, plain) => setEditing({ id: editing.id, html, plain })}
+              onInput={(html, plain) => {
+                setEditing({ id: editing.id, html, plain })
+                autosaveEditing()
+              }}
               onFormat={setTextFormat}
               onCommit={commitEditing}
               onMeasure={(width, height) => {

@@ -26,6 +26,11 @@ function renderParams(options: Partial<ExportOptions> & { docId: string }): Rend
   }
 }
 
+async function archiveBytes(docId: string): Promise<Buffer> {
+  await exportBoard({ docId, thumbnail: true }).catch(() => '')
+  return buildArchive(docId)
+}
+
 export async function exportBoard(
   options: Partial<ExportOptions> & { docId: string; thumbnail?: boolean }
 ): Promise<string> {
@@ -67,9 +72,14 @@ export async function exportBoard(
       writeFileSync(target, JSON.stringify(doc, null, 2), 'utf8')
       return target
     }
+    case 'liro': {
+      const target = join(dir, `${name}.liro`)
+      writeFileSync(target, await archiveBytes(options.docId))
+      return target
+    }
     case 'zip': {
       const target = join(dir, `${name}.zip`)
-      writeFileSync(target, buildArchive(options.docId, name))
+      writeFileSync(target, await archiveBytes(options.docId))
       return target
     }
     case 'svg': {
@@ -108,8 +118,13 @@ export async function exportToPath(options: ExportOptions, target: string): Prom
       writeFileSync(target, text, 'utf8')
       return { ok: true, path: target, bytes: Buffer.byteLength(text, 'utf8') }
     }
+    case 'liro': {
+      const buffer = await archiveBytes(options.docId)
+      writeFileSync(target, buffer)
+      return { ok: true, path: target, bytes: buffer.byteLength }
+    }
     case 'zip': {
-      const buffer = buildArchive(options.docId, baseName(doc.title))
+      const buffer = await archiveBytes(options.docId)
       writeFileSync(target, buffer)
       return { ok: true, path: target, bytes: buffer.byteLength }
     }
@@ -123,13 +138,13 @@ export async function exportToPath(options: ExportOptions, target: string): Prom
   }
 }
 
-export function buildArchive(docId: string, name: string): Buffer {
+export function buildArchive(docId: string): Buffer {
   const doc = store.readDoc(docId)
-  const dir = docDir(docId)
   const entries: { name: string; data: Buffer }[] = [
-    { name: `${name}.json`, data: Buffer.from(JSON.stringify(doc), 'utf8') },
+    { name: 'board.json', data: Buffer.from(JSON.stringify(doc), 'utf8') },
     { name: 'README.txt', data: Buffer.from(readme(doc.title), 'utf8') }
   ]
+  const dir = docDir(docId)
   const assetsDirPath = join(dir, 'assets')
   if (existsSync(assetsDirPath)) {
     for (const entry of readdirSync(assetsDirPath)) {
@@ -149,17 +164,17 @@ export function buildArchive(docId: string, name: string): Buffer {
 
 function readme(title: string): string {
   return [
-    'Liro — архив доски',
+    'Liro — файл доски',
     '',
     `Доска: ${title}`,
-    `Экспортировано: ${new Date().toISOString()}`,
+    `Сохранено: ${new Date().toISOString()}`,
     '',
-    'Файлы:',
+    'Внутри:',
     '- board.json — полное описание доски (элементы, стили, связи)',
     '- assets/ — изображения доски',
     '- thumb.png — миниатюра',
     '',
-    'Импорт: перетащите архив в окно Liro или используйте «Импорт из файла».'
+    'Открыть в Liro: перетащите файл в окно приложения или выберите его в «Импорт из файла».'
   ].join('\n')
 }
 

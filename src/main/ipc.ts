@@ -89,6 +89,20 @@ function sendSettings(): void {
   }
 }
 
+export function openBoardFile(path: string): string {
+  try {
+    const result = importFromFile({ path })
+    sendLibraryChanged()
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('event:nav:go', `#/board/${result.docId}`)
+    }
+    return result.docId
+  } catch (error) {
+    console.error('файл доски не открылся', error)
+    return ''
+  }
+}
+
 const IMAGE_LIMIT = 24 * 1024 * 1024
 
 function nameFromUrl(url: string): string {
@@ -496,7 +510,7 @@ export function registerIpc(): void {
             dialog.showOpenDialogSync(mainWindow ?? undefined!, {
               title: 'Выберите файл доски',
               properties: ['openFile'],
-              filters: [{ name: 'Файлы Liro', extensions: ['json', 'zip', 'rtb'] }]
+              filters: [{ name: 'Файлы Liro', extensions: ['liro', 'json', 'zip', 'rtb'] }]
             })
           )
       if (!chosen) return fail('Импорт отменён', 'canceled')
@@ -751,8 +765,8 @@ export function registerIpc(): void {
       packaged: app.isPackaged
     })
   )
-  ipcMain.handle('update:check', () => {
-    checkForUpdate(true)
+  ipcMain.handle('update:check', (_e, quiet?: boolean) => {
+    checkForUpdate(quiet !== true)
     return ok(true)
   })
   ipcMain.handle('update:apply', () => {
@@ -895,6 +909,8 @@ function suggestedName(options: ExportOptions): string {
       return `${base}.html`
     case 'zip':
       return `${base}.zip`
+    case 'liro':
+      return `${base}.liro`
     default:
       return `${base}.json`
   }
@@ -910,6 +926,8 @@ function exportFilters(options: ExportOptions): Electron.FileFilter[] {
       return [{ name: 'HTML', extensions: ['html'] }]
     case 'zip':
       return [{ name: 'ZIP', extensions: ['zip'] }]
+    case 'liro':
+      return [{ name: 'Файл Liro', extensions: ['liro'] }]
     default:
       return [{ name: 'JSON', extensions: ['json'] }]
   }

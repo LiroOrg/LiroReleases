@@ -1,7 +1,7 @@
 {
   "name": "liro",
   "productName": "Liro",
-  "version": "1.14.10",
+  "version": "1.14.11",
   "description": "Настольное приложение для досок. Работает офлайн",
   "main": "./out/main/index.js",
   "author": "Liro",
@@ -31,7 +31,8 @@
     "files": [
       "out/**/*",
       "resources/**/*",
-      "!resources/updater/**"
+      "!resources/updater/**",
+      "!resources/liro-file.ico"
     ],
     "extraResources": [
       {
@@ -73,6 +74,15 @@
         "owner": "LiroOrg",
         "repo": "LiroReleases",
         "releaseType": "release"
+      }
+    ],
+    "fileAssociations": [
+      {
+        "ext": "liro",
+        "name": "Liro Board",
+        "description": "Доска Liro",
+        "icon": "resources/liro-file.ico",
+        "role": "Editor"
       }
     ]
   },

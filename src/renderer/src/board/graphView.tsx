@@ -21,7 +21,7 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
   const { item } = props
   const width = Math.max(1, item.w)
   const height = Math.max(1, item.h)
-  const radius = Math.max(0, Math.min(20, Math.round(Math.min(width, height) * 0.03)))
+  const radius = Math.max(0, Math.min(16, Math.round(Math.min(width, height) * 0.03)))
   const step = item.gridStep > 0 ? item.gridStep : 1
   const originX = clamp01(item.originX)
   const originY = clamp01(item.originY)
@@ -31,7 +31,6 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
   const xTo = ((1 - originX) * width) / item.scale
   const tick = Math.max(9, Math.min(15, Math.round(Math.min(width, height) / 44)))
   const axisFont = Math.max(11, Math.min(18, Math.round(Math.min(width, height) / 30)))
-  const clipId = `gclip-${item.id}`
   const axisX = toX(0)
   const axisY = toY(0)
 
@@ -42,7 +41,8 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
         .map((expression) => {
           const fn = compileFormula(expression.formula)
           const segments = fn ? curveSegments(fn, xFrom, xTo, toX, toY, width, height) : []
-          return { id: expression.id, fn, segments, color: expression.color, lineWidth: expression.lineWidth }
+          const d = segments.map((points) => `M${points.join('L')}`).join('')
+          return { id: expression.id, fn, d, color: expression.color, lineWidth: expression.lineWidth }
         }),
     [item.expressions, item.scale, originX, originY, width, height, xFrom, xTo]
   )
@@ -98,41 +98,45 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
   const stepPx = Math.max(1, step * item.scale)
   const drawEvery = Math.max(1, Math.ceil(8 / stepPx))
   const grid = useMemo(() => {
-    const verticals: number[] = []
-    const horizontals: number[] = []
+    let d = ''
     const limit = Math.ceil(Math.max(width, height) / stepPx) + 2
     for (let index = drawEvery; index <= limit; index += drawEvery) {
       const offset = index * stepPx
-      if (offset <= width) verticals.push(originX * width + offset)
-      if (originX * width - offset >= 0) verticals.push(originX * width - offset)
-      if (offset <= height) horizontals.push((1 - originY) * height + offset)
-      if ((1 - originY) * height - offset >= 0) horizontals.push((1 - originY) * height - offset)
+      if (offset <= width) d += `M${(originX * width + offset).toFixed(1)} 0V${height}`
+      if (originX * width - offset >= 0) d += `M${(originX * width - offset).toFixed(1)} 0V${height}`
+      if (offset <= height) d += `M0 ${((1 - originY) * height + offset).toFixed(1)}H${width}`
+      if ((1 - originY) * height - offset >= 0) d += `M0 ${((1 - originY) * height - offset).toFixed(1)}H${width}`
     }
-    return { verticals, horizontals }
+    return d
   }, [stepPx, drawEvery, originX, originY, width, height])
 
   const labels = useMemo(() => {
     const out: Array<{ x: number; y: number; text: string; anchor: 'middle' | 'end' }> = []
     if (!item.showLabels) return out
+    const minGap = Math.max(46, tick * 3.4)
+    const alongX: Array<{ px: number; text: string }> = []
+    const alongY: Array<{ px: number; text: string }> = []
     const count = Math.ceil(Math.max(width, height) / stepPx) + 2
     for (let index = drawEvery; index <= count; index += drawEvery) {
       const value = index * step
-      const right = toX(value)
-      if (right > tick * 2 && right < width - tick) {
-        out.push({ x: right, y: axisY + tick + 3, text: formatTick(value), anchor: 'middle' })
-      }
-      const left = toX(-value)
-      if (left > tick * 2 && left < width - tick) {
-        out.push({ x: left, y: axisY + tick + 3, text: formatTick(-value), anchor: 'middle' })
-      }
-      const top = toY(value)
-      if (top > tick && top < height - 4) {
-        out.push({ x: axisX - 6, y: top + tick * 0.35, text: formatTick(value), anchor: 'end' })
-      }
-      const bottom = toY(-value)
-      if (bottom > tick && bottom < height - 4) {
-        out.push({ x: axisX - 6, y: bottom + tick * 0.35, text: formatTick(-value), anchor: 'end' })
-      }
+      alongX.push({ px: toX(value), text: formatTick(value) })
+      alongX.push({ px: toX(-value), text: formatTick(-value) })
+      alongY.push({ px: toY(value), text: formatTick(value) })
+      alongY.push({ px: toY(-value), text: formatTick(-value) })
+    }
+    let lastX = Number.NEGATIVE_INFINITY
+    for (const entry of alongX.sort((a, b) => a.px - b.px)) {
+      if (entry.px < tick * 2 || entry.px > width - tick) continue
+      if (entry.px - lastX < minGap) continue
+      lastX = entry.px
+      out.push({ x: entry.px, y: axisY + tick + 3, text: entry.text, anchor: 'middle' })
+    }
+    let lastY = Number.NEGATIVE_INFINITY
+    for (const entry of alongY.sort((a, b) => a.px - b.px)) {
+      if (entry.px < tick || entry.px > height - 4) continue
+      if (entry.px - lastY < minGap) continue
+      lastY = entry.px
+      out.push({ x: axisX - 6, y: entry.px + tick * 0.35, text: entry.text, anchor: 'end' })
     }
     return out
   }, [item.showLabels, step, stepPx, drawEvery, item.scale, originX, originY, width, height, axisX, axisY, tick])
@@ -147,41 +151,11 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
       onPointerMove={onHoverMove}
       onPointerLeave={onHoverLeave}
     >
-      <defs>
-        <clipPath id={clipId}>
-          <rect x={0} y={0} width={width} height={height} rx={radius} ry={radius} />
-        </clipPath>
-      </defs>
       <rect x={0} y={0} width={width} height={height} rx={radius} ry={radius} fill="#ffffff" />
-      <g clipPath={`url(#${clipId})`}>
-        {item.showGrid
-          ? grid.verticals.map((x, index) => (
-              <line
-                key={`v${index}`}
-                x1={x}
-                y1={0}
-                x2={x}
-                y2={height}
-                stroke={item.axisColor}
-                strokeWidth={0.5}
-                opacity={0.16}
-              />
-            ))
-          : null}
-        {item.showGrid
-          ? grid.horizontals.map((y, index) => (
-              <line
-                key={`h${index}`}
-                x1={0}
-                y1={y}
-                x2={width}
-                y2={y}
-                stroke={item.axisColor}
-                strokeWidth={0.5}
-                opacity={0.16}
-              />
-            ))
-          : null}
+      <g>
+        {item.showGrid && grid ? (
+          <path d={grid} stroke={item.axisColor} strokeWidth={0.5} opacity={0.16} fill="none" />
+        ) : null}
         <line x1={0} y1={axisY} x2={width} y2={axisY} stroke={item.axisColor} strokeWidth={item.lineWidth} />
         <line x1={axisX} y1={0} x2={axisX} y2={height} stroke={item.axisColor} strokeWidth={item.lineWidth} />
         {axisX > 2 && axisX < width - 2 && axisY > 2 && axisY < height - 2 ? (
@@ -207,18 +181,18 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
             {label.text}
           </text>
         ))}
-        {curves.flatMap((curve) =>
-          curve.segments.map((points, index) => (
-            <polyline
-              key={`${curve.id}-${index}`}
-              points={points.join(' ')}
+        {curves.map((curve) =>
+          curve.d ? (
+            <path
+              key={curve.id}
+              d={curve.d}
               fill="none"
               stroke={curve.color}
               strokeWidth={curve.lineWidth}
               strokeLinecap="round"
               strokeLinejoin="round"
             />
-          ))
+          ) : null
         )}
         {hover ? (
           <g pointerEvents="none">

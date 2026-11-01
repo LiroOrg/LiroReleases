@@ -148,7 +148,7 @@ export const api = {
       )
   },
   update: {
-    check: () => unwrap(window.liro.api.updateCheck()),
+    check: (quiet?: boolean) => unwrap(window.liro.api.updateCheck(quiet)),
     apply: () => unwrap(window.liro.api.updateApply())
   },
   live: {

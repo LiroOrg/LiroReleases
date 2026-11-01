@@ -33,6 +33,7 @@ interface Paths {
 
 const FIRST_DELAY = 9000
 const PERIOD = 10 * 60 * 1000
+const QUIET_PERIOD = 60000
 const STALL = 30000
 const RELEASES = 'LiroOrg/LiroReleases'
 const MIN_ASAR = 1000000
@@ -45,6 +46,7 @@ let asked = false
 let lastPercent = -1
 let downloading = false
 let manual = false
+let lastCheck = 0
 let stagedVersion = ''
 let stagedSize = 0
 
@@ -150,6 +152,8 @@ function launchUpdater(where: Paths, file: string, version: string): void {
 
 function check(): void {
   if (disabled() || asked) return
+  if (!manual && Date.now() - lastCheck < QUIET_PERIOD) return
+  lastCheck = Date.now()
   const where = paths()
   if (where && stagedReady(where)) {
     send({ phase: 'ready', version: stagedVersion })

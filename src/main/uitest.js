@@ -745,28 +745,50 @@ const run = async () => {
     const afterNodes = Array.from(document.querySelectorAll('.boarditem[data-kind="table"]'))
     const tableNode = afterNodes.find((node) => !beforeTables.includes(node)) || null
     check('таблица создаётся', afterNodes.length > before, `${before} → ${afterNodes.length}`)
-    check('в таблице есть ячейки', document.querySelectorAll('.tableview__cell').length >= 9)
-    const tableCell = tableNode ? tableNode.querySelectorAll('.tableview__cell')[1] : null
+    check('в таблице есть ячейки', document.querySelectorAll('.sheet__cell').length >= 9)
+    const tableCells = tableNode ? Array.from(tableNode.querySelectorAll('.sheet__cell')) : []
+    const tableCell = tableCells[1] || null
     if (tableCell) {
-      tableCell.dispatchEvent(new PointerEvent('pointerdown', { ...options, clientX: 0, clientY: 0 }))
-      await wait(300)
-      let cellInput = document.querySelector('.tableview__input')
-      if (!cellInput) {
-        tableCell.dispatchEvent(new PointerEvent('pointerdown', { ...options, clientX: 0, clientY: 0 }))
-        await wait(420)
-        cellInput = document.querySelector('.tableview__input')
+      const cellBox = tableCell.getBoundingClientRect()
+      const cellPoint = {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        buttons: 1,
+        pointerId: 9,
+        isPrimary: true,
+        clientX: cellBox.left + 12,
+        clientY: cellBox.top + 10
       }
+      tableCell.dispatchEvent(new PointerEvent('pointerdown', cellPoint))
+      tableCell.dispatchEvent(new PointerEvent('pointerup', cellPoint))
+      await wait(260)
+      tableCell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: cellPoint.clientX, clientY: cellPoint.clientY }))
+      await wait(360)
+      const cellInput = tableNode.querySelector('.sheet__editor')
       check('ячейка таблицы редактируется', !!cellInput)
       if (cellInput) {
         const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
         setter.call(cellInput, 'Проверка')
         cellInput.dispatchEvent(new Event('input', { bubbles: true }))
         await wait(160)
-        cellInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }))
+        cellInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
         await wait(420)
       }
-      const cellTexts = Array.from(document.querySelectorAll('.tableview__text')).map((node) => node.textContent)
+      const cellTexts = Array.from(document.querySelectorAll('.sheet__value')).map((node) => node.textContent)
       check('текст ячейки сохраняется', cellTexts.includes('Проверка'), cellTexts.join('|'))
+      const bar = tableNode.querySelector('.sheet__formula')
+      check('у таблицы есть строка формул', !!bar)
+      if (bar) {
+        const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        inputSetter.call(bar, '=1/0')
+        bar.dispatchEvent(new Event('input', { bubbles: true }))
+        await wait(160)
+        bar.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+        await wait(420)
+        const errors = Array.from(document.querySelectorAll(".sheet__cell[data-err='true']")).map((node) => node.textContent)
+        check('формула считает ошибку', errors.join('|').includes('#ДЕЛ/0'), errors.join('|'))
+      }
     }
     await press('v')
     await wait(200)

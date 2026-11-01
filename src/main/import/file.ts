@@ -36,7 +36,7 @@ export function importFromFile(options: FileImportOptions): FileImportResult {
   const file = options.path
   if (!existsSync(file)) throw new Error('Файл не найден')
   const ext = extname(file).toLowerCase()
-  if (ext === '.zip' || ext === '.rtb' || ext === '.xpi') {
+  if (ext === '.liro' || ext === '.zip' || ext === '.rtb' || ext === '.xpi') {
     const buffer = readFileSync(file)
     if (!isZip(buffer)) throw new Error('Файл не является архивом ZIP')
     return importFromZip(buffer, options)

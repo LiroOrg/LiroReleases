@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu, session, shell } from 'electron'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { getCapture, registerIpc, setMainWindow } from './ipc'
+import { getCapture, openBoardFile, registerIpc, setMainWindow } from './ipc'
 import { buildExtensionFiles } from './import/extension'
 import uiTestSource from './uitest.js?raw'
 import { migrateLegacyData } from './paths'
@@ -25,6 +25,15 @@ function argValue(flag: string): string {
 }
 
 let mainWindow: BrowserWindow | null = null
+
+function boardFileArg(argv: string[]): string {
+  for (const value of argv) {
+    if (typeof value === 'string' && value.toLowerCase().endsWith('.liro') && existsSync(value)) return value
+  }
+  return ''
+}
+
+let startupHash = ''
 
 const shotIndex = process.argv.indexOf('--shot')
 const shotPath = shotIndex >= 0 ? process.argv[shotIndex + 1] : null
@@ -190,7 +199,7 @@ function createWindow(): void {
   } else if (isDev && devUrl) {
     void mainWindow.loadURL(devUrl)
   } else {
-    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'), startupHash ? { hash: startupHash } : {})
   }
 }
 
@@ -279,6 +288,11 @@ if (!app.requestSingleInstanceLock()) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
     }
+    const boardFile = boardFileArg(argv)
+    if (boardFile) {
+      openBoardFile(boardFile)
+      return
+    }
     const link = linkFromArgv(argv)
     if (!link) return
     const code = codeFromLink(link)
@@ -334,6 +348,11 @@ if (!app.requestSingleInstanceLock()) {
     registerAssetProtocol()
     registerLiveProtocol()
     registerIpc()
+    const launchFile = boardFileArg(process.argv)
+    if (launchFile) {
+      const docId = openBoardFile(launchFile)
+      if (docId) startupHash = `#/board/${docId}`
+    }
     buildMenu()
     try {
       await getCapture().start(47811, store.settings.captureToken)

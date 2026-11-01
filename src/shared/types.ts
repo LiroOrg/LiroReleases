@@ -553,7 +553,7 @@ export interface CaptureOptions {
 
 export interface ExportOptions {
   docId: string
-  format: 'png' | 'pdf' | 'html' | 'json' | 'zip' | 'svg'
+  format: 'liro' | 'png' | 'pdf' | 'html' | 'json' | 'zip' | 'svg'
   scope: 'board' | 'frame' | 'selection'
   targetId?: string
   scale: number

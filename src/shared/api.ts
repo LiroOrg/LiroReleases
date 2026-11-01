@@ -186,7 +186,7 @@ export interface ApiLiro {
   openExternal: (url: string) => Promise<IpcResult<boolean>>
   pickDirectory: () => Promise<IpcResult<string>>
   pickFiles: (filters?: { name: string; extensions: string[] }[]) => Promise<IpcResult<FileRef[]>>
-  updateCheck: () => Promise<IpcResult<boolean>>
+  updateCheck: (quiet?: boolean) => Promise<IpcResult<boolean>>
   updateApply: () => Promise<IpcResult<boolean>>
 
   liveHostCreate: (offer: string, code?: string) => Promise<IpcResult<string>>

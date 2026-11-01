@@ -52,7 +52,7 @@ const FEATURES: Array<{ icon: ReactNode; title: string; text: string }> = [
   },
   {
     icon: <Download size={16} />,
-    title: 'Экспорт PNG, PDF, HTML, ZIP и JSON',
+    title: 'Экспорт LIRO, PNG, PDF, HTML, ZIP и JSON',
     text: 'Выгрузка целиком или по фрейму, в масштабе до 4×, с белым или прозрачным фоном.'
   },
   {
@@ -343,7 +343,7 @@ export function About(): ReactNode {
                   </span>
                   <span className="rowitem__grow">
                     <span className="setrow__label">Форматы импорта</span>
-                    <div className="setrow__hint">.json, .zip, .rtb и сбор из браузера</div>
+                    <div className="setrow__hint">.liro, .json, .zip, .rtb и сбор из браузера</div>
                   </span>
                 </div>
                 <div className="rowitem">
@@ -352,7 +352,7 @@ export function About(): ReactNode {
                   </span>
                   <span className="rowitem__grow">
                     <span className="setrow__label">Форматы экспорта</span>
-                    <div className="setrow__hint">PNG, PDF, HTML, ZIP и JSON</div>
+                    <div className="setrow__hint">LIRO, PNG, PDF, HTML, ZIP и JSON</div>
                   </span>
                 </div>
                 <div className="rowitem">

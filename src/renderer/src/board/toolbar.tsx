@@ -181,7 +181,10 @@ export const BoardToolbar = memo(function BoardToolbar(props: {
             onDragStart={(event) => startDrag(event, entry.id)}
             onDragEnd={() => setOver(null)}
             data-active={props.tool === entry.id}
-            onClick={() => props.onTool(entry.id)}
+            onClick={() => {
+              props.onMore(false)
+              props.onTool(entry.id)
+            }}
             aria-label={entry.label}
             title={`${entry.label} · ${entry.key}`}
             data-slot={index + 1}

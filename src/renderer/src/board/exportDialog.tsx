@@ -6,6 +6,7 @@ import { Modal } from '../components/ui'
 import type { BoardDoc, ExportOptions } from '@shared/types'
 
 const FORMATS: Array<{ id: ExportOptions['format']; title: string; text: string }> = [
+  { id: 'liro', title: 'LIRO', text: 'Наш формат: доска целиком со всеми картинками в одном файле.' },
   { id: 'png', title: 'PNG', text: 'Растровое изображение доски. Выберите масштаб 1×–4×.' },
   { id: 'pdf', title: 'PDF', text: 'Векторный документ с текстом. Можно разбить на несколько страниц.' },
   { id: 'html', title: 'HTML', text: 'Автономный файл: открывается без приложения, работает офлайн.' },
@@ -14,10 +15,12 @@ const FORMATS: Array<{ id: ExportOptions['format']; title: string; text: string 
   { id: 'svg', title: 'SVG', text: 'Векторная картинка: открывается в браузере, Иллюстраторе и Inkscape.' }
 ]
 
+const WHOLE_FILE: Array<ExportOptions['format']> = ['liro', 'json', 'zip']
+
 export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?: () => Promise<void> }): ReactNode {
   const toast = useApp((state) => state.toast)
   const fail = useApp((state) => state.fail)
-  const [format, setFormat] = useState<ExportOptions['format']>('png')
+  const [format, setFormat] = useState<ExportOptions['format']>('liro')
   const [scope, setScope] = useState<ExportOptions['scope']>('board')
   const [scale, setScale] = useState(2)
   const [background, setBackground] = useState<ExportOptions['background']>('white')
@@ -42,7 +45,7 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
   const buildOptions = (): ExportOptions => ({
     docId: props.doc.id,
     format,
-    scope,
+    scope: WHOLE_FILE.includes(format) ? 'board' : scope,
     targetId: scope === 'frame' ? frameId : undefined,
     scale,
     background,
@@ -110,38 +113,40 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
         </div>
       </div>
 
-      <div className="field">
-        <span className="field__label">Что экспортировать</span>
-        <div className="field__row" style={{ flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className={scope === 'board' ? 'chip chip--active' : 'chip'}
-            onClick={() => setScope('board')}
-          >
-            Вся доска
-          </button>
-          <button
-            type="button"
-            className={scope === 'frame' ? 'chip chip--active' : 'chip'}
-            onClick={() => setScope('frame')}
-          >
-            Одну рамку
-          </button>
-          <span className="dim" style={{ fontSize: 12 }}>
-            {props.doc.title}
-          </span>
+      {WHOLE_FILE.includes(format) ? null : (
+        <div className="field">
+          <span className="field__label">Что экспортировать</span>
+          <div className="field__row" style={{ flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className={scope === 'board' ? 'chip chip--active' : 'chip'}
+              onClick={() => setScope('board')}
+            >
+              Вся доска
+            </button>
+            <button
+              type="button"
+              className={scope === 'frame' ? 'chip chip--active' : 'chip'}
+              onClick={() => setScope('frame')}
+            >
+              Одну рамку
+            </button>
+            <span className="dim" style={{ fontSize: 12 }}>
+              {props.doc.title}
+            </span>
+          </div>
+          {scope === 'frame' ? (
+            <select className="select" value={frameId} onChange={(event) => setFrameId(event.target.value)}>
+              <option value="">Выберите рамку</option>
+              {frames.map((frame) => (
+                <option key={frame.id} value={frame.id}>
+                  {frame.kind === 'frame' ? frame.title || 'Без названия' : 'Рамка'}
+                </option>
+              ))}
+            </select>
+          ) : null}
         </div>
-        {scope === 'frame' ? (
-          <select className="select" value={frameId} onChange={(event) => setFrameId(event.target.value)}>
-            <option value="">Выберите рамку</option>
-            {frames.map((frame) => (
-              <option key={frame.id} value={frame.id}>
-                {frame.kind === 'frame' ? frame.title || 'Без названия' : 'Рамка'}
-              </option>
-            ))}
-          </select>
-        ) : null}
-      </div>
+      )}
 
       {format === 'png' ? (
         <>
