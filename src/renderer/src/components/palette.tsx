@@ -1,5 +1,58 @@
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Check, Pipette } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { Check, Pipette, Plus } from 'lucide-react'
+
+function hslToHex(hue: number, saturation: number, lightness: number): string {
+  const chroma = saturation * Math.min(lightness, 1 - lightness)
+  const channel = (offset: number): number => {
+    const k = (offset + hue / 30) % 12
+    return lightness - chroma * Math.max(-1, Math.min(k - 3, 9 - k, 1))
+  }
+  const hex = (value: number): string =>
+    Math.round(value * 255)
+      .toString(16)
+      .padStart(2, '0')
+  return `#${hex(channel(0))}${hex(channel(8))}${hex(channel(4))}`
+}
+
+function isLight(hex: string): boolean {
+  const value = hex.replace('#', '')
+  if (value.length !== 6) return false
+  const r = parseInt(value.slice(0, 2), 16)
+  const g = parseInt(value.slice(2, 4), 16)
+  const b = parseInt(value.slice(4, 6), 16)
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6
+}
+
+const HUES: Array<[number, number]> = [
+  [2, 0.7], [20, 0.78], [36, 0.82], [50, 0.78], [76, 0.62], [140, 0.52],
+  [172, 0.52], [196, 0.62], [216, 0.7], [248, 0.62], [280, 0.56], [322, 0.62]
+]
+
+const TONES: Array<[number, number]> = [
+  [0.9, 0.6], [0.78, 0.82], [0.64, 1], [0.48, 1], [0.32, 0.88]
+]
+
+const GRAYS = [0.97, 0.93, 0.86, 0.77, 0.66, 0.55, 0.44, 0.35, 0.27, 0.19, 0.12, 0.06]
+
+const GRID_COLUMNS = 6
+
+function serpentine(colors: string[]): string[] {
+  const rows: string[][] = []
+  for (let index = 0; index < colors.length; index += GRID_COLUMNS)
+    rows.push(colors.slice(index, index + GRID_COLUMNS))
+  return rows.flatMap((row, index) => (index % 2 ? row.slice().reverse() : row))
+}
+
+function buildAllColors(): string[] {
+  const ramp = GRAYS.slice().reverse().map((tone) => hslToHex(220, 0.02, tone))
+  for (const [lightness, saturation] of TONES)
+    for (const [hue, base] of HUES) ramp.push(hslToHex(hue, base * saturation, lightness))
+  return serpentine(ramp)
+}
+
+const ALL_COLORS = buildAllColors()
 
 export function PaletteHead(props: { icon: ReactNode; label: string; hint?: string; keyHint?: string }): ReactNode {
   return (
@@ -163,6 +216,151 @@ export function PaletteSwatches(props: {
         <Pipette size={13} />
       </label>
     </div>
+  )
+}
+
+export function BrushDot(props: {
+  color: string
+  width: number
+  max: number
+  active: boolean
+  nameFor: (color: string) => string
+  onSelect: () => void
+  onChange: (patch: { color?: string; width?: number }) => void
+}): ReactNode {
+  const [open, setOpen] = useState(false)
+  const [spot, setSpot] = useState({ left: 0, top: 0 })
+  const dotRef = useRef<HTMLButtonElement | null>(null)
+  const customRef = useRef<HTMLInputElement | null>(null)
+  const popRef = useRef<HTMLDivElement | null>(null)
+  const lowered = props.color.toLowerCase()
+  const ink = 11 + (Math.min(Math.max(props.width, 1), props.max) / props.max) * 21
+
+  useLayoutEffect(() => {
+    if (!open) return
+    const trigger = dotRef.current?.getBoundingClientRect()
+    const pop = popRef.current
+    if (!trigger || !pop) return
+    const panel = dotRef.current?.closest('.toolpalette')?.getBoundingClientRect() ?? trigger
+    const gap = 8
+    const left =
+      panel.right + pop.offsetWidth + gap > window.innerWidth - 8
+        ? Math.max(8, panel.left - pop.offsetWidth - gap)
+        : panel.right + gap
+    const top = Math.max(8, Math.min(trigger.top - 8, window.innerHeight - pop.offsetHeight - 8))
+    setSpot({ left, top })
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onDown = (event: PointerEvent): void => {
+      const target = event.target as Node
+      if (popRef.current?.contains(target) || dotRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const pick = (color: string): void => {
+    props.onChange({ color })
+    setOpen(false)
+  }
+
+  const select = (): void => {
+    props.onSelect()
+    if (props.active) setOpen((current) => !current)
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        ref={dotRef}
+        className="brushdot"
+        data-active={props.active ? 'true' : undefined}
+        aria-label={`${props.nameFor(props.color)}, ${props.width}`}
+        title={`${props.nameFor(props.color)} · ${props.width} · выбрать, повторный клик — настроить`}
+        onClick={select}
+      >
+        <span
+          className="brushdot__ink"
+          style={{ background: props.color, width: `${ink}px`, height: `${ink}px` }}
+        />
+      </button>
+      {open
+        ? createPortal(
+            <div
+              className="colorpick"
+              ref={popRef}
+              style={{ left: spot.left, top: spot.top }}
+              role="dialog"
+              aria-label="Кисть"
+              onPointerDown={(event) => event.stopPropagation()}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <input
+                type="range"
+                className="colorpick__size"
+                min={1}
+                max={props.max}
+                step={1}
+                value={props.width}
+                aria-label="Размер кисти"
+                title={`Размер: ${props.width}`}
+                onChange={(event) => props.onChange({ width: Number(event.target.value) })}
+              />
+              <div className="colorpick__section">Все цвета</div>
+              <div
+                className="colorpick__grid"
+                style={{ gridTemplateColumns: `repeat(${GRID_COLUMNS}, minmax(0, 1fr))` }}
+              >
+                {ALL_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    className="colorpick__cell"
+                    data-active={color.toLowerCase() === lowered ? 'true' : undefined}
+                    aria-label={props.nameFor(color)}
+                    title={props.nameFor(color)}
+                    onClick={() => pick(color)}
+                    style={{ background: color }}
+                  >
+                    {color.toLowerCase() === lowered ? (
+                      <Check size={13} strokeWidth={3} className={isLight(color) ? 'mark-dark' : 'mark-light'} />
+                    ) : null}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="colorpick__cell colorpick__cell--more"
+                  aria-label="Свой цвет"
+                  title="Свой цвет"
+                  onClick={() => customRef.current?.click()}
+                >
+                  <Plus size={14} />
+                </button>
+                <input
+                  ref={customRef}
+                  type="color"
+                  className="colorpick__custom"
+                  value={/^#[0-9a-fA-F]{6}$/.test(props.color) ? props.color : '#000000'}
+                  aria-label="Свой цвет"
+                  onChange={(event) => pick(event.target.value.toLowerCase())}
+                />
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+    </>
   )
 }
 

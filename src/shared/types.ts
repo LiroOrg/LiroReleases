@@ -522,6 +522,11 @@ export interface LibraryIndex {
 
 export type GridMode = 'none' | 'lines' | 'dots'
 
+export interface BrushPreset {
+  color: string
+  width: number
+}
+
 export interface Settings {
   theme: 'light' | 'dark' | 'system'
   gridSize: number
@@ -535,6 +540,8 @@ export interface Settings {
   uiScale: number
   toolbarOrder: string[]
   toolbarExtras: string[]
+  brushPresets?: BrushPreset[]
+  brushIndex?: number
   captureToken?: string
 }
 

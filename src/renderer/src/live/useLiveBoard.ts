@@ -22,7 +22,7 @@ export interface LiveBoardBridge {
   following: boolean
   cursors: RemoteCursor[]
   preview: LivePreview | null
-  startHost: (doc: BoardDoc) => Promise<void>
+  startHost: (getDoc: () => BoardDoc | null) => Promise<void>
   joinGuest: (code: string, doc: BoardDoc, offer?: string) => Promise<void>
   leave: () => void
   leaveAndCleanup: () => void
@@ -47,6 +47,18 @@ function randomId(): string {
   const bytes = new Uint8Array(8)
   crypto.getRandomValues(bytes)
   return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('')
+}
+
+function sendSnapshot(session: LiveSession, getDoc: () => BoardDoc | null): void {
+  const timer = window.setInterval(() => {
+    if (session.isConnected) {
+      window.clearInterval(timer)
+      const doc = getDoc()
+      if (doc) session.sendChunked('snapshot', JSON.stringify({ title: doc.title, items: doc.items }))
+      return
+    }
+    if (session.isClosed) window.clearInterval(timer)
+  }, 250)
 }
 
 export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
@@ -76,8 +88,13 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
   const lastCursorSentRef = useRef(0)
   const lastCursorRef = useRef<{ x: number; y: number } | null>(null)
   const minimizedRef = useRef(false)
+  const focusedRef = useRef(true)
   const wasConnectedRef = useRef(false)
   const leavingRef = useRef(false)
+  const armSeqRef = useRef(0)
+  const hadPartnerRef = useRef(false)
+  const hostDocRef = useRef<(() => BoardDoc | null) | null>(null)
+  const rearmRef = useRef<() => void>(() => undefined)
 
   const handleMessage = useCallback((message: LiveMessage): void => {
     if (message.t === 'viewport') {
@@ -154,56 +171,72 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
     [handleMessage, options.userName, toast]
   )
 
-  const startHost = useCallback(
-    async (doc: BoardDoc): Promise<void> => {
-      const stored = await api.board.workspace.get(doc.id).catch(() => null)
-      const inviteCode = (stored && stored.invite) || (await api.live.hostCode())
-      if (!stored || stored.invite !== inviteCode) void api.board.workspace.set(doc.id, { invite: inviteCode }).catch(() => undefined)
-      setCode(inviteCode)
-      codeRef.current = inviteCode
+  const armHost = useCallback(
+    async (inviteCode: string): Promise<void> => {
+      const seq = ++armSeqRef.current
+      const alive = (): boolean => seq === armSeqRef.current && codeRef.current === inviteCode && !leavingRef.current
+      const getDoc = hostDocRef.current
+      if (!getDoc) return
       setPreparing(true)
       const session = createSession('host')
       try {
         const offer = await session.createOffer()
         await api.live.hostCreate(offer, inviteCode)
-      } catch (error) {
-        setPreparing(false)
+      } catch {
         session.close()
-        setCode(null)
-        codeRef.current = null
-        throw error
+        if (alive()) window.setTimeout(() => rearmRef.current(), 3000)
+        return
+      }
+      if (!alive()) {
+        session.close()
+        return
       }
       setPreparing(false)
       let answer: string | null = null
+      let lost = false
       try {
         answer = await api.live.hostWait(inviteCode)
-        if (answer) await session.acceptAnswer(answer)
-      } catch (error) {
+      } catch {
+        lost = true
+      }
+      if (answer) {
+        try {
+          await session.acceptAnswer(answer)
+        } catch {
+          lost = true
+          answer = null
+        }
+      }
+      if (!alive()) {
         session.close()
-        await api.live.hostCleanup(inviteCode).catch(() => undefined)
-        setCode(null)
-        codeRef.current = null
-        throw error
+        return
       }
       if (!answer) {
         session.close()
         await api.live.hostCleanup(inviteCode).catch(() => undefined)
-        setCode(null)
-        codeRef.current = null
+        if (!leavingRef.current && seq === armSeqRef.current) window.setTimeout(() => rearmRef.current(), lost ? 3000 : 1200)
         return
       }
       await api.live.hostCleanup(inviteCode).catch(() => undefined)
-      const snapshot = JSON.stringify({ title: doc.title, items: doc.items })
-      const timer = window.setInterval(() => {
-        if (session.isConnected) {
-          window.clearInterval(timer)
-          session.sendChunked('snapshot', snapshot)
-          return
-        }
-        if (session.isClosed) window.clearInterval(timer)
-      }, 250)
+      sendSnapshot(session, getDoc)
     },
     [createSession]
+  )
+
+  const startHost = useCallback(
+    async (getDoc: () => BoardDoc | null): Promise<void> => {
+      if (codeRef.current) return
+      const doc = getDoc()
+      if (!doc) return
+      const stored = await api.board.workspace.get(doc.id).catch(() => null)
+      const inviteCode = (stored && stored.invite) || (await api.live.hostCode())
+      if (!stored || stored.invite !== inviteCode) void api.board.workspace.set(doc.id, { invite: inviteCode }).catch(() => undefined)
+      hostDocRef.current = getDoc
+      setCode(inviteCode)
+      codeRef.current = inviteCode
+      await armHost(inviteCode)
+    },
+    [armHost]
   )
 
   const joinGuest = useCallback(
@@ -233,6 +266,9 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
   const leave = useCallback((): void => {
     const room = codeRef.current
     leavingRef.current = true
+    armSeqRef.current += 1
+    hadPartnerRef.current = false
+    hostDocRef.current = null
     sessionRef.current?.close()
     sessionRef.current = null
     setCode(null)
@@ -363,17 +399,30 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       const session = sessionRef.current
       const at = lastCursorRef.current
       if (!session || !session.isConnected || !at) return
-      if (document.visibilityState === 'hidden' || minimizedRef.current) session.sendLive({ t: 'cursor', x: at.x, y: at.y, away: true })
-      else session.sendLive({ t: 'cursor', x: at.x, y: at.y })
+      if (document.visibilityState === 'hidden' || minimizedRef.current || !focusedRef.current) {
+        session.sendLive({ t: 'cursor', x: at.x, y: at.y, away: true })
+      } else session.sendLive({ t: 'cursor', x: at.x, y: at.y })
     }
     const offState = window.liro.subscribe('window:state', (payload) => {
       minimizedRef.current = Boolean((payload as { minimized?: boolean })?.minimized)
       announce()
     })
+    const onBlur = (): void => {
+      focusedRef.current = false
+      announce()
+    }
+    const onFocus = (): void => {
+      focusedRef.current = true
+      announce()
+    }
     document.addEventListener('visibilitychange', announce)
+    window.addEventListener('blur', onBlur)
+    window.addEventListener('focus', onFocus)
     return () => {
       offState()
       document.removeEventListener('visibilitychange', announce)
+      window.removeEventListener('blur', onBlur)
+      window.removeEventListener('focus', onFocus)
     }
   }, [])
 
@@ -385,6 +434,26 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
     }, 1000)
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    rearmRef.current = () => {
+      const inviteCode = codeRef.current
+      if (!inviteCode || leavingRef.current || !hostDocRef.current) return
+      void armHost(inviteCode)
+    }
+  }, [armHost])
+
+  useEffect(() => {
+    if (connected) {
+      hadPartnerRef.current = true
+      return undefined
+    }
+    if (!hadPartnerRef.current) return undefined
+    hadPartnerRef.current = false
+    if (roleRef.current !== 'host' || leavingRef.current) return undefined
+    const timer = window.setTimeout(() => rearmRef.current(), 1500)
+    return () => window.clearTimeout(timer)
+  }, [connected])
 
   useEffect(() => () => leave(), [leave])
 

@@ -56,7 +56,7 @@ import {
   ZoomIn,
   ZoomOut
 } from 'lucide-react'
-import type { AssetRef, BoardDoc, BoardItem, GraphExpr, GraphItem, GridMode, PathItem, Rect, ShapeName, SolidFace, SolidItem, SolidKind } from '@shared/types'
+import type { AssetRef, BoardDoc, BoardItem, BrushPreset, GraphExpr, GraphItem, GridMode, PathItem, Rect, ShapeName, SolidFace, SolidItem, SolidKind } from '@shared/types'
 import { solidBounds, solidFaceAt, solidPolygons } from '@shared/three'
 import { compileFormula } from '@shared/graph'
 import { contrastColor, shadesOf } from '@shared/color'
@@ -99,6 +99,7 @@ import { TextEditor, activeEditorNode, applyFormat, applyTextColor, currentForma
 import type { TextFormatState } from './textEditor'
 import { plainFromRichHtml, richHtmlFromPlain, sanitizeRichHtml } from './richHtml'
 import {
+  BrushDot,
   PaletteAction,
   PaletteCell,
   PaletteCheck,
@@ -378,10 +379,20 @@ const MAX_ZOOM = 6
 const HISTORY_LIMIT = 200
 const FIRST_BATCH = 300
 const MOVE_EASE = 0.4
-const QUICK_COLORS = ['#1a1a1a', '#7f1d1d', '#1d4ed8', '#15803d', '#b45309']
+const QUICK_COLORS = ['#1f2023', '#d6484a', '#e0873a', '#3d9a68', '#3f74cf']
+const DEFAULT_BRUSHES: BrushPreset[] = [
+  { color: '#1f2023', width: 3 },
+  { color: '#d6484a', width: 6 },
+  { color: '#3f74cf', width: 12 }
+]
 const STICKY_COLORS = ['#fff9b1', '#ffd8b1', '#cfe8fb', '#d9f2e3', '#f3e0ff']
 const GRAPH_DIVISIONS = [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100]
 const COLOR_NAMES: Record<string, string> = {
+  '#1f2023': 'Чёрный',
+  '#d6484a': 'Красный',
+  '#e0873a': 'Оранжевый',
+  '#3d9a68': 'Зелёный',
+  '#3f74cf': 'Синий',
   '#1a1a1a': 'Чёрный',
   '#7f1d1d': 'Бордовый',
   '#1d4ed8': 'Синий',
@@ -604,6 +615,7 @@ export function BoardView(props: { docId: string }): ReactNode {
   const [calculatorOpen, setCalculatorOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
   const [penMode, setPenMode] = useState<'pen' | 'highlighter'>('pen')
+  const [penOpacity, setPenOpacity] = useState(1)
   const [tool, setTool] = useState<Tool>('select')
   const [paletteHidden, setPaletteHidden] = useState(false)
   const [faceLabel, setFaceLabel] = useState<{
@@ -657,10 +669,77 @@ export function BoardView(props: { docId: string }): ReactNode {
   const [editing, setEditing] = useState<{ id: string; html: string; plain: string } | null>(null)
   const [textFormat, setTextFormat] = useState<TextFormatState>(emptyFormat)
   const [solidKind, setSolidKind] = useState<SolidKind>('cube')
-  const [strokeColor, setStrokeColor] = useState('#1a1a1a')
-  const [strokeWidth, setStrokeWidth] = useState(4)
+  const [strokeColor, setStrokeColor] = useState(settings?.brushPresets?.[settings.brushIndex ?? 0]?.color ?? '#1f2023')
+  const [strokeWidth, setStrokeWidth] = useState(settings?.brushPresets?.[settings.brushIndex ?? 0]?.width ?? 4)
   const [shapeColor, setShapeColor] = useState(NEW_SHAPE_COLOR)
   const [shapeStroke, setShapeStroke] = useState(2)
+  const [brushes, setBrushes] = useState<BrushPreset[]>(settings?.brushPresets?.length ? settings.brushPresets : DEFAULT_BRUSHES)
+  const [brushIndex, setBrushIndex] = useState(settings?.brushIndex ?? 0)
+  const brushRestoreRef = useRef(false)
+  const brushSaveTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (!settings || brushRestoreRef.current) return
+    brushRestoreRef.current = true
+    const saved = settings.brushPresets?.length ? settings.brushPresets : DEFAULT_BRUSHES
+    setBrushes(saved)
+    const index = Math.min(Math.max(settings.brushIndex ?? 0, 0), saved.length - 1)
+    setBrushIndex(index)
+    const preset = saved[index]
+    if (preset) {
+      setStrokeColor(preset.color)
+      setStrokeWidth(preset.width)
+    }
+  }, [settings])
+
+  const persistBrushes = useCallback(
+    (next: BrushPreset[], index: number): void => {
+      if (brushSaveTimerRef.current !== null) window.clearTimeout(brushSaveTimerRef.current)
+      brushSaveTimerRef.current = window.setTimeout(() => {
+        brushSaveTimerRef.current = null
+        void api.settings
+          .set({ brushPresets: next, brushIndex: index })
+          .then((saved) => setSettings(saved))
+          .catch(() => undefined)
+      }, 250)
+    },
+    [setSettings]
+  )
+
+  const selectBrush = useCallback(
+    (index: number): void => {
+      setBrushIndex(index)
+      const preset = brushes[index]
+      if (preset) {
+        setStrokeColor(preset.color)
+        setStrokeWidth(preset.width)
+      }
+      persistBrushes(brushes, index)
+    },
+    [brushes, persistBrushes]
+  )
+
+  const editBrush = useCallback(
+    (index: number, patch: { color?: string; width?: number }): void => {
+      const next = brushes.map((preset, position) => (position === index ? { ...preset, ...patch } : preset))
+      setBrushes(next)
+      if (index === brushIndex) {
+        if (patch.color !== undefined) setStrokeColor(patch.color)
+        if (patch.width !== undefined) setStrokeWidth(patch.width)
+      }
+      persistBrushes(next, brushIndex)
+    },
+    [brushes, brushIndex, persistBrushes]
+  )
+
+  useEffect(() => {
+    if (!brushRestoreRef.current) return
+    const preset = brushes[brushIndex]
+    if (!preset || (preset.color === strokeColor && preset.width === strokeWidth)) return
+    const next = brushes.map((value, position) => (position === brushIndex ? { color: strokeColor, width: strokeWidth } : value))
+    setBrushes(next)
+    persistBrushes(next, brushIndex)
+  }, [brushes, brushIndex, strokeColor, strokeWidth, persistBrushes])
   const createIsLine = CREATE_STROKES.has(createTool)
   const [renaming, setRenaming] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
@@ -690,7 +769,7 @@ export function BoardView(props: { docId: string }): ReactNode {
   const [linkStyle, setLinkStyle] = useState<'straight' | 'curved' | 'elbowed'>('curved')
   const [linkArrow, setLinkArrow] = useState(true)
   const [eraseSize, setEraseSize] = useState(14)
-  const [textColor, setTextColor] = useState('#1a1a1a')
+  const [textColor, setTextColor] = useState('#1f2023')
   const [textSize, setTextSize] = useState(16)
   const [graphDraft, setGraphDraft] = useState<Record<string, string>>({})
 
@@ -762,7 +841,7 @@ export function BoardView(props: { docId: string }): ReactNode {
       path: curvePath(local),
       local,
       color: strokeColor,
-      opacity: marker ? 0.35 : 1,
+      opacity: penOpacity,
       base
     }
   }
@@ -798,6 +877,7 @@ export function BoardView(props: { docId: string }): ReactNode {
   const liveUndoRef = useRef<LiveHistoryEntry[]>([])
   const liveRedoRef = useRef<LiveHistoryEntry[]>([])
   const itemsRef = useRef<BoardItem[]>([])
+  const docRef = useRef<BoardDoc | null>(null)
 
   const dragBaseRef = useRef<BoardItem[] | null>(null)
   const rotateRef = useRef<{ id: string; rotation: number } | null>(null)
@@ -1441,7 +1521,12 @@ export function BoardView(props: { docId: string }): ReactNode {
       const containerBox = container?.getBoundingClientRect()
       const railBox = rail.getBoundingClientRect()
       const railTop = containerBox ? railBox.top - containerBox.top : 0
-      const shift = Math.max(0, (railBox.height - palette.getBoundingClientRect().height) / 2)
+      const anchor = palette.classList.contains('toolpalette--brush')
+        ? rail.querySelector<HTMLElement>('.toolbtn[data-active="true"]')
+        : null
+      const shift = anchor
+        ? Math.max(0, anchor.getBoundingClientRect().top - railBox.top)
+        : Math.max(0, (railBox.height - palette.getBoundingClientRect().height) / 2)
       palette.style.setProperty('--palette-top', `${Math.round(railTop + shift)}px`)
       palette.style.setProperty('--palette-max', `${Math.round((containerBox?.height ?? railBox.height) - railTop)}px`)
     }
@@ -1665,10 +1750,11 @@ export function BoardView(props: { docId: string }): ReactNode {
     }
     const target = followTargetRef.current
     if (!target) return
+    const view = viewRef.current
     if (
-      Math.abs(target.x - viewport.x) > 0.5 ||
-      Math.abs(target.y - viewport.y) > 0.5 ||
-      Math.abs(target.zoom - viewport.zoom) > 1e-4
+      Math.abs(target.x - view.x) > 0.5 ||
+      Math.abs(target.y - view.y) > 0.5 ||
+      Math.abs(target.zoom - view.zoom) > 1e-4
     ) {
       followTargetRef.current = null
       live.stopFollow()
@@ -1691,9 +1777,8 @@ export function BoardView(props: { docId: string }): ReactNode {
   }, [viewport, props.docId, doc])
 
   const startHosting = useCallback(() => {
-    if (!doc) return
-    void live.startHost(doc).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
-  }, [doc, live, fail])
+    void live.startHost(() => docRef.current).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
+  }, [live, fail])
 
   const saveCopyToLibrary = useCallback(() => {
     if (!doc) return
@@ -1785,6 +1870,7 @@ export function BoardView(props: { docId: string }): ReactNode {
 
   useEffect(() => {
     itemsRef.current = doc?.items ?? []
+    docRef.current = doc
   }, [doc])
 
   useEffect(() => {
@@ -3098,7 +3184,7 @@ export function BoardView(props: { docId: string }): ReactNode {
           points: geometry.points,
           color: strokeColor,
           width: marker ? 14 : Math.max(1, strokeWidth),
-          opacity: marker ? 0.35 : 1
+          opacity: penOpacity
         })
         return
       }
@@ -3573,7 +3659,7 @@ export function BoardView(props: { docId: string }): ReactNode {
     }
     setDrag({ kind: 'idle' })
     },
-    [drag, doc, persist, remember, commit, commitAgainst, strokeColor, strokeWidth, applyView, startInertia, size, itemAt, toWorld, createFromDrag, clearPreview, byId, addConnector, penMode, selection, readOnly]
+    [drag, doc, persist, remember, commit, commitAgainst, strokeColor, strokeWidth, penOpacity, applyView, startInertia, size, itemAt, toWorld, createFromDrag, clearPreview, byId, addConnector, penMode, selection, readOnly]
   )
 
   const deleteItems = useCallback(
@@ -6282,24 +6368,49 @@ const navigateTo = useCallback(
           </div>
         ) : null}
         {panelKind === 'pen' ? (
-          <div className="toolgroup toolpalette">
-            {paletteHead('pen', penMode === 'highlighter' ? 'Выделитель' : 'Ручка')}
-            <PaletteGroup title="Режим">
-              <PaletteGrid columns={2}>
-                <PaletteCell title="Ручка" icon={<PenTool size={16} />} active={penMode === 'pen'} onClick={() => setPenMode('pen')}>
-                  Ручка
-                </PaletteCell>
-                <PaletteCell title="Выделитель" icon={<Highlighter size={16} />} active={penMode === 'highlighter'} onClick={() => setPenMode('highlighter')}>
-                  Выделитель
-                </PaletteCell>
-              </PaletteGrid>
-            </PaletteGroup>
-            <PaletteGroup title="Цвет">
-              <PaletteSwatches colors={QUICK_COLORS} value={strokeColor} nameFor={colorName} onPick={setStrokeColor} onCustom={setStrokeColor} />
-            </PaletteGroup>
-            <PaletteGroup title="Начертание">
-              <PaletteSlider label="Толщина" value={strokeWidth} min={1} max={24} onChange={setStrokeWidth} />
-            </PaletteGroup>
+          <div className="toolgroup toolpalette toolpalette--brush">
+            <div className="brushrail__modes">
+              <button
+                type="button"
+                className="brushrail__mode"
+                data-active={penMode === 'pen' ? 'true' : undefined}
+                title="Ручка"
+                aria-label="Ручка"
+                onClick={() => {
+                  setPenMode('pen')
+                  setPenOpacity(1)
+                }}
+              >
+                <PenTool size={18} />
+              </button>
+              <button
+                type="button"
+                className="brushrail__mode"
+                data-active={penMode === 'highlighter' ? 'true' : undefined}
+                title="Выделитель"
+                aria-label="Выделитель"
+                onClick={() => {
+                  setPenMode('highlighter')
+                  setPenOpacity(0.35)
+                }}
+              >
+                <Highlighter size={18} />
+              </button>
+            </div>
+            <div className="brushrail__dots">
+              {brushes.map((preset, index) => (
+                <BrushDot
+                  key={index}
+                  color={preset.color}
+                  width={preset.width}
+                  max={24}
+                  active={index === brushIndex}
+                  nameFor={colorName}
+                  onSelect={() => selectBrush(index)}
+                  onChange={(patch) => editBrush(index, patch)}
+                />
+              ))}
+            </div>
           </div>
         ) : null}
         {panelKind === 'link' ? (

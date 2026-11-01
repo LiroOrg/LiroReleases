@@ -20,6 +20,12 @@ const DEFAULT_SETTINGS: Settings = {
   uiScale: 1,
   toolbarOrder: [],
   toolbarExtras: [],
+  brushPresets: [
+    { color: '#1f2023', width: 3 },
+    { color: '#d6484a', width: 6 },
+    { color: '#3f74cf', width: 12 }
+  ],
+  brushIndex: 0,
   captureToken: ''
 }
 

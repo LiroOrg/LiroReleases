@@ -300,14 +300,18 @@ export function registerIpc(): void {
     return ok(true)
   })
   ipcMain.handle('board:items', (_e, docId: string, items: unknown[]) => {
-    const doc = store.readDoc(docId)
-    const next = items as BoardItem[]
-    doc.items = next
-    persistInlineAssets(docId, doc)
-    doc.bounds = roundRect(boundsOfItems(next, 160))
-    doc.stats = buildStats(next, assetsBytesOf(doc))
-    store.writeDoc(doc)
-    return ok(true)
+    try {
+      const doc = store.readDoc(docId)
+      const next = items as BoardItem[]
+      doc.items = next
+      persistInlineAssets(docId, doc)
+      doc.bounds = roundRect(boundsOfItems(next, 160))
+      doc.stats = buildStats(next, assetsBytesOf(doc))
+      store.writeDoc(doc)
+      return ok(true)
+    } catch (error) {
+      return fail(error)
+    }
   })
   ipcMain.handle('board:paste-items', (_e, payload: { docId: string; sourceDocId: string; items: BoardItem[] }) => {
     try {

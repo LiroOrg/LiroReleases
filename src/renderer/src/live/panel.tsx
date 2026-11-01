@@ -70,8 +70,7 @@ function LiveWatcher(props: { on: boolean; hidden: boolean }): ReactNode {
 
   return createPortal(
     <span className="livewatcher" style={{ top: anchor.top, left: anchor.left }}>
-      <Eye size={10} />
-      следят
+      <Eye size={11} />
     </span>,
     document.body
   )
@@ -223,7 +222,6 @@ export function LivePanel(props: LivePanelProps): ReactNode {
               <span className="livepanel__tags">
                 <span className="livepanel__tag">{host ? 'ведущий' : 'гость'}</span>
                 {!host ? <span className="livepanel__tag">{editTag}</span> : null}
-                {props.watching ? <span className="livepanel__tag livepanel__tag--on">за вами следят</span> : null}
               </span>
             </div>
             {partner ? (
@@ -232,21 +230,28 @@ export function LivePanel(props: LivePanelProps): ReactNode {
                   {initial(partner.name)}
                 </span>
                 <span className="livepanel__who">
-                  <button
-                    type="button"
-                    className="livepanel__name livepanel__name--link"
-                    disabled={!props.connected}
-                    onClick={() => {
-                      props.onGoToPartner()
-                      props.onToast(`Перешли к ${partner.name}`, 'locate')
-                    }}
-                    onContextMenu={openMenu}
-                    title={`Перейти к ${partner.name}`}
-                  >
-                    {partner.name}
-                  </button>
+                  <span className="livepanel__nameline">
+                    <button
+                      type="button"
+                      className="livepanel__name livepanel__name--link"
+                      disabled={!props.connected}
+                      onClick={() => {
+                        props.onGoToPartner()
+                        props.onToast(`Перешли к ${partner.name}`, 'locate')
+                      }}
+                      onContextMenu={openMenu}
+                      title={`Перейти к ${partner.name}`}
+                    >
+                      {partner.name}
+                    </button>
+                    {props.watching ? (
+                      <span className="livepanel__follow" title="Следит за вами">
+                        <Eye size={11} />
+                      </span>
+                    ) : null}
+                  </span>
                   <span className="livepanel__note">
-                    {props.partnerAway ? 'окно свёрнуто' : props.connected ? `${props.ping} мс` : 'нет связи'}
+                    {props.partnerAway ? 'окно не активно' : props.connected ? `${props.ping} мс` : 'нет связи'}
                   </span>
                 </span>
                 {host ? (

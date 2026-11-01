@@ -6,6 +6,10 @@ const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun2.l.google.com:19302' }
 ]
 
+const SEND_PAUSE = 1500000
+
+const SEND_RESUME = 1500000
+
 export const CURSOR_PALETTE = ['#d92b2b', '#1f6feb', '#1a7f37', '#bf8700', '#8250df', '#0b7285', '#c2410c', '#be185d']
 
 export function colorForId(id: string): string {
@@ -318,6 +322,7 @@ export class LiveSession {
       }
       const target = this.pendingChunks.get(message.id)!
       target.parts[message.index] = message.payload
+      target.createdAt = Date.now()
       const done = target.parts.reduce((count, part) => (part ? count + 1 : count), 0)
       if (message.total > 1) this.options.onChunkProgress(message.id, done, message.total)
       if (target.parts.every((part) => part !== '' || message.total === 1)) {
@@ -331,18 +336,50 @@ export class LiveSession {
     this.options.onMessage(message)
   }
 
-  sendChunked(id: string, payload: string): void {
+  async sendChunked(id: string, payload: string): Promise<void> {
     const limit = 24000
     const total = Math.max(1, Math.ceil(payload.length / limit))
     for (let index = 0; index < total; index += 1) {
-      this.sendOps({
+      const message: LiveMessage = {
         t: 'chunk',
         id,
         index,
         total,
         payload: payload.slice(index * limit, (index + 1) * limit)
-      })
+      }
+      let delivered = false
+      for (let attempt = 0; attempt < 500 && !delivered; attempt += 1) {
+        await this.waitForBuffer()
+        delivered = this.pushOps(message)
+      }
+      if (!delivered) return
     }
+  }
+
+  private pushOps(message: LiveMessage): boolean {
+    const channel = this.opsChannel
+    if (!channel || channel.readyState !== 'open') return false
+    try {
+      channel.send(JSON.stringify(message))
+      this.sent += 1
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private waitForBuffer(): Promise<void> {
+    const channel = this.opsChannel
+    if (!channel || channel.readyState !== 'open' || channel.bufferedAmount <= SEND_PAUSE) return Promise.resolve()
+    return new Promise((resolve) => {
+      const started = Date.now()
+      const poll = (): void => {
+        if (this.opsChannel !== channel || channel.readyState !== 'open' || Date.now() - started > 30000) return resolve()
+        if (channel.bufferedAmount <= SEND_RESUME) resolve()
+        else window.setTimeout(poll, 40)
+      }
+      poll()
+    })
   }
 
   sendLive(message: LiveMessage): void {
