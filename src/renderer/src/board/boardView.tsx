@@ -782,6 +782,7 @@ export function BoardView(props: { docId: string }): ReactNode {
 
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const canvasRectRef = useRef({ left: 0, top: 0 })
+  const pointerWorldRef = useRef<{ x: number; y: number } | null>(null)
 
   const worldRef = useRef<HTMLDivElement | null>(null)
   const zoomLabelRef = useRef<HTMLButtonElement | null>(null)
@@ -3648,7 +3649,8 @@ export function BoardView(props: { docId: string }): ReactNode {
 
   const pasteShift = useCallback(
     (items: BoardItem[], sameBoard: boolean): { dx: number; dy: number } => {
-      if (sameBoard || !items.length) return { dx: 28, dy: 28 }
+      const pointer = pointerWorldRef.current
+      if (!items.length || (!pointer && sameBoard)) return { dx: 28, dy: 28 }
       let minX = Infinity
       let minY = Infinity
       let maxX = -Infinity
@@ -3660,10 +3662,11 @@ export function BoardView(props: { docId: string }): ReactNode {
         if (box.x + box.width > maxX) maxX = box.x + box.width
         if (box.y + box.height > maxY) maxY = box.y + box.height
       }
-      const current = viewRef.current
+      const target = pointer ?? viewRef.current
+      if (sameBoard && target.x >= minX && target.x <= maxX && target.y >= minY && target.y <= maxY) return { dx: 28, dy: 28 }
       return {
-        dx: Math.round(current.x - (minX + maxX) / 2),
-        dy: Math.round(current.y - (minY + maxY) / 2)
+        dx: Math.round(target.x - (minX + maxX) / 2),
+        dy: Math.round(target.y - (minY + maxY) / 2)
       }
     },
     []
@@ -4426,10 +4429,11 @@ const navigateTo = useCallback(
       }
       const bounds = pastePayloadBounds(payload.items)
       const view = viewRef.current
+      const target = pointerWorldRef.current ?? view
       shiftPastePayload(
         payload.items,
-        Math.round(view.x - (bounds.x + bounds.width / 2)),
-        Math.round(view.y - (bounds.y + bounds.height / 2))
+        Math.round(target.x - (bounds.x + bounds.width / 2)),
+        Math.round(target.y - (bounds.y + bounds.height / 2))
       )
       const placed = pastePayloadBounds(payload.items)
       const pastedIds = payload.items
@@ -5469,10 +5473,9 @@ const navigateTo = useCallback(
         onContextMenu={(event) => event.preventDefault()}
         onPointerDown={onPointerDown}
         onPointerMove={(event) => {
-          if (live.connected) {
-            const point = toWorld(event.clientX, event.clientY)
-            live.sendCursor(point.x, point.y)
-          }
+          const point = toWorld(event.clientX, event.clientY)
+          pointerWorldRef.current = point
+          if (live.connected) live.sendCursor(point.x, point.y)
           onPointerMove(event)
         }}
         onPointerLeave={(event) => {

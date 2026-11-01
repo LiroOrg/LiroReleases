@@ -2,7 +2,6 @@ import { useCallback, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   ArrowRight,
-  ClipboardPaste,
   Clock,
   FileUp,
   FolderOpen,
@@ -10,15 +9,17 @@ import {
   LayoutGrid,
   Rows3,
   ShieldCheck,
-  SquarePlus
+  SquarePlus,
+  Users
 } from 'lucide-react'
 import type { BoardMeta } from '@shared/types'
 import { formatDate } from '@shared/util'
 import { api } from '../lib/api'
-import { createBoardFromClipboard } from '../lib/paste'
+import { codeFromInput } from '../live/code'
+import { CodeField } from '../live/codeField'
 import { useApp } from '../lib/store'
 import { navigate } from '../router'
-import { Empty } from '../components/ui'
+import { Empty, Modal } from '../components/ui'
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -92,14 +93,48 @@ function BoardRow(props: { board: BoardMeta; onOpen: () => void }): ReactNode {
   )
 }
 
+function JoinDialog(props: { open: boolean; onClose: () => void }): ReactNode {
+  const [digits, setDigits] = useState('')
+  const code = codeFromInput(digits)
+  const ready = digits.length === 9
+  const submit = (): void => {
+    if (!ready) return
+    props.onClose()
+    navigate({ name: 'join', code })
+  }
+  return (
+    <Modal
+      open={props.open}
+      title="Присоединиться к доске"
+      onClose={props.onClose}
+      footer={
+        <>
+          <button type="button" className="btn" onClick={props.onClose}>
+            Отмена
+          </button>
+          <button type="button" className="btn btn--primary" onClick={submit} disabled={!ready}>
+            Подключиться
+          </button>
+        </>
+      }
+    >
+      <div className="field field--center">
+        <span className="field__label">Ссылка или код приглашения</span>
+        <CodeField value={digits} onChange={setDigits} onSubmit={submit} />
+        <span className="field__hint">Можно вставить ссылку вида liro://connect/abc-def-ghi — код возьмём из неё</span>
+      </div>
+    </Modal>
+  )
+}
+
 export function Home(props: { onFail: (text: string) => void }): ReactNode {
   const library = useApp((state) => state.library)
   const setLibrary = useApp((state) => state.setLibrary)
   const settings = useApp((state) => state.settings)
   const appInfo = useApp((state) => state.appInfo)
-  const toast = useApp((state) => state.toast)
   const [busy, setBusy] = useState<string | null>(null)
   const [view, setView] = useState<'grid' | 'list'>('grid')
+  const [joinOpen, setJoinOpen] = useState(false)
 
   const fail = props.onFail
 
@@ -128,28 +163,6 @@ export function Home(props: { onFail: (text: string) => void }): ReactNode {
       setBusy(null)
     }
   }, [reload, fail])
-
-  const pasteClipboard = useCallback(async (): Promise<void> => {
-    setBusy('clip')
-    try {
-      const html = await api.clipboard.readHtml()
-      if (!html) {
-        toast('В буфере нет данных доски', 'clipboard')
-        return
-      }
-      const result = await createBoardFromClipboard(html, '')
-      if (!result) {
-        toast('В буфере нет объектов для вставки', 'clipboard')
-        return
-      }
-      await reload()
-      navigate({ name: 'board', docId: result.id })
-    } catch (error) {
-      fail(errorText(error))
-    } finally {
-      setBusy(null)
-    }
-  }, [reload, fail, toast])
 
   const openFile = useCallback(async (): Promise<void> => {
     setBusy('file')
@@ -181,7 +194,7 @@ export function Home(props: { onFail: (text: string) => void }): ReactNode {
           ) : null}
         </h1>
         <p className="homeintro__lead">Доски Liro лежат на этом компьютере и открываются без интернета.</p>
-        <div className="homeintro__actions">
+        <div className={last ? 'homeintro__actions' : 'homeintro__actions homeintro__actions--two'}>
           <button type="button" className="act" onClick={() => void createBoard()} disabled={busy === 'new'}>
             <span className="act__icon">
               <SquarePlus size={18} />
@@ -202,24 +215,6 @@ export function Home(props: { onFail: (text: string) => void }): ReactNode {
               </span>
             </button>
           ) : null}
-          <button type="button" className="act" onClick={() => navigate({ name: 'library' })}>
-            <span className="act__icon">
-              <LayoutGrid size={18} />
-            </span>
-            <span className="act__body">
-              <span className="act__title">Все доски</span>
-              <span className="act__text">Поиск, папки, архив</span>
-            </span>
-          </button>
-          <button type="button" className="act" onClick={() => void pasteClipboard()} disabled={busy === 'clip'}>
-            <span className="act__icon">
-              <ClipboardPaste size={18} />
-            </span>
-            <span className="act__body">
-              <span className="act__title">Вставить из буфера</span>
-              <span className="act__text">Объекты скопированной доски</span>
-            </span>
-          </button>
           <button type="button" className="act" onClick={() => void openFile()} disabled={busy === 'file'}>
             <span className="act__icon">
               <FileUp size={18} />
@@ -255,6 +250,10 @@ export function Home(props: { onFail: (text: string) => void }): ReactNode {
             <button type="button" className="ghost" onClick={() => void api.board.reveal(last.id)}>
               <FolderOpen size={15} />
               Файлы доски
+            </button>
+            <button type="button" className="ghost" onClick={() => setJoinOpen(true)}>
+              <Users size={15} />
+              Присоединиться
             </button>
           </div>
         </section>
@@ -316,6 +315,8 @@ export function Home(props: { onFail: (text: string) => void }): ReactNode {
           ничего не уходит в интернет
         </span>
       </footer>
+
+      <JoinDialog open={joinOpen} onClose={() => setJoinOpen(false)} />
     </div>
   )
 }

@@ -46,6 +46,7 @@ import {
 } from 'lucide-react'
 import { useApp } from '../lib/store'
 import type { ToastKind } from '../lib/store'
+import { createPortal } from 'react-dom'
 
 const TOAST_ICONS: Record<ToastKind, ReactNode> = {
   success: <CircleCheck size={13} strokeWidth={2.2} />,
@@ -158,7 +159,7 @@ export function Modal(props: {
   }, [props.open, props.onClose])
 
   if (!props.open) return null
-  return (
+  return createPortal(
     <div className="modal__backdrop" onMouseDown={(event) => event.target === event.currentTarget && props.onClose()}>
       <div className={props.wide ? 'modal modal--wide' : 'modal'} role="dialog" aria-modal="true">
         <div className="modal__head">
@@ -167,7 +168,8 @@ export function Modal(props: {
         <div className="modal__body">{props.children}</div>
         {props.footer ? <div className="modal__foot">{props.footer}</div> : null}
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 

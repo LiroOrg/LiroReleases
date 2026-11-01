@@ -1,6 +1,14 @@
+:root {
+  --sidebar-w: 252px;
+}
+
+body:has(.app--wide) {
+  --sidebar-w: 0px;
+}
+
 .app {
   display: grid;
-  grid-template-columns: 252px 1fr;
+  grid-template-columns: var(--sidebar-w) 1fr;
   height: 100%;
   background: var(--bg);
 }
@@ -425,6 +433,58 @@
   margin-bottom: 14px;
 }
 
+.field--center {
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.codefield {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background: var(--bg-subtle);
+  transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+
+.codefield:focus-within {
+  border-color: var(--text);
+  background: var(--panel);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.codefield__part {
+  width: calc(72px * var(--ui-scale));
+  height: calc(52px * var(--ui-scale));
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: calc(19px * var(--ui-scale));
+  font-weight: 520;
+  letter-spacing: 0.06em;
+  text-align: center;
+  text-transform: lowercase;
+  outline: none;
+}
+
+.codefield__part::placeholder {
+  color: var(--text-4);
+  opacity: 0.35;
+}
+
+.codefield__sep {
+  flex: none;
+  align-self: center;
+  width: 1px;
+  height: calc(22px * var(--ui-scale));
+  background: var(--border-strong);
+  opacity: 0.5;
+}
+
 .field__label {
   font-size: calc(12.5px * var(--ui-scale));
   font-weight: 560;
@@ -674,8 +734,9 @@
 
 .modal__backdrop {
   position: fixed;
-  inset: 0;
-  background: color-mix(in srgb, var(--text) 26%, transparent);
+  inset: 0 0 0 var(--sidebar-w);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(20px);
   display: grid;
   place-items: center;
   z-index: 100;

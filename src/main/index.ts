@@ -8,6 +8,7 @@ import { migrateLegacyData } from './paths'
 import { store } from './store'
 import { markAppStarted, startUpdater, stopUpdater } from './updater'
 import { registerAssetProtocol } from './protocol'
+import { ensureLiroFormat } from './format'
 import { codeFromLink, linkFromArgv, onLiveLink, registerLiveProtocol, setPendingLink } from './live/protocol'
 import { startPairInstance } from './live/pair'
 
@@ -347,6 +348,7 @@ if (!app.requestSingleInstanceLock()) {
     }
     registerAssetProtocol()
     registerLiveProtocol()
+    if (!uiTest) void ensureLiroFormat()
     registerIpc()
     const launchFile = boardFileArg(process.argv)
     if (launchFile) {

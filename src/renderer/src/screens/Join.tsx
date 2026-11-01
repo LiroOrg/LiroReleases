@@ -6,6 +6,7 @@ import { api } from '../lib/api'
 import { navigate } from '../router'
 import { setPendingJoin } from '../live/pending'
 import { setGuestBoardId } from '../live/guestBoard'
+import { codeFromInput } from '../live/code'
 
 const WAIT_ROOMS_MS = 30000
 
@@ -18,7 +19,7 @@ export function JoinScreen(props: { code: string }): ReactNode {
 
   const connect = useCallback(
     async (raw: string): Promise<void> => {
-      const wanted = raw.trim().toLowerCase()
+      const wanted = codeFromInput(raw)
       if (!wanted) return
       setState('wait')
       setMessage('Подключение к доске…')
@@ -72,7 +73,7 @@ export function JoinScreen(props: { code: string }): ReactNode {
           <span>Код приглашения</span>
           <input
             value={code}
-            onChange={(event) => setCode(event.target.value)}
+            onChange={(event) => setCode(codeFromInput(event.target.value))}
             placeholder="abc-def-ghi"
             spellCheck={false}
             autoComplete="off"

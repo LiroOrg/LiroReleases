@@ -1,4 +1,7 @@
-﻿param([string]$Request = '')
+﻿param(
+  [string]$Request = '',
+  [string]$Version = ''
+)
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
@@ -115,11 +118,111 @@ function Start-Liro($exe) {
 }
 
 function Close-Liro($processId) {
+  if (-not $processId) { return }
+  $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+  if (-not $process) { return }
+  if ($process.MainWindowHandle -ne 0) { [void]$process.CloseMainWindow() }
+  $waited = 0
+  while ($waited -lt 20 -and (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
+    Start-Sleep -Milliseconds 500
+    $waited += 1
+  }
   Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
 }
 
-$job = Read-Request $Request
-if (-not $job) { exit 1 }
+function Download-File($ui, $url, $to) {
+  [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
+  $response = $null
+  $done = 0
+  $total = 0
+  try {
+    while ($true) {
+      $request = [System.Net.HttpWebRequest]::Create($url)
+      $request.UserAgent = 'Liro'
+      $request.AllowAutoRedirect = $false
+      $request.Timeout = 30000
+      $response = $request.GetResponse()
+      $code = [int]$response.StatusCode
+      if ($code -ge 300 -and $code -lt 400) {
+        $url = $response.Headers['Location']
+        $response.Close()
+        $response = $null
+        continue
+      }
+      break
+    }
+    $total = $response.ContentLength
+    $source = $response.GetResponseStream()
+    $dest = New-Object System.IO.FileStream($to, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)
+    try {
+      $buffer = New-Object byte[] 8388608
+      while ($true) {
+        $read = $source.Read($buffer, 0, $buffer.Length)
+        if ($read -le 0) { break }
+        $dest.Write($buffer, 0, $read)
+        $done += $read
+        if ($total) { Set-Progress $ui ($done / $total * 80) 'Загрузка' }
+        else { Set-Progress $ui 40 'Загрузка' }
+        if ($script:cancelled) { return 0 }
+      }
+      $dest.Flush()
+    } finally {
+      $dest.Dispose()
+      $source.Dispose()
+    }
+  } finally {
+    if ($response) { $response.Close() }
+  }
+  return (Get-Item -LiteralPath $to).Length
+}
+
+function Find-LiroExe {
+  $default = Join-Path $env:LOCALAPPDATA 'Programs\Liro\Liro.exe'
+  if (Test-Path -LiteralPath $default) { return $default }
+  $running = Get-Process -Name Liro -ErrorAction SilentlyContinue | Where-Object { $_.Path }
+  if ($running) { return $running[0].Path }
+  return ''
+}
+
+function New-StandaloneRequest($ui, $version) {
+  $exe = Find-LiroExe
+  if (-not $exe) { throw 'Liro не найден — сначала установите приложение' }
+  $resources = Split-Path -Parent (Split-Path -Parent $exe)
+  $target = Join-Path $resources 'app.asar'
+  if (-not (Test-Path -LiteralPath $target)) { throw 'Файл приложения не найден' }
+  $work = Join-Path $env:APPDATA 'Liro\updater'
+  New-Item -ItemType Directory -Force -Path $work | Out-Null
+  $staged = Join-Path $work 'app.next'
+  $started = Join-Path $work 'started.json'
+  $url = "https://github.com/LiroOrg/LiroReleases/releases/download/v$version/app.asar"
+  Set-Progress $ui 2 'Загрузка'
+  $size = Download-File $ui $url $staged
+  if ($script:cancelled) { return $null }
+  if ($size -lt 1000000) { throw 'Загруженный файл слишком мал' }
+  $process = Get-Process -Name Liro -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } | Select-Object -First 1
+  if (Test-Path -LiteralPath $started) { Remove-Item -LiteralPath $started -Force -ErrorAction SilentlyContinue }
+  $job = [pscustomobject]@{
+    version = $version
+    staged  = $staged
+    target  = $target
+    backup  = "$target.bak"
+    exe     = $exe
+    pid     = 0
+    report  = Join-Path $env:APPDATA 'Liro\update-result.txt'
+    lock    = Join-Path $env:APPDATA 'Liro\updating.json'
+    started = $started
+  }
+  if ($process) { $job.pid = $process.Id }
+  return $job
+}
+
+$standalone = (-not $Request) -and (-not $env:LIRO_UPDATE_REQUEST) -and [bool]$Version
+if (-not $Request) { $Request = $env:LIRO_UPDATE_REQUEST }
+if (-not $Request) { $Request = Join-Path $env:APPDATA 'Liro\update-request.json' }
+$job = $null
+if (-not $standalone) { $job = Read-Request $Request }
+if (-not $job -and -not $standalone) { exit 1 }
+if ($Version) { $Version = $Version.TrimStart('v') }
 
 $mutex = New-Object System.Threading.Mutex($false, 'Global\Liro-Update')
 if (-not $mutex.WaitOne(0)) {
@@ -127,7 +230,7 @@ if (-not $mutex.WaitOne(0)) {
   exit 0
 }
 
-$ui = New-Window $job.version
+$ui = New-Window $Version
 $script:cancelled = $false
 $ui.Cancel.Add_Click({
   $script:cancelled = $true
@@ -138,18 +241,36 @@ $ui.Form.Add_Shown({ $ui.Form.Activate() })
 [void]$ui.Form.Show()
 Set-Progress $ui 0 'Копирование файлов'
 
+if ($standalone) {
+  try {
+    $job = New-StandaloneRequest $ui $Version
+  } catch {
+    Set-Progress $ui 100 $_.Exception.Message
+    Start-Sleep -Milliseconds 4000
+    $ui.Form.Close()
+    exit 1
+  }
+  if (-not $job) {
+    $ui.Form.Close()
+    exit 0
+  }
+  Set-Progress $ui 82 'Файл загружен'
+}
+
 $next = "$($job.target).new"
 $swapDone = $false
 $result = 'cancel'
 
 try {
-  $size = Copy-Staged $ui $job.staged $next
+  $size = 0
+  if ($standalone) { $size = (Get-Item -LiteralPath $job.staged).Length }
+  else { $size = Copy-Staged $ui $job.staged $next }
   if (-not $script:cancelled) {
     Set-Progress $ui 88 'Закрываем Liro'
     Close-Liro $job.pid
     $gone = 0
     while (-not $script:cancelled -and $gone -lt 120) {
-      if (-not (Get-Process -Id $job.pid -ErrorAction SilentlyContinue)) { break }
+      if (-not $job.pid -or -not (Get-Process -Id $job.pid -ErrorAction SilentlyContinue)) { break }
       Start-Sleep -Milliseconds 300
       $gone += 1
       [System.Windows.Forms.Application]::DoEvents()

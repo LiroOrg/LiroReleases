@@ -18,7 +18,7 @@ import { JoinScreen } from './screens/Join'
 import { WindowFrame } from './components/windowFrame'
 import { FolderTree } from './components/folderTree'
 import { api } from './lib/api'
-import { createBoardFromClipboard } from './lib/paste'
+import { createBoardFromClipboard, isEditableTarget } from './lib/paste'
 
 const NAV = [
   { name: 'home' as const, label: 'Обзор', icon: LayoutGrid, route: { name: 'home' } as Route },
@@ -150,6 +150,7 @@ export function App(): ReactNode {
 
   useEffect(() => {
     const onPaste = (event: ClipboardEvent): void => {
+      if (isEditableTarget(event.target) || document.querySelector('.modal__backdrop')) return
       if (parseRoute(window.location.hash).name === 'board') return
       const html = event.clipboardData?.getData('text/html')
       const text = event.clipboardData?.getData('text/plain')
