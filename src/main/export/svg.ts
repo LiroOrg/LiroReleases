@@ -1,9 +1,10 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import type { BoardDoc, BoardItem, ShapeName, SolidItem } from '@shared/types'
+import type { BoardDoc, BoardItem, SolidItem } from '@shared/types'
 import { curvePath } from '@shared/curve'
-import { deriveConnectorPoints, pathForPoints } from '@shared/geometry'
+import { curveControl, deriveConnectorPoints, pathForPoints } from '@shared/geometry'
 import { compileFormula, curveSegments } from '@shared/graph'
+import { shapePath } from '@shared/shapes'
 import { solidProjection, faceLocalToWorld, projectPoint } from '@shared/three'
 import { assetsDir } from '../paths'
 
@@ -15,56 +16,42 @@ function esc(value: string): string {
     .replace(/"/g, '&quot;')
 }
 
-function shapePath(shape: ShapeName, w: number, h: number): string {
-  switch (shape) {
-    case 'circle':
-      return `M ${w / 2},0 A ${w / 2},${h / 2} 0 1 1 ${w / 2 - 0.01},0 Z`
-    case 'triangle':
-      return `M ${w / 2},0 L ${w},${h} L 0,${h} Z`
-    case 'right_triangle':
-      return `M 0,0 L ${w},0 L 0,${h} Z`
-    case 'diamond':
-      return `M ${w / 2},0 L ${w},${h / 2} L ${w / 2},${h} L 0,${h / 2} Z`
-    case 'pentagon':
-      return `M ${w * 0.5},0 L ${w},${h * 0.38} L ${w * 0.81},${h} L ${w * 0.19},${h} L 0,${h * 0.38} Z`
-    case 'hexagon':
-      return `M ${w * 0.25},0 L ${w * 0.75},0 L ${w},${h / 2} L ${w * 0.75},${h} L ${w * 0.25},${h} L 0,${h / 2} Z`
-    case 'octagon':
-      return `M ${w * 0.3},0 L ${w * 0.7},0 L ${w},${h * 0.3} L ${w},${h * 0.7} L ${w * 0.7},${h} L ${w * 0.3},${h} L 0,${h * 0.7} L 0,${h * 0.3} Z`
-    case 'trapezoid':
-      return `M ${w * 0.2},0 L ${w * 0.8},0 L ${w},${h} L 0,${h} Z`
-    case 'parallelogram':
-      return `M ${w * 0.2},0 L ${w},0 L ${w * 0.8},${h} L 0,${h} Z`
-    case 'arrow_right':
-      return `M 0,${h * 0.3} L ${w * 0.6},${h * 0.3} L ${w * 0.6},0 L ${w},${h / 2} L ${w * 0.6},${h} L ${w * 0.6},${h * 0.7} L 0,${h * 0.7} Z`
-    case 'arrow_left':
-      return `M ${w},${h * 0.3} L ${w * 0.4},${h * 0.3} L ${w * 0.4},0 L 0,${h / 2} L ${w * 0.4},${h} L ${w * 0.4},${h * 0.7} L ${w},${h * 0.7} Z`
-    case 'arrow_up':
-      return `M ${w * 0.3},${h} L ${w * 0.3},${h * 0.4} L 0,${h * 0.4} L ${w / 2},0 L ${w},${h * 0.4} L ${w * 0.7},${h * 0.4} L ${w * 0.7},${h} Z`
-    case 'arrow_down':
-      return `M ${w * 0.3},0 L ${w * 0.3},${h * 0.6} L 0,${h * 0.6} L ${w / 2},${h} L ${w},${h * 0.6} L ${w * 0.7},${h * 0.6} L ${w * 0.7},0 Z`
-    case 'cross':
-      return `M ${w * 0.35},0 L ${w * 0.65},0 L ${w * 0.65},${h * 0.35} L ${w},${h * 0.35} L ${w},${h * 0.65} L ${w * 0.65},${h * 0.65} L ${w * 0.65},${h} L ${w * 0.35},${h} L ${w * 0.35},${h * 0.65} L 0,${h * 0.65} L 0,${h * 0.35} L ${w * 0.35},${h * 0.35} Z`
-    case 'star': {
-      const starPoints: Array<[number, number]> = []
-      for (let index = 0; index < 10; index += 1) {
-        const radius = index % 2 === 0 ? 0.5 : 0.2
-        const angle = (Math.PI / 5) * index - Math.PI / 2
-        starPoints.push([w / 2 + Math.cos(angle) * w * radius, h / 2 + Math.sin(angle) * h * radius])
-      }
-      return `M ${starPoints.map(([px, py]) => `${px},${py}`).join(' ')} Z`
-    }
-    default:
-      return `M 0,0 L ${w},0 L ${w},${h} L 0,${h} Z`
-  }
-}
-
 function textLines(plain: string, limit: number): string[] {
   return plain
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
     .slice(0, limit)
+}
+
+function stripHtml(value: string): string {
+  return value.replace(/<[^>]*>/g, '')
+}
+
+function arrowCap(
+  cap: string,
+  from: { x: number; y: number },
+  tip: { x: number; y: number },
+  lineWidth: number,
+  color: string
+): string {
+  if (cap === 'none' || cap === 'unknown') return ''
+  const angle = (Math.atan2(tip.y - from.y, tip.x - from.x) * 180) / Math.PI
+  const size = Math.max(6, lineWidth * 3.4)
+  const shape = cap.toLowerCase()
+  const points = shape.includes('diamond')
+    ? `0,${-size * 0.72} ${size * 0.62},0 0,${size * 0.72} ${-size * 0.62},0`
+    : shape.includes('stealth')
+      ? `0,0 ${-size * 0.9},${-size * 0.55} ${-size * 0.45},0 ${-size * 0.9},${size * 0.55}`
+      : `0,0 ${-size * 0.85},${-size * 0.6} ${-size * 0.85},${size * 0.6}`
+  const isOval = shape.includes('oval')
+  const fill = shape.includes('filled') ? color : 'none'
+  const stroke = shape.includes('filled') ? 'none' : color
+  const strokeWidth = Math.max(1, lineWidth * 0.8)
+  const body = isOval
+    ? `<ellipse cx="${-size * 0.5}" cy="0" rx="${size * 0.5}" ry="${size * 0.36}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`
+    : `<polygon points="${points}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round"/>`
+  return `<g transform="translate(${tip.x} ${tip.y}) rotate(${angle})">${body}</g>`
 }
 
 function clamp01(value: number): number {
@@ -166,13 +153,24 @@ function itemSvg(item: BoardItem, docId: string, index: number, byId: Map<string
       const points = deriveConnectorPoints(item, byId)
       if (points.length < 2) return ''
       const dash = item.lineStyle === 'dashed' ? ' stroke-dasharray="8 6"' : item.lineStyle === 'dotted' ? ' stroke-dasharray="2 5"' : ''
-      const attributes = `fill="none" stroke="${item.color}" stroke-width="${item.lineWidth}"${dash} stroke-linecap="round"`
-      if (item.shape === 'curved' && points.length === 2) {
-        const [a, b] = points
-        const span = Math.hypot(b.x - a.x, b.y - a.y)
-        return `<path d="M ${a.x} ${a.y} Q ${(a.x + b.x) / 2} ${(a.y + b.y) / 2 - Math.min(span * 0.18, 60)} ${b.x} ${b.y}" ${attributes}/>`
-      }
-      return `<path d="${pathForPoints(points, item.shape)}" ${attributes}/>`
+      const attributes = `fill="none" stroke="${item.color}" stroke-width="${item.lineWidth}"${dash} stroke-linecap="round" stroke-linejoin="round"`
+      const ctrl =
+        item.shape === 'curved' && points.length === 2 ? curveControl(points[0], points[1]) : null
+      const body = ctrl
+        ? `<path d="M ${points[0].x} ${points[0].y} Q ${ctrl.x} ${ctrl.y} ${points[1].x} ${points[1].y}" ${attributes}/>`
+        : `<path d="${pathForPoints(points, item.shape)}" ${attributes}/>`
+      const start = arrowCap(item.startStroke, ctrl ?? points[1], points[0], item.lineWidth, item.color)
+      const end = arrowCap(item.endStroke, ctrl ?? points[points.length - 2], points[points.length - 1], item.lineWidth, item.color)
+      const captionAnchor = ctrl
+        ? { x: (points[0].x + 2 * ctrl.x + points[1].x) / 4, y: (points[0].y + 2 * ctrl.y + points[1].y) / 4 }
+        : points[Math.floor(points.length / 2)]
+      return `<g>${body}${start}${end}${
+        item.captions?.length
+          ? `<text x="${captionAnchor.x.toFixed(0)}" y="${(captionAnchor.y - item.lineWidth * 2).toFixed(0)}" text-anchor="middle" font-size="12" font-family="Inter, sans-serif" fill="${item.textColor || '#1a1a1a'}">${esc(
+              stripHtml(item.captions[0])
+            )}</text>`
+          : ''
+      }</g>`
     }
     case 'table': {
       const columns = Math.max(1, item.columns)
@@ -309,11 +307,40 @@ function itemSvg(item: BoardItem, docId: string, index: number, byId: Map<string
     case 'image': {
       const file = item.asset?.local ? join(assetsDir(docId), item.asset.file) : ''
       if (!file || !existsSync(file)) {
-        return `<g${rotate}><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#f2f2f2" stroke="#d4d4d4"/></g>`
+        return `<g${rotate}><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#ffffff" stroke="#d4d4d4"/></g>`
       }
       const data = readFileSync(file).toString('base64')
       const mime = item.asset?.mime || 'image/png'
-      return `<g${rotate}><image x="${x}" y="${y}" width="${w}" height="${h}" href="data:${mime};base64,${data}" preserveAspectRatio="none"/></g>`
+      const source = `data:${mime};base64,${data}`
+      const naturalWidth = item.asset?.width ?? 0
+      const naturalHeight = item.asset?.height ?? 0
+      if (!naturalWidth || !naturalHeight) {
+        return `<g${rotate}><image x="${x}" y="${y}" width="${w}" height="${h}" href="${source}" preserveAspectRatio="none"/></g>`
+      }
+      const crop = item.crop ?? { top: 0, right: 0, bottom: 0, left: 0 }
+      const visible = {
+        x: naturalWidth * crop.left,
+        y: naturalHeight * crop.top,
+        width: Math.max(1, naturalWidth * (1 - crop.left - crop.right)),
+        height: Math.max(1, naturalHeight * (1 - crop.top - crop.bottom))
+      }
+      const ratio = w / h
+      const view =
+        visible.width / visible.height > ratio
+          ? {
+              x: visible.x + (visible.width - visible.height * ratio) / 2,
+              y: visible.y,
+              width: visible.height * ratio,
+              height: visible.height
+            }
+          : {
+              x: visible.x,
+              y: visible.y + (visible.height - visible.width / ratio) / 2,
+              width: visible.width,
+              height: visible.width / ratio
+            }
+      const viewBox = [view.x, view.y, view.width, view.height].map((value) => Math.round(value * 100) / 100).join(' ')
+      return `<g${rotate}><svg x="${x}" y="${y}" width="${w}" height="${h}" viewBox="${viewBox}" preserveAspectRatio="none"><image x="0" y="0" width="${naturalWidth}" height="${naturalHeight}" href="${source}"/></svg></g>`
     }
     case 'solid': {
       const solid = item as SolidItem

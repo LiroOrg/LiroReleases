@@ -1,6 +1,19 @@
 import type { ReactNode } from 'react'
 import { Check, Pipette } from 'lucide-react'
 
+export function PaletteHead(props: { icon: ReactNode; label: string; hint?: string; keyHint?: string }): ReactNode {
+  return (
+    <div className="toolpalette__head">
+      <span className="toolpalette__head-icon" aria-hidden="true">
+        {props.icon}
+      </span>
+      <span className="toolpalette__head-label">{props.label}</span>
+      {props.hint ? <span className="toolpalette__head-hint truncate">{props.hint}</span> : null}
+      {props.keyHint ? <kbd className="toolpalette__head-key">{props.keyHint}</kbd> : null}
+    </div>
+  )
+}
+
 export function PaletteGroup(props: { title?: string; children: ReactNode }): ReactNode {
   return (
     <div className="toolpalette__group">
@@ -10,8 +23,36 @@ export function PaletteGroup(props: { title?: string; children: ReactNode }): Re
   )
 }
 
-export function PaletteGrid(props: { columns?: 2 | 3 | 4; children: ReactNode }): ReactNode {
+export function PaletteGrid(props: { columns?: 2 | 3 | 4 | 5 | 6; children: ReactNode }): ReactNode {
   return <div className={`toolpalette__grid toolpalette__grid--${props.columns ?? 4}`}>{props.children}</div>
+}
+
+export function LineGlyph(props: { shape: 'straight' | 'curved' | 'elbowed' | 'arrow' }): ReactNode {
+  const path =
+    props.shape === 'straight'
+      ? 'M 2 11 L 18 3'
+      : props.shape === 'curved'
+        ? 'M 2 11 C 9 11 11 3 18 3'
+        : props.shape === 'elbowed'
+          ? 'M 2 11 H 8 Q 10 11 10 9 V 5 Q 10 3 12 3 H 18'
+          : 'M 2 11 L 18 3'
+  const head = props.shape === 'arrow' ? 'M 11 3 H 18 V 10' : null
+  return (
+    <svg
+      width="20"
+      height="14"
+      viewBox="0 0 20 14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={path} />
+      {head ? <path d={head} /> : null}
+    </svg>
+  )
 }
 
 export function PaletteCell(props: {

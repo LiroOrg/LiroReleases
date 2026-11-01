@@ -468,6 +468,7 @@ function normalizeOne(raw: RawItem, index: number): BoardItem | null {
         points,
         color: color(pick(style.strokeColor, style.lineColor, style.color, data.color), '#1a1a1a'),
         lineWidth: Math.max(1, num(pick(style.strokeWidth, style.lineWidth, style.thickness, data.lineWidth), 2)),
+        opacity: clamp01(num(pick(style.opacity, data.opacity), 1)),
         closed: data.closed === true
       }
     }

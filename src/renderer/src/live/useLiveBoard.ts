@@ -156,7 +156,9 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
 
   const startHost = useCallback(
     async (doc: BoardDoc): Promise<void> => {
-      const inviteCode = await api.live.hostCode()
+      const stored = await api.board.workspace.get(doc.id).catch(() => null)
+      const inviteCode = (stored && stored.invite) || (await api.live.hostCode())
+      if (!stored || stored.invite !== inviteCode) void api.board.workspace.set(doc.id, { invite: inviteCode }).catch(() => undefined)
       setCode(inviteCode)
       codeRef.current = inviteCode
       setPreparing(true)

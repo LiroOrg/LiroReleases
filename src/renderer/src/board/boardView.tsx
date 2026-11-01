@@ -37,7 +37,6 @@ import {
   Minus,
   MousePointer2,
   Move,
-  MoveUpRight,
   Magnet,
   PaintBucket,
   PenTool,
@@ -72,7 +71,7 @@ import { useApp } from '../lib/store'
 import { navigate } from '../router'
 import { ItemLayer, itemBounds, visibleItems } from './scene'
 import { sheetSize } from './tableView'
-import { shapePath } from './shapes'
+import { SHAPE_GROUPS, SHAPE_LABELS, shapePath } from '@shared/shapes'
 import { ConnectorLayer } from './connectors'
 import { BoardDetails } from './boardDetails'
 import { BoardSettings } from './boardSettings'
@@ -93,13 +92,25 @@ import { useLiveBoard } from '../live/useLiveBoard'
 import { useMediaSync } from '../live/mediaSync'
 import { LiveCursors } from '../live/cursors'
 import { LivePanel } from '../live/panel'
-import { BoardToolbar, normalizeToolLayout, railTools } from './toolbar'
+import { BoardToolbar, normalizeToolLayout, railTools, toolEntry } from './toolbar'
 import { ContextMenu } from '../components/menu'
 import type { MenuItem } from '../components/menu'
 import { TextEditor, activeEditorNode, applyFormat, applyTextColor, currentFormat, emptyFormat } from './textEditor'
 import type { TextFormatState } from './textEditor'
 import { plainFromRichHtml, richHtmlFromPlain, sanitizeRichHtml } from './richHtml'
-import { PaletteAction, PaletteCell, PaletteCheck, PaletteGroup, PaletteGrid, PaletteNote, PaletteOption, PaletteSlider, PaletteSwatches } from '../components/palette'
+import {
+  PaletteAction,
+  PaletteCell,
+  PaletteCheck,
+  PaletteGrid,
+  PaletteGroup,
+  PaletteHead,
+  PaletteNote,
+  PaletteOption,
+  PaletteSlider,
+  PaletteSwatches,
+  LineGlyph
+} from '../components/palette'
 import { CalculatorPanel } from './calculator'
 import { applyDiff, applyPatch, decodeDiff, diffItems, encodeDiff, invertDiff } from '../live/diff'
 import type { RestorePatch } from '../live/diff'
@@ -256,24 +267,30 @@ function resizedItem(item: BoardItem, origin: Rect, next: ResizeBox, handle: Res
   return { ...item, x, y, w: width, h: height }
 }
 
-const CREATE_SHAPES: Array<{ id: CreateTool; label: string; shape: ShapeName }> = [
-  { id: 'rect', label: 'Прямоугольник', shape: 'rectangle' },
-  { id: 'rect', label: 'Скруглённый', shape: 'round_rectangle' },
-  { id: 'ellipse', label: 'Круг', shape: 'circle' },
-  { id: 'triangle', label: 'Треугольник', shape: 'triangle' },
-  { id: 'rect', label: 'Ромб', shape: 'diamond' },
-  { id: 'rect', label: 'Звезда', shape: 'star' },
-  { id: 'rect', label: 'Шестиугольник', shape: 'hexagon' },
-  { id: 'rect', label: 'Пятиугольник', shape: 'pentagon' },
-  { id: 'rect', label: 'Облако', shape: 'cloud' },
-  { id: 'rect', label: 'Стрелка', shape: 'arrow_right' },
-  { id: 'rect', label: 'Процесс', shape: 'flowchart_process' },
-  { id: 'rect', label: 'Решение', shape: 'flowchart_decision' },
-  { id: 'line', label: 'Линия', shape: 'rectangle' },
-  { id: 'arrow', label: 'Стрелка', shape: 'rectangle' }
-]
-
 const CREATE_STROKES = new Set<CreateTool>(['line', 'arrow'])
+
+const ROUND_SHAPES = new Set<ShapeName>([
+  'circle',
+  'semicircle',
+  'quarter_circle',
+  'arch',
+  'cloud',
+  'blob',
+  'ring',
+  'seal',
+  'lens',
+  'speech_round',
+  'speech_oval',
+  'flowchart_start',
+  'flowchart_end',
+  'flowchart_document'
+])
+
+function createToolForShape(shape: ShapeName): CreateTool {
+  if (ROUND_SHAPES.has(shape)) return 'ellipse'
+  if (shape === 'triangle' || shape === 'right_triangle') return 'triangle'
+  return 'rect'
+}
 
 function solidIcon(kind: SolidKind): ReactNode {
   const paths: Record<SolidKind, string> = {
@@ -334,24 +351,15 @@ function fillColorOf(item: BoardItem): string {
   return '#ffffff'
 }
 
+const SHAPE_ICON_BOX: Partial<Record<ShapeName, [number, number]>> = { pill: [20, 9] }
+
 function shapeIcon(shape: ShapeName): ReactNode {
-  const path: Record<string, string> = {
-    rectangle: 'M3 5h18v14H3z',
-    round_rectangle: 'M6 5h12a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3z',
-    circle: 'M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18z',
-    triangle: 'M12 4l9 16H3z',
-    diamond: 'M12 3l9 9-9 9-9-9z',
-    star: 'M12 3l2.7 5.9 6.3.7-4.7 4.3 1.3 6.1L12 17l-5.6 3 1.3-6.1L3 9.6l6.3-.7z',
-    hexagon: 'M12 3l7 4.5v9L12 21l-7-4.5v-9z',
-    pentagon: 'M12 3l8 6-3 10H7L4 9z',
-    cloud: 'M7 17a4 4 0 0 1 .5-8 5 5 0 0 1 9.6-1.2A3.8 3.8 0 0 1 18 17z',
-    arrow_right: 'M3 9h11V5l7 7-7 7v-4H3z',
-    flowchart_process: 'M4 7h16v10H4z',
-    flowchart_decision: 'M12 4l8 8-8 8-8-8z'
-  }
+  const box = SHAPE_ICON_BOX[shape] ?? [20, 20]
+  const shiftX = (20 - box[0]) / 2
+  const shiftY = (20 - box[1]) / 2
   return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round">
-      <path d={path[shape] ?? path.rectangle} />
+    <svg width="19" height="19" viewBox="-1.6 -1.6 23.2 23.2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+      <path d={shapePath(shape, box[0], box[1])} transform={shiftX || shiftY ? `translate(${shiftX} ${shiftY})` : undefined} />
     </svg>
   )
 }
@@ -597,6 +605,7 @@ export function BoardView(props: { docId: string }): ReactNode {
   const [moreOpen, setMoreOpen] = useState(false)
   const [penMode, setPenMode] = useState<'pen' | 'highlighter'>('pen')
   const [tool, setTool] = useState<Tool>('select')
+  const [paletteHidden, setPaletteHidden] = useState(false)
   const [faceLabel, setFaceLabel] = useState<{
     itemId: string
     face: string
@@ -1403,7 +1412,7 @@ export function BoardView(props: { docId: string }): ReactNode {
     tool === 'select' && !readOnly && !editingItem && !movingItems && !cropEdit
       ? selectedItems.filter((item) => !item.locked && item.kind !== 'solid' && item.kind !== 'connector')
       : []
-  const panelKind: 'none' | 'selection' | 'solid' | 'graph' | 'create' | 'erase' | 'link' | 'text' | 'sticky' | 'image' | 'table' | 'pen' = (() => {
+  const toolPanelKind: 'none' | 'selection' | 'solid' | 'graph' | 'create' | 'erase' | 'link' | 'text' | 'sticky' | 'image' | 'table' | 'pen' = (() => {
     if (tool === 'graph') return 'graph'
     if (tool === 'solid') return 'solid'
     if (tool === 'pen') return 'pen'
@@ -1415,6 +1424,12 @@ export function BoardView(props: { docId: string }): ReactNode {
     if (tool === 'pan') return 'none'
     return tool
   })()
+  const panelKind = paletteHidden ? 'none' : toolPanelKind
+  useEffect(() => setPaletteHidden(false), [tool, selection])
+  const paletteHead = (id: Tool, hint?: string): ReactNode => {
+    const entry = toolEntry(id)
+    return <PaletteHead icon={entry.icon} label={entry.label} keyHint={entry.key} hint={hint} />
+  }
   useLayoutEffect(() => {
     if (panelKind === 'none') return
     const rail = document.querySelector<HTMLElement>('.toolrail')
@@ -5515,10 +5530,13 @@ const navigateTo = useCallback(
           />
           {resizeTargets.map((target) => {
             const box = itemBounds(target)
-            const grip = 11 / Math.max(0.05, liveZoom)
+            const zoom = Math.max(0.05, liveZoom)
+            const grip = 11 / zoom
             const half = grip / 2
             const dot = 10 / Math.max(0.05, liveZoom)
             const dotGap = 13 / Math.max(0.05, liveZoom)
+            const knob = 20 / zoom
+            const stem = 15 / zoom
             const handles =
               target.kind === 'image'
                 ? RESIZE_HANDLES.filter((handle) => handle.id.length > 1)
@@ -5566,17 +5584,33 @@ const navigateTo = useCallback(
                     onPointerDown={(event) => startLinkDot(target.id, event)}
                   />
                 ))}
-                <span
-                  className="rotatehandle"
-                  style={{
-                    left: `calc(50% - ${half}px)`,
-                    top: `${-28 / Math.max(0.05, liveZoom) - half}px`,
-                    width: grip,
-                    height: grip
-                  }}
-                  title="Повернуть"
-                  onPointerDown={(event) => startRotate(target.id, event)}
-                />
+                {resizeTargets.length === 1 ? (
+                  <>
+                    <span
+                      className="rotatestem"
+                      style={{
+                        left: `calc(50% - ${0.7 / zoom}px)`,
+                        top: `${-(stem + knob / 2)}px`,
+                        width: 1.4 / zoom,
+                        height: stem + knob / 2
+                      }}
+                    />
+                    <span
+                      className="rotatehandle"
+                      style={{
+                        left: `calc(50% - ${knob / 2}px)`,
+                        top: `${-(stem + knob)}px`,
+                        width: knob,
+                        height: knob,
+                        borderWidth: 1.5 / zoom
+                      }}
+                      title="Повернуть"
+                      onPointerDown={(event) => startRotate(target.id, event)}
+                    >
+                      <RotateCw style={{ width: knob * 0.58, height: knob * 0.58 }} strokeWidth={2.6} />
+                    </span>
+                  </>
+                ) : null}
               </div>
             )
           })}
@@ -6041,6 +6075,10 @@ const navigateTo = useCallback(
           onMore={(value) => setMoreOpen(value)}
           onLayout={setLayout}
           onTool={(next) => {
+            if (next === tool) {
+              setPaletteHidden((hidden) => !hidden)
+              return
+            }
             if (next === 'link') setLinkFrom(null)
             setTool(next)
           }}
@@ -6102,6 +6140,7 @@ const navigateTo = useCallback(
         ) : null}
         {panelKind === 'solid' && solidPanel ? (
           <div className="toolgroup toolpalette">
+            {tool === 'solid' ? paletteHead('solid') : null}
             <PaletteGroup title={solidPanel.target ? 'Фигура' : 'Новая фигура'}>
               <PaletteGrid columns={3}>
                 {SOLID_KINDS.map((entry) => (
@@ -6186,29 +6225,19 @@ const navigateTo = useCallback(
           </div>
         ) : null}
         {panelKind === 'create' ? (
-          <div className="toolgroup toolpalette">
-            <PaletteGroup title="Фигура">
-              <PaletteGrid columns={4}>
-                {CREATE_SHAPES.map((entry) => (
-                  <PaletteCell
-                    key={`${entry.id}-${entry.shape}`}
-                    title={entry.label}
-                    active={CREATE_STROKES.has(entry.id) ? createTool === entry.id : createShape === entry.shape}
-                    icon={
-                      entry.id === 'line' ? (
-                        <Minus size={17} />
-                      ) : entry.id === 'arrow' ? (
-                        <MoveUpRight size={17} />
-                      ) : (
-                        shapeIcon(entry.shape)
-                      )
-                    }
-                    onClick={() => {
-                      if (!CREATE_STROKES.has(entry.id)) setCreateShape(entry.shape)
-                      setCreateTool(entry.id)
-                    }}
-                  />
-                ))}
+          <div className="toolgroup toolpalette toolpalette--wide">
+            {paletteHead(
+              'create',
+              createTool === 'line' ? 'Линия' : createTool === 'arrow' ? 'Стрелка' : SHAPE_LABELS[createShape]
+            )}
+            <PaletteGroup title="Линии">
+              <PaletteGrid columns={2}>
+                <PaletteCell title="Линия" icon={<LineGlyph shape="straight" />} active={createTool === 'line'} onClick={() => setCreateTool('line')}>
+                  Линия
+                </PaletteCell>
+                <PaletteCell title="Стрелка" icon={<LineGlyph shape="arrow" />} active={createTool === 'arrow'} onClick={() => setCreateTool('arrow')}>
+                  Стрелка
+                </PaletteCell>
               </PaletteGrid>
             </PaletteGroup>
             <PaletteGroup title={createIsLine ? 'Цвет линии' : 'Цвет фигуры'}>
@@ -6220,6 +6249,24 @@ const navigateTo = useCallback(
                 onCustom={(color) => (createIsLine ? setStrokeColor(color) : setShapeColor(color))}
               />
             </PaletteGroup>
+            {SHAPE_GROUPS.map((group) => (
+              <PaletteGroup key={group.title} title={group.title}>
+                <PaletteGrid columns={6}>
+                  {group.items.map((shape) => (
+                    <PaletteCell
+                      key={shape}
+                      title={SHAPE_LABELS[shape]}
+                      active={!createIsLine && createShape === shape}
+                      icon={shapeIcon(shape)}
+                      onClick={() => {
+                        setCreateShape(shape)
+                        setCreateTool(createToolForShape(shape))
+                      }}
+                    />
+                  ))}
+                </PaletteGrid>
+              </PaletteGroup>
+            ))}
             <PaletteGroup title="Начертание">
               <PaletteSlider
                 label={createIsLine ? 'Толщина' : 'Рамка'}
@@ -6233,9 +6280,16 @@ const navigateTo = useCallback(
         ) : null}
         {panelKind === 'pen' ? (
           <div className="toolgroup toolpalette">
-            <PaletteGroup title="Инструмент">
-              <PaletteOption label="Ручка" icon={<PenTool size={15} />} active={penMode === 'pen'} onClick={() => setPenMode('pen')} />
-              <PaletteOption label="Выделитель" icon={<Highlighter size={15} />} active={penMode === 'highlighter'} onClick={() => setPenMode('highlighter')} />
+            {paletteHead('pen', penMode === 'highlighter' ? 'Выделитель' : 'Ручка')}
+            <PaletteGroup title="Режим">
+              <PaletteGrid columns={2}>
+                <PaletteCell title="Ручка" icon={<PenTool size={16} />} active={penMode === 'pen'} onClick={() => setPenMode('pen')}>
+                  Ручка
+                </PaletteCell>
+                <PaletteCell title="Выделитель" icon={<Highlighter size={16} />} active={penMode === 'highlighter'} onClick={() => setPenMode('highlighter')}>
+                  Выделитель
+                </PaletteCell>
+              </PaletteGrid>
             </PaletteGroup>
             <PaletteGroup title="Цвет">
               <PaletteSwatches colors={QUICK_COLORS} value={strokeColor} nameFor={colorName} onPick={setStrokeColor} onCustom={setStrokeColor} />
@@ -6247,11 +6301,12 @@ const navigateTo = useCallback(
         ) : null}
         {panelKind === 'link' ? (
           <div className="toolgroup toolpalette">
+            {paletteHead('link', linkStyle === 'straight' ? 'Прямая' : linkStyle === 'curved' ? 'Кривая' : 'Ломаная')}
             <PaletteGroup title="Линия связи">
               <PaletteGrid columns={3}>
-                <PaletteCell title="Прямая линия" icon={<Minus size={16} />} active={linkStyle === 'straight'} onClick={() => setLinkStyle('straight')} />
-                <PaletteCell title="Кривая" icon={<MoveUpRight size={16} />} active={linkStyle === 'curved'} onClick={() => setLinkStyle('curved')} />
-                <PaletteCell title="Ломаная" icon={<Link2 size={16} />} active={linkStyle === 'elbowed'} onClick={() => setLinkStyle('elbowed')} />
+                <PaletteCell title="Прямая линия" icon={<LineGlyph shape="straight" />} active={linkStyle === 'straight'} onClick={() => setLinkStyle('straight')} />
+                <PaletteCell title="Кривая" icon={<LineGlyph shape="curved" />} active={linkStyle === 'curved'} onClick={() => setLinkStyle('curved')} />
+                <PaletteCell title="Ломаная" icon={<LineGlyph shape="elbowed" />} active={linkStyle === 'elbowed'} onClick={() => setLinkStyle('elbowed')} />
               </PaletteGrid>
             </PaletteGroup>
             <PaletteGroup title="Вид">
@@ -6294,14 +6349,16 @@ const navigateTo = useCallback(
         ) : null}
         {panelKind === 'erase' ? (
           <div className="toolgroup toolpalette">
-            <PaletteGroup title="Ластик">
+            {paletteHead('erase')}
+            <PaletteGroup title="Размер">
               <PaletteSlider label="Размер" value={eraseSize} min={6} max={48} step={2} onChange={setEraseSize} />
             </PaletteGroup>
           </div>
         ) : null}
         {panelKind === 'image' ? (
           <div className="toolgroup toolpalette">
-            <PaletteGroup title="Картинка">
+            {paletteHead('image')}
+            <PaletteGroup title="Вставить">
               <PaletteOption
                 label="Из файла"
                 icon={<ImagePlus size={15} />}
@@ -6344,6 +6401,7 @@ const navigateTo = useCallback(
         ) : null}
         {panelKind === 'text' || panelKind === 'sticky' ? (
           <div className="toolgroup toolpalette">
+            {paletteHead(panelKind)}
             <PaletteGroup title="Цвет текста">
               <PaletteSwatches colors={QUICK_COLORS} value={textColor} nameFor={colorName} onPick={setTextColor} onCustom={setTextColor} />
             </PaletteGroup>
@@ -6359,6 +6417,7 @@ const navigateTo = useCallback(
         ) : null}
         {panelKind === 'graph' && graphPanel ? (
           <div className="toolgroup toolpalette">
+            {tool === 'graph' ? paletteHead('graph') : null}
             <PaletteGroup title="Плоскость">
               <PaletteSlider label="Масштаб" value={graphPanel.scale} min={10} max={160} step={5} onChange={(value) => patchGraph({ scale: value }, true)} />
               <label className="graphpanel__row" title="Сколько единиц в одной клетке сетки">

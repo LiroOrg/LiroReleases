@@ -98,34 +98,64 @@ export interface TextItem extends ItemBase {
   urls: string[]
 }
 
-export type ShapeName =
-  | 'rectangle'
-  | 'round_rectangle'
-  | 'square'
-  | 'circle'
-  | 'triangle'
-  | 'right_triangle'
-  | 'diamond'
-  | 'pentagon'
-  | 'hexagon'
-  | 'octagon'
-  | 'star'
-  | 'pie'
-  | 'trapezoid'
-  | 'parallelogram'
-  | 'cross'
-  | 'arrow_right'
-  | 'arrow_left'
-  | 'arrow_up'
-  | 'arrow_down'
-  | 'flowchart_start'
-  | 'flowchart_end'
-  | 'flowchart_process'
-  | 'flowchart_decision'
-  | 'flowchart_input_output'
-  | 'flowchart_document'
-  | 'cloud'
-  | 'unknown'
+export const SHAPE_NAMES = [
+  'rectangle',
+  'round_rectangle',
+  'square',
+  'circle',
+  'semicircle',
+  'quarter_circle',
+  'arch',
+  'heart',
+  'drop',
+  'moon',
+  'ring',
+  'lens',
+  'pill',
+  'leaf',
+  'triangle',
+  'right_triangle',
+  'diamond',
+  'pentagon',
+  'hexagon',
+  'octagon',
+  'trapezoid',
+  'parallelogram',
+  'star',
+  'star_six',
+  'sparkle',
+  'star_burst',
+  'pie',
+  'cross',
+  'cross_x',
+  'shield',
+  'tag',
+  'seal',
+  'lightning',
+  'frame',
+  'cloud',
+  'blob',
+  'speech_round',
+  'speech_oval',
+  'bookmark',
+  'ribbon',
+  'chevron',
+  'arrow_right',
+  'arrow_left',
+  'arrow_up',
+  'arrow_down',
+  'arrow_double',
+  'flowchart_start',
+  'flowchart_end',
+  'flowchart_process',
+  'flowchart_decision',
+  'flowchart_input_output',
+  'flowchart_document',
+  'flowchart_database',
+  'unknown'
+] as const
+
+export type ShapeName = (typeof SHAPE_NAMES)[number]
 
 export interface ShapeItem extends ItemBase {
   kind: 'shape'
@@ -440,6 +470,7 @@ export interface BoardDoc {
 }
 
 export interface BoardWorkspace {
+  invite?: string
   calculator?: {
     source?: string
     history?: Array<{ expression: string; result: string }>

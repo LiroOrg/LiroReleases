@@ -1,8 +1,8 @@
 import { memo, useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import type { BoardDoc, BoardItem, Rect } from '@shared/types'
-import { deriveConnectorPoints } from '@shared/geometry'
-import { strokeDash } from './shapes'
+import { curveControl, deriveConnectorPoints } from '@shared/geometry'
+import { strokeDash } from '@shared/shapes'
 
 export interface ConnectorLayerProps {
   doc: BoardDoc
@@ -197,6 +197,7 @@ function draw(
       }
       const screen = points.map(toScreen)
       const lineWidth = Math.max(0.6, connector.lineWidth * zoom)
+      const elbowRadius = Math.min(Math.max(4, 14 * zoom), 40)
       ctx.strokeStyle = connector.color
       ctx.fillStyle = connector.color
       ctx.lineWidth = lineWidth
@@ -205,46 +206,46 @@ function draw(
       const dash = strokeDash(connector.lineStyle as 'normal' | 'dotted' | 'dashed')
       ctx.setLineDash(dash ? dash.split(' ').map((v) => Number(v) * zoom) : [])
       ctx.beginPath()
+      let ctrl: { x: number; y: number } | null = null
       if (connector.shape === 'curved' && screen.length === 2) {
         const [a, b] = screen
-        const span = Math.hypot(b.x - a.x, b.y - a.y)
-        const midX = (a.x + b.x) / 2
-        const midY = (a.y + b.y) / 2 - Math.min(span * 0.18, 60)
+        ctrl = curveControl(a, b)
         ctx.moveTo(a.x, a.y)
-        ctx.quadraticCurveTo(midX, midY, b.x, b.y)
+        ctx.quadraticCurveTo(ctrl.x, ctrl.y, b.x, b.y)
       } else if (connector.shape === 'elbowed' && screen.length === 2) {
         const [a, b] = screen
-        const midX = (a.x + b.x) / 2
-        roundedElbow(
-          ctx,
-          [
-            { x: a.x, y: a.y },
-            { x: midX, y: a.y },
-            { x: midX, y: b.y },
-            { x: b.x, y: b.y }
-          ],
-          Math.max(4, Math.min(18, Math.hypot(b.x - a.x, b.y - a.y) * 0.12))
-        )
+        const path =
+          Math.abs(b.x - a.x) >= Math.abs(b.y - a.y)
+            ? [a, { x: (a.x + b.x) / 2, y: a.y }, { x: (a.x + b.x) / 2, y: b.y }, b]
+            : [a, { x: a.x, y: (a.y + b.y) / 2 }, { x: b.x, y: (a.y + b.y) / 2 }, b]
+        roundedElbow(ctx, path, elbowRadius)
+      } else if (screen.length > 2) {
+        roundedElbow(ctx, screen, elbowRadius)
       } else {
-        if (screen.length > 2) roundedElbow(ctx, screen, Math.max(4, Math.min(18, lineWidth * 3)))
-        else ctx.moveTo(screen[0].x, screen[0].y)
-        for (let i = 1; i < screen.length; i++) ctx.lineTo(screen[i].x, screen[i].y)
+        ctx.moveTo(screen[0].x, screen[0].y)
+        ctx.lineTo(screen[1].x, screen[1].y)
       }
       ctx.stroke()
       ctx.setLineDash([])
       if (connector.captions?.length) {
-        const mid = screen[Math.floor(screen.length / 2)]
+        const mid = ctrl
+          ? {
+              x: (screen[0].x + 2 * ctrl.x + screen[1].x) / 4,
+              y: (screen[0].y + 2 * ctrl.y + screen[1].y) / 4
+            }
+          : screen[Math.floor(screen.length / 2)]
         ctx.font = `${Math.max(8, 12 * zoom)}px Inter, 'Segoe UI', sans-serif`
         ctx.fillStyle = connector.textColor ?? '#1a1a1a'
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
         const plain = connector.captions[0].replace(/<[^>]*>/g, '')
-        ctx.fillText(plain.slice(0, 60), mid.x, mid.y - lineWidth * 2)
+        ctx.fillText(plain, mid.x, mid.y - lineWidth * 2)
       }
-      drawArrow(ctx, screen[0], screen[1], connector.startStroke, connector.color, lineWidth)
+      const startFrom = ctrl ?? screen[1]
+      drawArrow(ctx, startFrom, screen[0], connector.startStroke, connector.color, lineWidth)
       const last = screen[screen.length - 1]
-      const prev = screen[screen.length - 2]
-      drawArrow(ctx, prev, last, connector.endStroke, connector.color, lineWidth)
+      const endFrom = ctrl ?? screen[screen.length - 2]
+      drawArrow(ctx, endFrom, last, connector.endStroke, connector.color, lineWidth)
     }
   }
 }

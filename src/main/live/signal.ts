@@ -36,15 +36,26 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
 
 export async function createRoom(code: string, offer: string): Promise<void> {
   const expires = new Date(Date.now() + ROOM_TTL_MINUTES * 60 * 1000).toISOString()
-  await request<RoomRow[]>('rooms', {
-    method: 'POST',
-    headers: { Prefer: 'return=minimal' },
-    body: JSON.stringify({
-      id: roomId(code),
-      offer: encryptRoom(code, offer),
-      expires_at: expires
-    })
+  const body = JSON.stringify({
+    id: roomId(code),
+    offer: encryptRoom(code, offer),
+    expires_at: expires
   })
+  try {
+    await request<RoomRow[]>('rooms', {
+      method: 'POST',
+      headers: { Prefer: 'return=minimal' },
+      body
+    })
+  } catch (error) {
+    if (!String(error).includes(' 409')) throw error
+    await deleteRoom(code).catch(() => undefined)
+    await request<RoomRow[]>('rooms', {
+      method: 'POST',
+      headers: { Prefer: 'return=minimal' },
+      body
+    })
+  }
 }
 
 export async function readRoom(code: string): Promise<{ offer?: string; answer?: string } | null> {

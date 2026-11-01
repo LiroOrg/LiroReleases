@@ -894,7 +894,10 @@ const run = async () => {
     const firstId = document.querySelector('.boarditem--selected')?.getAttribute('data-item-id') || ''
     await press('s')
     await wait(260)
-    document.querySelector('.toolpalette .toolbtn')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    const shapeButton = Array.from(document.querySelectorAll('.toolpalette .toolbtn')).find((node) =>
+      /Прямоугольник/.test(node.getAttribute('title') || '')
+    )
+    shapeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await wait(220)
     let secondSpot = null
     for (let step = 0; step < 40 && !secondSpot; step += 1) {
