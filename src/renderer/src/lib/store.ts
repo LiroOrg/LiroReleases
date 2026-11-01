@@ -32,6 +32,19 @@ export type ToastKind =
   | 'file'
   | 'select'
   | 'update'
+  | 'update-check'
+  | 'update-ready'
+  | 'update-applied'
+  | 'clipboard'
+  | 'live'
+  | 'live-out'
+  | 'lead'
+  | 'follow'
+  | 'locate'
+  | 'editable'
+  | 'readonly'
+  | 'capture'
+  | 'archive'
 
 export interface ToastAction {
   id: string

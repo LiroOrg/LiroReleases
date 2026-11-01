@@ -34,6 +34,7 @@ export interface RemoteCursor {
   targetY: number
   updatedAt: number
   visible: boolean
+  away: boolean
 }
 
 export interface LiveSessionOptions {
@@ -45,6 +46,7 @@ export interface LiveSessionOptions {
   onCursor: (cursor: RemoteCursor) => void
   onParticipant: (participant: LiveParticipant) => void
   onPermission: (canEdit: boolean) => void
+  onChunkProgress: (id: string, done: number, total: number) => void
 }
 
 export class LiveSession {
@@ -252,8 +254,9 @@ export class LiveSession {
     }
     if (message.t === 'cursor') {
       const existing = this.cursors.get(this.partnerId)
+      const away = message.away === true
       const visible = message.hidden !== true
-      const snap = !existing || !existing.visible || !visible
+      const snap = !existing || !existing.visible || !visible || existing.away !== away
       const cursor: RemoteCursor = {
         id: this.partnerId,
         name: this.partnerName,
@@ -263,7 +266,8 @@ export class LiveSession {
         targetX: message.x,
         targetY: message.y,
         updatedAt: performance.now(),
-        visible
+        visible,
+        away
       }
       this.cursors.set(this.partnerId, cursor)
       this.options.onCursor(cursor)
@@ -310,12 +314,16 @@ export class LiveSession {
       const pending = this.pendingChunks.get(message.id)
       if (!pending) {
         this.pendingChunks.set(message.id, { total: message.total, parts: new Array(message.total).fill(''), createdAt: Date.now() })
+        if (message.total > 1) this.options.onChunkProgress(message.id, 0, message.total)
       }
       const target = this.pendingChunks.get(message.id)!
       target.parts[message.index] = message.payload
+      const done = target.parts.reduce((count, part) => (part ? count + 1 : count), 0)
+      if (message.total > 1) this.options.onChunkProgress(message.id, done, message.total)
       if (target.parts.every((part) => part !== '' || message.total === 1)) {
         const whole = target.parts.join('')
         this.pendingChunks.delete(message.id)
+        this.options.onChunkProgress(message.id, message.total, message.total)
         this.options.onMessage({ t: 'chunk', id: message.id, index: 0, total: 1, payload: whole })
       }
       return
@@ -417,7 +425,7 @@ export class LiveSession {
         }
       }
       for (const cursor of this.cursors.values()) {
-        if (now - cursor.updatedAt > 4000) {
+        if (!cursor.away && now - cursor.updatedAt > 4000) {
           if (cursor.visible) {
             this.options.onCursor({ ...cursor, visible: false })
           }

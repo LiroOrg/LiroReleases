@@ -86,7 +86,7 @@ export function JoinScreen(props: { code: string }): ReactNode {
             type="button"
             className="btn btn--sm"
             onClick={() => {
-              toast('Сессия не открыта', 'info')
+              toast('Сессия не открыта', 'live')
               navigate({ name: 'home' })
             }}
           >

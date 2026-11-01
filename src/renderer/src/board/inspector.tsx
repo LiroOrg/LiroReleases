@@ -50,6 +50,7 @@ function fillColorOf(item: BoardItem): string | null {
 function textColorOf(item: BoardItem): string | null {
   if (item.kind === 'text') return item.color
   if (item.kind === 'shape') return item.textColor ?? null
+  if (item.kind === 'sticky') return item.textColor ?? null
   return null
 }
 
@@ -417,6 +418,7 @@ export function Inspector(props: InspectorProps): ReactNode {
             onPick={(color) => {
               if (single.kind === 'text') props.onPatch(single.id, { color } as Partial<BoardItem>)
               else if (single.kind === 'shape') props.onPatch(single.id, { textColor: color } as Partial<BoardItem>)
+              else if (single.kind === 'sticky') props.onPatch(single.id, { textColor: color } as Partial<BoardItem>)
             }}
           />
 
@@ -554,7 +556,7 @@ export function Inspector(props: InspectorProps): ReactNode {
             colors={TEXT_PALETTE}
             onPick={(color) => {
               props.onPatchMany(idsOf(items, ['text']), { color } as Partial<BoardItem>)
-              props.onPatchMany(idsOf(items, ['shape']), { textColor: color } as Partial<BoardItem>)
+              props.onPatchMany(idsOf(items, ['shape', 'sticky']), { textColor: color } as Partial<BoardItem>)
             }}
           />
 

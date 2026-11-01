@@ -6,7 +6,7 @@ import { docDir, thumbFile } from '../paths'
 import { createZip } from '../util/zip'
 import { exportFolder, renderHtml, renderPdf, renderPng, thumbnailPath, type RenderParams } from './render'
 import { buildSvg } from './svg'
-import { sanitizeFileName } from '@shared/util'
+import { boundsOfItems, sanitizeFileName } from '@shared/util'
 
 function baseName(title: string): string {
   return sanitizeFileName(title) || 'board'
@@ -31,18 +31,19 @@ export async function exportBoard(
 ): Promise<string> {
   if (options.thumbnail) {
     const doc = store.readDoc(options.docId)
-    if (!doc.stats.items) {
-      const fallback = join(docDir(options.docId), 'empty-thumb.png')
-      if (!existsSync(fallback)) writeFileSync(fallback, emptyPng())
-      return thumbnailPath(options.docId)
+    const target = thumbnailPath(options.docId)
+    if (!doc.items.length) {
+      writeFileSync(target, whitePng())
+      return target
     }
+    const box = boundsOfItems(doc.items, 60)
     const result = await renderPng({
       docId: options.docId,
-      scope: 'board',
-      scale: 0.2,
+      scope: 'thumb',
+      bbox: { x: box.x, y: box.y, width: Math.max(1, box.width), height: Math.max(1, box.height) },
+      scale: 1,
       background: 'white'
     })
-    const target = thumbnailPath(options.docId)
     writeFileSync(target, result.buffer)
     return target
   }
@@ -162,9 +163,9 @@ function readme(title: string): string {
   ].join('\n')
 }
 
-function emptyPng(): Buffer {
+function whitePng(): Buffer {
   return Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAD0lEQVR4nGP4jwMwDC0JALoev0Ewkwr8AAAAAElFTkSuQmCC',
     'base64'
   )
 }

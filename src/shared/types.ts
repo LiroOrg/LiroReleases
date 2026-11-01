@@ -78,6 +78,7 @@ export interface StickyItem extends ItemBase {
   content: string
   plain: string
   color: string
+  textColor?: string
   shape: 'square' | 'round'
   textAlign: 'left' | 'center' | 'right'
   textAlignVertical: 'top' | 'middle' | 'bottom'
@@ -478,6 +479,7 @@ export interface BoardMeta {
   sourceUrl?: string
   sourceBoardId?: string
   assetBytes: number
+  order?: number
 }
 
 export interface LibraryIndex {

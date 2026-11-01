@@ -48,7 +48,7 @@ const openMenuAt = async (x, y) => {
   canvasEl.dispatchEvent(new PointerEvent('pointerup', { ...options, buttons: 0 }))
   canvasEl.dispatchEvent(new MouseEvent('contextmenu', options))
   await wait(300)
-  return Array.from(document.querySelectorAll('.ctxmenu button'))
+  return Array.from(document.querySelectorAll('.menu__pop .menu__item'))
 }
 
 const openMenuOn = (node) => {
@@ -406,7 +406,7 @@ const run = async () => {
     check('открылось поле ввода текста', !!editor)
     check('создание текста не отдаёт фокус доске', downEvent.defaultPrevented)
     check('курсор в поле ввода сразу', !!editor && document.activeElement === editor, `${document.activeElement?.className || document.activeElement?.tagName}`)
-    check('шаблон выделен для перезаписи', !!editor && editor.selectionStart === 0 && editor.selectionEnd === String(editor.value).length, `«${editor?.value}»`)
+    check('шаблон выделен для перезаписи', !!editor && window.getSelection()?.toString() === 'Текст', `${editor?.textContent}`)
     const freshNode = Array.from(document.querySelectorAll(".boarditem[data-kind='text']")).pop()
     check('под полем ввода объект не рисует свой текст', !!freshNode && !(freshNode.textContent || '').trim(), freshNode ? JSON.stringify(freshNode.textContent) : 'узла нет')
     if (editor) {
@@ -416,8 +416,7 @@ const run = async () => {
       editor.dispatchEvent(pasteEvent)
       await wait(140)
       check('вставка в текст не перехватывается', pasteEvent.defaultPrevented === false)
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
-      setter.call(editor, 'Привет')
+      editor.innerHTML = '<p>Привет</p>'
       editor.dispatchEvent(new Event('input', { bubbles: true }))
       await wait(120)
       editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }))
@@ -451,10 +450,8 @@ const run = async () => {
     check('стикер открылся на ввод', !!stickyEditor)
     check('курсор в поле стикера сразу', !!stickyEditor && document.activeElement === stickyEditor, `${document.activeElement?.className || document.activeElement?.tagName}`)
     if (stickyEditor) {
-      const picked = stickyEditor.value.slice(stickyEditor.selectionStart, stickyEditor.selectionEnd)
-      check('текст стикера выделен целиком', picked === 'Заметка', picked)
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
-      setter.call(stickyEditor, 'Заметка')
+      check('текст стикера выделен целиком', window.getSelection()?.toString() === 'Заметка', `${stickyEditor.textContent}`)
+      stickyEditor.innerHTML = '<p>Заметка</p>'
       stickyEditor.dispatchEvent(new Event('input', { bubbles: true }))
       await wait(120)
       stickyEditor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }))
@@ -1137,9 +1134,9 @@ const run = async () => {
   await wait(60)
   canvasBox.dispatchEvent(new PointerEvent('pointerup', pointer))
   await wait(220)
-  check('ПКМ без перемещения открывает меню', !!document.querySelector('.ctxmenu'))
+  check('ПКМ без перемещения открывает меню', !!document.querySelector('.menu__pop'))
   await press('Escape')
-  check('Escape закрывает меню', !document.querySelector('.ctxmenu'))
+  check('Escape закрывает меню', !document.querySelector('.menu__pop'))
 
   canvasBox.dispatchEvent(new PointerEvent('pointerdown', pointer))
   await wait(40)
@@ -1147,7 +1144,7 @@ const run = async () => {
   await wait(60)
   canvasBox.dispatchEvent(new PointerEvent('pointerup', { ...pointer, clientX: 780, clientY: 460 }))
   await wait(240)
-  check('перетаскивание ПКМ не открывает меню', !document.querySelector('.ctxmenu'))
+  check('перетаскивание ПКМ не открывает меню', !document.querySelector('.menu__pop'))
 
   const emptySpot = (() => {
     if (!canvasBox) return null
@@ -1423,8 +1420,8 @@ const run = async () => {
       const plainEditor = document.querySelector('.texteditor')
       check(
         'в поле правки нет html',
-        !!plainEditor && !plainEditor.value.includes('<'),
-        plainEditor ? plainEditor.value.slice(0, 40) : 'поля нет'
+        !!plainEditor && !(plainEditor.textContent || '').includes('<'),
+        (plainEditor?.textContent || 'поля нет').slice(0, 40)
       )
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
       await wait(240)

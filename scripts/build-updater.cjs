@@ -24,9 +24,13 @@ function main() {
   const project = path.resolve(__dirname, '..')
   const source = path.join(project, 'scripts', 'updater')
   const target = path.join(project, 'resources', 'updater')
+  const version = JSON.parse(fs.readFileSync(path.join(project, 'package.json'), 'utf8')).version
   fs.mkdirSync(target, { recursive: true })
   const makensis = findMakeNsis()
-  execFileSync(makensis, ['-V2', path.join(source, 'Liro-Updater.nsi')], { cwd: source, stdio: 'inherit' })
+  execFileSync(makensis, ['-V2', `-DVER=${version}`, `-DVER4=${version}.0`, path.join(source, 'Liro-Updater.nsi')], {
+    cwd: source,
+    stdio: 'inherit'
+  })
   const built = path.join(source, 'Liro-Updater.exe')
   if (!fs.existsSync(built)) throw new Error('Liro-Updater.exe не собран')
   fs.mkdirSync(target, { recursive: true })

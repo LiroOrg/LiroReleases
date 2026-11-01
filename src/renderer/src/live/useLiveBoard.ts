@@ -13,6 +13,7 @@ export interface LiveBoardBridge {
   role: LiveRole
   code: string | null
   partner: LiveParticipant | null
+  partnerAway: boolean
   ping: number
   connected: boolean
   canEdit: boolean
@@ -33,6 +34,7 @@ export interface LiveBoardBridge {
   onRemoteOps: (handler: (message: LiveMessage) => void) => void
   onRemoteViewport: (handler: (viewport: { x: number; y: number; zoom: number; ask?: boolean }) => void) => void
   onRemoteChunk: (handler: (id: string, payload: string) => void) => void
+  onChunkProgress: (handler: (id: string, done: number, total: number) => void) => void
   sendCursor: (x: number, y: number) => void
   sendPreview: (preview: LivePreview) => void
   clearRemotePreview: () => void
@@ -63,6 +65,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
   const sessionRef = useRef<LiveSession | null>(null)
   const opsHandlerRef = useRef<((message: LiveMessage) => void) | null>(null)
   const chunkHandlerRef = useRef<((id: string, payload: string) => void) | null>(null)
+  const chunkProgressHandlerRef = useRef<((id: string, done: number, total: number) => void) | null>(null)
   const viewportHandlerRef = useRef<((viewport: { x: number; y: number; zoom: number; ask?: boolean }) => void) | null>(null)
   const cursorTimerRef = useRef<number | null>(null)
   const pendingCursorRef = useRef<{ x: number; y: number; hidden: boolean } | null>(null)
@@ -71,6 +74,8 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
   const codeRef = useRef<string | null>(null)
   const roleRef = useRef<LiveRole>('host')
   const lastCursorSentRef = useRef(0)
+  const lastCursorRef = useRef<{ x: number; y: number } | null>(null)
+  const minimizedRef = useRef(false)
   const wasConnectedRef = useRef(false)
   const leavingRef = useRef(false)
 
@@ -88,7 +93,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       setRole('host')
       canEditRef.current = true
       sessionRef.current?.applyHandover('host')
-      toast('Вы теперь ведущий совместной сессии', 'success')
+      toast('Вы теперь ведущий совместной сессии', 'lead')
       return
     }
     if (message.t === 'chunk') {
@@ -115,7 +120,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
             wasConnectedRef.current = true
           } else if (wasConnectedRef.current && !leavingRef.current) {
             wasConnectedRef.current = false
-            toast('Партнёр отключился', 'info')
+            toast('Партнёр отключился', 'live-out')
           }
           if (!value) {
             setPartner(null)
@@ -135,6 +140,9 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
         onParticipant: (value) => setPartner(value),
         onPermission: (value) => {
           setCanEdit(roleRef.current === 'guest' ? value : canEditRef.current)
+        },
+        onChunkProgress: (id, done, total) => {
+          chunkProgressHandlerRef.current?.(id, done, total)
         }
       })
       sessionRef.current = session
@@ -232,6 +240,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
     setCanEdit(false)
     setPreparing(false)
     setCursors([])
+    lastCursorRef.current = null
     setWatching(false)
     setFollowing(false)
     if (cursorTimerRef.current !== null) {
@@ -282,7 +291,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
     setRole('guest')
     canEditRef.current = true
     session.applyHandover('guest')
-    toast('Ведущим стал партнёр', 'info')
+    toast('Ведущим стал партнёр', 'lead')
   }, [toast])
 
   const onRemoteOps = useCallback((handler: (message: LiveMessage) => void): void => {
@@ -297,7 +306,12 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
     chunkHandlerRef.current = handler
   }, [])
 
+  const onChunkProgress = useCallback((handler: (id: string, done: number, total: number) => void): void => {
+    chunkProgressHandlerRef.current = handler
+  }, [])
+
   const sendCursor = useCallback((x: number, y: number): void => {
+    lastCursorRef.current = { x, y }
     pendingCursorRef.current = { x, y, hidden: false }
     const now = performance.now()
     if (now - lastCursorSentRef.current >= 16) {
@@ -343,6 +357,25 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
   }, [])
 
   useEffect(() => {
+    const announce = (): void => {
+      const session = sessionRef.current
+      const at = lastCursorRef.current
+      if (!session || !session.isConnected || !at) return
+      if (document.visibilityState === 'hidden' || minimizedRef.current) session.sendLive({ t: 'cursor', x: at.x, y: at.y, away: true })
+      else session.sendLive({ t: 'cursor', x: at.x, y: at.y })
+    }
+    const offState = window.liro.subscribe('window:state', (payload) => {
+      minimizedRef.current = Boolean((payload as { minimized?: boolean })?.minimized)
+      announce()
+    })
+    document.addEventListener('visibilitychange', announce)
+    return () => {
+      offState()
+      document.removeEventListener('visibilitychange', announce)
+    }
+  }, [])
+
+  useEffect(() => {
     const timer = window.setInterval(() => {
       const session = sessionRef.current
       if (!session) return
@@ -358,6 +391,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       role,
       code,
       partner,
+      partnerAway: cursors.some((cursor) => cursor.away),
       ping,
       connected,
       canEdit,
@@ -378,6 +412,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       onRemoteOps,
       onRemoteViewport,
       onRemoteChunk,
+      onChunkProgress,
       sendCursor,
       sendPreview,
       clearRemotePreview,
@@ -409,6 +444,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       onRemoteOps,
       onRemoteViewport,
       onRemoteChunk,
+      onChunkProgress,
       sendCursor,
       sendPreview,
       clearRemotePreview,

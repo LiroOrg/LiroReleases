@@ -4,7 +4,10 @@ import {
   ArrowLeft,
   ArrowDownToLine,
   ArrowUpToLine,
+  Bold,
   Calculator,
+  Check,
+  ClipboardCopy,
   ClipboardPaste,
   Copy,
   Crop,
@@ -19,8 +22,11 @@ import {
   ImageOff,
   ImagePlus,
   Info,
+  Italic,
   Layers,
   Link2,
+  List,
+  ListOrdered,
   Lock,
   LockOpen,
   Maximize,
@@ -36,14 +42,15 @@ import {
   PaintBucket,
   PenTool,
   Pencil,
-  Pipette,
   Plus,
   Redo2,
   RotateCw,
   Search,
   SlidersHorizontal,
+  Strikethrough,
   Trash2,
   Type,
+  Underline,
   Undo2,
   Users,
   X,
@@ -57,7 +64,7 @@ import { contrastColor, shadesOf } from '@shared/color'
 import { faceLocalToWorld, faceWorldToLocal, polygonOverlapArea, projectPoint, solidProjection, solidScreenToLocal } from '@shared/three'
 import { snapBox, unionBox } from './align'
 import type { Guide, Placed } from './align'
-import { clamp, fitTextBox, rotatedBox, uid, withoutDanglingConnectors } from '@shared/util'
+import { boundsOfItems, clamp, fitTextBox, rotatedBox, uid, withoutDanglingConnectors } from '@shared/util'
 import { curvePath } from '@shared/curve'
 import { buildStroke, distanceToStroke, straightStroke } from '@shared/stroke'
 import { api } from '../lib/api'
@@ -86,6 +93,12 @@ import { useMediaSync } from '../live/mediaSync'
 import { LiveCursors } from '../live/cursors'
 import { LivePanel } from '../live/panel'
 import { BoardToolbar, normalizeToolLayout, railTools } from './toolbar'
+import { ContextMenu } from '../components/menu'
+import type { MenuItem } from '../components/menu'
+import { TextEditor, activeEditorNode, applyFormat, applyTextColor, currentFormat, emptyFormat } from './textEditor'
+import type { TextFormatState } from './textEditor'
+import { plainFromRichHtml, richHtmlFromPlain, sanitizeRichHtml } from './richHtml'
+import { PaletteAction, PaletteCell, PaletteCheck, PaletteGroup, PaletteGrid, PaletteNote, PaletteOption, PaletteSlider, PaletteSwatches } from '../components/palette'
 import { CalculatorPanel } from './calculator'
 import { applyDiff, applyPatch, decodeDiff, diffItems, encodeDiff, invertDiff } from '../live/diff'
 import type { RestorePatch } from '../live/diff'
@@ -303,16 +316,15 @@ function shapeTextColorOf(item: { textColor?: string; fillColor: string }): stri
 
 function textColorOf(item: BoardItem): string {
   if (item.kind === 'text') return item.color
-  if (item.kind === 'sticky') return '#1a1a1a'
+  if (item.kind === 'sticky') return item.textColor || contrastColor(item.color)
   if (item.kind === 'shape') return shapeTextColorOf(item)
   return '#1a1a1a'
 }
 
-function paintColorOf(item: BoardItem): string {
-  if (item.kind === 'text') return item.color
+function fillColorOf(item: BoardItem): string {
   if (item.kind === 'sticky') return item.color
-  if (item.kind === 'shape') return shapeTextColorOf(item)
-  return '#1a1a1a'
+  if (item.kind === 'shape') return item.fillColor
+  return '#ffffff'
 }
 
 function shapeIcon(shape: ShapeName): ReactNode {
@@ -354,6 +366,22 @@ const MOVE_EASE = 0.4
 const QUICK_COLORS = ['#1a1a1a', '#7f1d1d', '#1d4ed8', '#15803d', '#b45309']
 const STICKY_COLORS = ['#fff9b1', '#ffd8b1', '#cfe8fb', '#d9f2e3', '#f3e0ff']
 const GRAPH_DIVISIONS = [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100]
+const COLOR_NAMES: Record<string, string> = {
+  '#1a1a1a': 'Чёрный',
+  '#7f1d1d': 'Бордовый',
+  '#1d4ed8': 'Синий',
+  '#15803d': 'Зелёный',
+  '#b45309': 'Коричневый',
+  '#fff9b1': 'Жёлтый',
+  '#ffd8b1': 'Оранжевый',
+  '#cfe8fb': 'Голубой',
+  '#d9f2e3': 'Салатовый',
+  '#f3e0ff': 'Сиреневый'
+}
+
+function colorName(color: string): string {
+  return COLOR_NAMES[color.toLowerCase()] ?? color
+}
 const GRAPH_STROKES = [1, 2, 3, 5, 8]
 const SOLID_KINDS: Array<{ id: SolidKind; label: string }> = [
   { id: 'cube', label: 'Куб' },
@@ -455,6 +483,13 @@ const SOLID_MODES: Array<{ id: SolidMode; title: string; icon: ReactNode }> = [
   { id: 'paint', title: 'Заливка грани: щёлкните по грани', icon: <PaintBucket size={16} /> },
   { id: 'through', title: 'Прямая внутри: две точки на гранях', icon: <Link2 size={16} /> }
 ]
+
+const SOLID_MODE_LABELS: Record<SolidMode, string> = {
+  rotate: 'Вращение',
+  move: 'Перенос',
+  paint: 'Заливка',
+  through: 'Внутри'
+}
 
 const SOLID_MODE_HINTS: Record<SolidMode, string> = {
   rotate: 'Тяните по фигуре для вращения.',
@@ -604,7 +639,8 @@ export function BoardView(props: { docId: string }): ReactNode {
   
   const [createTool, setCreateTool] = useState<CreateTool>('rect')
   const [createShape, setCreateShape] = useState<ShapeName>('rectangle')
-  const [editing, setEditing] = useState<{ id: string; value: string } | null>(null)
+  const [editing, setEditing] = useState<{ id: string; html: string; plain: string } | null>(null)
+  const [textFormat, setTextFormat] = useState<TextFormatState>(emptyFormat)
   const [solidKind, setSolidKind] = useState<SolidKind>('cube')
   const [strokeColor, setStrokeColor] = useState('#1a1a1a')
   const [strokeWidth, setStrokeWidth] = useState(4)
@@ -619,8 +655,6 @@ export function BoardView(props: { docId: string }): ReactNode {
   const media = useMediaSync(live.sendOps)
   const readOnly = readOnlyLocal || hostLocked
   const [menu, setMenu] = useState<{ x: number; y: number; onItem: string } | null>(null)
-  const [menuPos, setMenuPos] = useState({ x: 8, y: 8 })
-  const menuRef = useRef<HTMLDivElement | null>(null)
   const [historyState, setHistoryState] = useState({ undo: 0, redo: 0 })
   const [eraserCursor, setEraserCursor] = useState<{ x: number; y: number; size: number } | null>(null)
   const eraseBaseRef = useRef<BoardItem[] | null>(null)
@@ -734,19 +768,6 @@ export function BoardView(props: { docId: string }): ReactNode {
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const canvasRectRef = useRef({ left: 0, top: 0 })
 
-  useLayoutEffect(() => {
-    if (!menu) return
-    setMenuPos(menu)
-    const node = menuRef.current
-    const wrap = wrapRef.current
-    if (!node || !wrap) return
-    const limitY = wrap.clientHeight - node.offsetHeight - 8
-    const limitX = wrap.clientWidth - node.offsetWidth - 8
-    setMenuPos({
-      x: Math.min(menu.x, Math.max(8, limitX)),
-      y: Math.min(menu.y, Math.max(8, limitY))
-    })
-  }, [menu])
   const worldRef = useRef<HTMLDivElement | null>(null)
   const zoomLabelRef = useRef<HTMLButtonElement | null>(null)
   const viewRef = useRef<Viewport>(viewport)
@@ -823,14 +844,26 @@ export function BoardView(props: { docId: string }): ReactNode {
     paintGrid(viewRef.current)
   }, [gridMode, gridSize, paintGrid])
 
+  const viewSettleRef = useRef<number | null>(null)
+
   const applyDom = useCallback(
     (next: Viewport): void => {
-      viewRef.current = next
       const world = worldRef.current
+      const prev = viewRef.current
+      const moved = next.zoom !== prev.zoom || next.x !== prev.x || next.y !== prev.y
+      viewRef.current = next
       if (world) {
         world.style.transform = `translate3d(${size.width / 2 - next.x * next.zoom}px, ${
           size.height / 2 - next.y * next.zoom
         }px, 0) scale(${next.zoom})`
+        if (moved) {
+          world.classList.add('boardview__world--live')
+          if (viewSettleRef.current !== null) clearTimeout(viewSettleRef.current)
+          viewSettleRef.current = setTimeout(() => {
+            viewSettleRef.current = null
+            worldRef.current?.classList.remove('boardview__world--live')
+          }, 160)
+        }
       }
       paintGrid(next)
       if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(next.zoom * 100)}%`
@@ -1168,11 +1201,28 @@ export function BoardView(props: { docId: string }): ReactNode {
     setAssetsEpoch((value) => value + 1)
   }, [])
 
+  const assetProgressRef = useRef(new Map<string, { done: number; total: number }>())
+  const progressTickRef = useRef<number | null>(null)
+  const [assetProgress, setAssetProgress] = useState<Map<string, { done: number; total: number }>>(() => new Map())
+
+  const pushAssetProgress = useCallback((itemId: string, value: { done: number; total: number } | null): void => {
+    if (value) assetProgressRef.current.set(itemId, value)
+    else assetProgressRef.current.delete(itemId)
+    if (progressTickRef.current !== null) return
+    progressTickRef.current = window.setTimeout(() => {
+      progressTickRef.current = null
+      setAssetProgress(new Map(assetProgressRef.current))
+    }, 120)
+  }, [])
+
+  const pushedAssetsRef = useRef(new Set<string>())
+
   const shareImageAssets = useCallback(
     (entries: Array<{ itemId: string; dataUrl: string }>): void => {
       if (!live.connected) return
       for (const entry of entries) {
         remoteAssetsRef.current.set(entry.itemId, entry.dataUrl)
+        pushedAssetsRef.current.add(entry.itemId)
         live.sendChunked(`asset/${entry.itemId}`, JSON.stringify({ dataUrl: entry.dataUrl }))
       }
       touchAssets()
@@ -1201,6 +1251,7 @@ export function BoardView(props: { docId: string }): ReactNode {
 
   const deliverRemoteAsset = useCallback(
     (itemId: string): void => {
+      if (pushedAssetsRef.current.has(itemId)) return
       const held = remoteAssetsRef.current.get(itemId)
       if (held) {
         live.sendChunked(`asset/${itemId}`, JSON.stringify({ dataUrl: held }))
@@ -1242,6 +1293,7 @@ export function BoardView(props: { docId: string }): ReactNode {
           const itemId = id.slice('asset/'.length)
           if (!parsed.dataUrl || remoteAssetsRef.current.has(itemId)) return
           remoteAssetsRef.current.set(itemId, parsed.dataUrl)
+          pushAssetProgress(itemId, null)
           const next = withRemoteAssets(itemsRef.current)
           if (next === itemsRef.current) return
           itemsRef.current = next
@@ -1265,7 +1317,7 @@ export function BoardView(props: { docId: string }): ReactNode {
             setDoc((current) => (current ? { ...current, title: parsed.title } : current))
             setTitleDraft(parsed.title)
           }
-          toast(`Получена доска «${parsed.title}»`, 'success')
+          toast(`Получена доска «${parsed.title}»`, 'board')
         } catch {
           fail('Не удалось применить доску')
         }
@@ -1289,7 +1341,22 @@ export function BoardView(props: { docId: string }): ReactNode {
         fail('Не удалось применить изменения')
       }
     })
-  }, [live, applyRemoteItems, withRemoteAssets, clearPreviewWhenPainted, requestRemoteAssets, toast, fail, props.docId])
+  }, [live, applyRemoteItems, withRemoteAssets, clearPreviewWhenPainted, requestRemoteAssets, toast, fail, props.docId, pushAssetProgress])
+
+  useEffect(() => {
+    live.onChunkProgress((id, done, total) => {
+      if (!id.startsWith('asset/')) return
+      const itemId = id.slice('asset/'.length)
+      if (remoteAssetsRef.current.has(itemId)) return
+      pushAssetProgress(itemId, done >= total ? null : { done, total })
+    })
+  }, [live, pushAssetProgress])
+
+  useEffect(() => {
+    if (live.connected || !assetProgressRef.current.size) return
+    assetProgressRef.current.clear()
+    setAssetProgress(new Map())
+  }, [live.connected])
 
   useEffect(() => {
     live.onRemoteOps((message: LiveMessage) => {
@@ -1298,7 +1365,7 @@ export function BoardView(props: { docId: string }): ReactNode {
         deliverRemoteAsset(message.item)
       }
       if (message.t === 'perm') {
-        toast(message.canEdit ? 'Вам разрешили редактировать' : 'Редактирование запрещено', 'info')
+        toast(message.canEdit ? 'Вам разрешили редактировать' : 'Редактирование запрещено', message.canEdit ? 'editable' : 'readonly')
       }
     })
   }, [live, media, toast, deliverRemoteAsset])
@@ -1408,6 +1475,8 @@ export function BoardView(props: { docId: string }): ReactNode {
   }, [doc, live.connected, assetsEpoch])
 
   const missingImages = missingImageItems.length
+  const [missingDismissed, setMissingDismissed] = useState(-1)
+  const showMissing = missingImages > 0 && missingDismissed !== missingImages
 
   const selectMissingImages = useCallback(() => {
     if (missingImageItems.length === 0) {
@@ -1856,6 +1925,11 @@ export function BoardView(props: { docId: string }): ReactNode {
     toast('Возвращено', 'redo')
   }, [doc, readOnly, saveNow, toast, live])
 
+  const panRef = useRef(false)
+  useEffect(() => {
+    panRef.current = drag.kind === 'pan'
+  }, [drag.kind])
+
   const onWheel = useCallback(
     (event: WheelEvent) => {
       event.preventDefault()
@@ -1868,14 +1942,33 @@ export function BoardView(props: { docId: string }): ReactNode {
       const step = event.deltaMode === 1 ? event.deltaY * 18 : event.deltaY
       const next = clamp(view.zoom * Math.exp(-step * 0.0016), MIN_ZOOM, MAX_ZOOM)
       if (Math.abs(next - view.zoom) < 1e-9) return
-      targetRef.current = {
+      const target = {
         zoom: next,
         x: view.x + offsetX / view.zoom - offsetX / next,
         y: view.y + offsetY / view.zoom - offsetY / next
       }
+      if (panRef.current) {
+        applyView(target, true)
+        setDrag((current) =>
+          current.kind === 'pan'
+            ? {
+                ...current,
+                startX: event.clientX,
+                startY: event.clientY,
+                originX: target.x,
+                originY: target.y,
+                velocityX: 0,
+                velocityY: 0,
+                movedAt: performance.now()
+              }
+            : current
+        )
+        return
+      }
+      targetRef.current = target
       smoothStep()
     },
-    [size, smoothStep]
+    [size, smoothStep, applyView]
   )
 
   const wheelHandlerRef = useRef<(event: WheelEvent) => void>(() => undefined)
@@ -2080,8 +2173,8 @@ export function BoardView(props: { docId: string }): ReactNode {
         await api.board.appendItems({ docId: props.docId, items: [rawItem], images: [{ itemId: id, dataUrl }] })
         const loaded = await api.board.open(props.docId)
         if (live.connected) {
-          shareImageAssets([{ itemId: id, dataUrl }])
           commitAgainst(doc.items, loaded.items)
+          shareImageAssets([{ itemId: id, dataUrl }])
         } else {
           remember(doc.items)
         }
@@ -2223,7 +2316,7 @@ export function BoardView(props: { docId: string }): ReactNode {
         }
         commit([...doc.items, item])
         setSelection(new Set([id]))
-        setEditing({ id, value: 'Текст' })
+        setEditing({ id, html: '<p>Текст</p>', plain: 'Текст' })
         freshEditingRef.current = id
         return
       }
@@ -2245,7 +2338,7 @@ export function BoardView(props: { docId: string }): ReactNode {
       }
       commit([...doc.items, item])
       setSelection(new Set([id]))
-      setEditing({ id, value: 'Заметка' })
+      setEditing({ id, html: '<p>Заметка</p>', plain: 'Заметка' })
       freshEditingRef.current = id
     },
     [doc, readOnly, commit, toast, solidKind, strokeColor, size, textColor, textSize, addImageAt]
@@ -2548,12 +2641,7 @@ export function BoardView(props: { docId: string }): ReactNode {
 
   useEffect(() => {
     if (!editing) return
-    const value = editing.value.replace(/\s+$/g, '')
-    const html = value
-      .split(/\n{2,}/)
-      .map((block) => `<p>${block.replace(/\n/g, '<br>')}</p>`)
-      .join('')
-    pushPreviewRef.current({ t: 'preview', kind: 'text', id: editing.id, content: html, plain: value })
+    pushPreviewRef.current({ t: 'preview', kind: 'text', id: editing.id, content: editing.html, plain: editing.plain })
   }, [editing])
 
   const dropPendingPreview = useCallback((): void => {
@@ -2594,7 +2682,11 @@ export function BoardView(props: { docId: string }): ReactNode {
     (event: React.PointerEvent) => {
       if (event.button !== 0 && event.button !== 1 && event.button !== 2) return
       const target = event.target as HTMLElement
-      if (target.closest('.overlay, .statusbar, .inspector, .topbar, .ctxmenu')) return
+      if (target.closest('.overlay, .statusbar, .inspector, .topbar')) return
+      if (menu) {
+        setMenu(null)
+        return
+      }
       try {
         ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
       } catch {
@@ -2669,7 +2761,7 @@ export function BoardView(props: { docId: string }): ReactNode {
       if (event.button !== 0) return
       setDrag({ kind: 'rubber', startX: point.x, startY: point.y, currentX: point.x, currentY: point.y })
     },
-    [toWorld, toScreen, tool, doc, readOnly, eraseAt, createTool, createShape, createAt, itemAt, byId, linkFrom, addConnector]
+    [toWorld, toScreen, tool, doc, readOnly, eraseAt, createTool, createShape, createAt, itemAt, byId, linkFrom, addConnector, menu]
   )
 
   const faceAtLocal = useCallback((item: SolidItem, point: { x: number; y: number }) => {
@@ -3241,7 +3333,7 @@ export function BoardView(props: { docId: string }): ReactNode {
           setSelection(new Set([created.id]))
           if (created.kind === 'connector' && !created.startItemId) setLinkFrom(created.id)
           if (created.kind === 'shape') {
-            setEditing({ id: created.id, value: created.plain || '' })
+            setEditing({ id: created.id, html: '', plain: '' })
             freshEditingRef.current = created.id
           }
         }
@@ -3425,12 +3517,9 @@ export function BoardView(props: { docId: string }): ReactNode {
       if (!drag.moved) startInertia(0, 0)
       else startInertia(drag.velocityX, drag.velocityY)
       if (drag.button === 2 && !drag.moved) {
-        const rect = wrapRef.current?.getBoundingClientRect()
-        const left = rect ? rect.left : 0
-        const top = rect ? rect.top : 0
         const hit = itemAt(toWorld(event.clientX, event.clientY))
         if (hit && !selection.has(hit) && !readOnly) setSelection(new Set([hit]))
-        setMenu({ x: Math.max(8, event.clientX - left), y: Math.max(8, event.clientY - top), onItem: hit ?? '' })
+        setMenu({ x: event.clientX, y: event.clientY, onItem: hit ?? '' })
       }
     }
     setDrag({ kind: 'idle' })
@@ -3537,7 +3626,7 @@ export function BoardView(props: { docId: string }): ReactNode {
     const stored = readObjectClipboard()
     const source = stored?.items ?? []
     if (!source.length) {
-      toast('В буфере нет объектов Liro', 'error')
+      toast('В буфере нет объектов Liro', 'clipboard')
       return
     }
     const shift = pasteShift(source, !stored || stored.docId === props.docId)
@@ -3777,6 +3866,17 @@ const assetOf = (dataUrl: string, size: { width: number; height: number } | null
     [doc, readOnly, byId, patchItem, applyImageData, toast, ask]
   )
 
+  const replaceImagesFromClipboard = useCallback(async (): Promise<void> => {
+    if (!doc || readOnly || imageSelection.length === 0) return
+    const dataUrl = await api.clipboard.readImage()
+    if (!dataUrl) {
+      toast('В буфере обмена нет картинки', 'clipboard')
+      return
+    }
+    for (const item of imageSelection) await applyImageData(item.id, dataUrl)
+    toast(imageSelection.length === 1 ? 'Картинка заменена' : `Картинок заменено: ${imageSelection.length}`, 'image')
+  }, [doc, readOnly, imageSelection, applyImageData, toast])
+
   const replaceImagesFromFiles = useCallback(async (): Promise<void> => {
     if (!doc || readOnly || imageSelection.length === 0) return
     const files = await api.dialog.pickImages()
@@ -3930,6 +4030,8 @@ const navigateTo = useCallback(
     [doc, commit, readOnly, byId, toast]
   )
 
+  const editorSizeRef = useRef<{ width: number; height: number } | null>(null)
+
   const startEditing = useCallback(
     (id: string) => {
       const item = byId.get(id)
@@ -3941,16 +4043,22 @@ const navigateTo = useCallback(
       }
       if (item.kind !== 'text' && item.kind !== 'sticky' && item.kind !== 'shape') return
       setSelection(new Set([id]))
-      const text = item.plain || item.content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
-      setEditing({ id, value: text })
+      const html = sanitizeRichHtml(item.content || '') || richHtmlFromPlain(item.plain || '')
+      editorSizeRef.current = null
+      freshEditingRef.current = null
+      setEditing({ id, html, plain: plainFromRichHtml(html) })
     },
     [byId, readOnly, replaceImage]
   )
 
   const commitEditing = useCallback(() => {
     if (!editing || !doc) return
-    const value = editing.value.replace(/\s+$/g, '')
+    const html = sanitizeRichHtml(editing.html)
+    const value = plainFromRichHtml(html)
+    const measured = editorSizeRef.current
+    editorSizeRef.current = null
     setEditing(null)
+    setTextFormat(emptyFormat)
     clearPreview()
     const item = byId.get(editing.id)
     if (!item) return
@@ -3959,22 +4067,25 @@ const navigateTo = useCallback(
       commit(doc.items.filter((entry) => entry.id !== editing.id))
       return
     }
-    if ((item.kind === 'text' || item.kind === 'sticky' || item.kind === 'shape') && (item.plain ?? '') === value) return
-    const html = value
-      .split(/\n{2,}/)
-      .map((block) => `<p>${block.replace(/\n/g, '<br>')}</p>`)
-      .join('')
+    const untouched =
+      (item.kind === 'text' || item.kind === 'sticky' || item.kind === 'shape') &&
+      item.plain === value &&
+      item.content === html
+    if (untouched) return
     commit(
       doc.items.map((entry) => {
         if (entry.id !== editing.id) return entry
         if (entry.kind === 'text' || entry.kind === 'sticky' || entry.kind === 'shape') {
           const base = { ...entry, content: html, plain: value }
           if (entry.sourceType) return base as BoardItem
-          if (entry.kind === 'sticky') {
-            const fit = fitTextBox(value, { width: entry.w, minHeight: entry.h, fontSize: entry.fontSize, padX: 8, padY: 6 })
-            return { ...base, h: fit.height, fontSize: fit.fontSize } as BoardItem
-          }
           if (entry.kind === 'text') {
+            if (measured) {
+              return {
+                ...base,
+                w: clamp(Math.round(measured.width), 24, 4000),
+                h: clamp(Math.round(measured.height), Math.round(entry.fontSize * 1.3), 4000)
+              } as BoardItem
+            }
             const fit = fitTextBox(value, {
               width: entry.w,
               minHeight: Math.round(entry.fontSize * 1.3),
@@ -3984,13 +4095,17 @@ const navigateTo = useCallback(
             })
             return { ...base, h: fit.height, fontSize: fit.fontSize } as BoardItem
           }
+          if (entry.kind === 'sticky') {
+            const fit = fitTextBox(value, { width: entry.w, minHeight: entry.h, fontSize: entry.fontSize, padX: 8, padY: 6 })
+            return { ...base, h: fit.height, fontSize: fit.fontSize } as BoardItem
+          }
           const fit = fitTextBox(value, { width: entry.w, minHeight: entry.h, fontSize: entry.fontSize, padX: 6, padY: 5 })
           return { ...base, fontSize: fit.fontSize } as BoardItem
         }
         return entry
       })
     )
-  }, [editing, doc, byId, commit])
+  }, [editing, doc, byId, commit, clearPreview])
 
   const editingBox = editingItem ? itemBounds(editingItem) : null
   const faceLabelItem = faceLabel ? byId.get(faceLabel.itemId) : undefined
@@ -4027,23 +4142,7 @@ const navigateTo = useCallback(
     node.focus()
     if (node.value) node.setSelectionRange(0, node.value.length)
   }, [faceLabelActive])
-  const editorRef = useRef<HTMLTextAreaElement | null>(null)
-  const lastEditingIdRef = useRef<string | null>(null)
   const freshEditingRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    const node = editorRef.current
-    if (!node) return
-    node.style.height = 'auto'
-    node.style.height = `${Math.max(36, node.scrollHeight)}px`
-    if (lastEditingIdRef.current === editing?.id) return
-    lastEditingIdRef.current = editing?.id ?? null
-    node.focus()
-    if (freshEditingRef.current === editing?.id) {
-      freshEditingRef.current = null
-      node.select()
-    }
-  }, [editing?.value, editing?.id])
   const textSelection = selectedItems.filter(
     (item) => item.kind === 'text' || item.kind === 'sticky' || item.kind === 'shape'
   )
@@ -4076,6 +4175,16 @@ const navigateTo = useCallback(
       y: (screenY - center) / zoom + view.y
     }
   })()
+
+  const panelItem = editing && editingItem ? editingItem : textSelection[0] || null
+  const panelHasFill = textSelection.some((item) => item.kind === 'sticky' || item.kind === 'shape')
+  const textPanelShown =
+    !!textPanelSpot && drag.kind !== 'move' && (!!editing || (textSelection.length > 0 && tool === 'select'))
+
+  const keepFocus = (event: React.MouseEvent): void => {
+    if ((event.target as HTMLElement).tagName === 'INPUT') return
+    event.preventDefault()
+  }
 
   const adjustFontSize = useCallback(
     (step: number) => {
@@ -4120,14 +4229,62 @@ const navigateTo = useCallback(
       commit(
         doc.items.map((item) => {
           if (!targets.has(item.id)) return item
-          if (item.kind === 'sticky') return { ...item, color }
           if (item.kind === 'text') return { ...item, color }
-          if (item.kind === 'shape') return { ...item, textColor: color }
+          if (item.kind === 'sticky' || item.kind === 'shape') return { ...item, textColor: color }
           return item
         })
       )
     },
     [doc, readOnly, commit, textSelection]
+  )
+
+  const paintFill = useCallback(
+    (color: string) => {
+      if (!doc || readOnly) return
+      const targets = new Set(textSelection.map((item) => item.id))
+      if (!targets.size) return
+      commit(
+        doc.items.map((item) => {
+          if (!targets.has(item.id)) return item
+          if (item.kind === 'sticky') return { ...item, color }
+          if (item.kind === 'shape') return { ...item, fillColor: color }
+          return item
+        })
+      )
+    },
+    [doc, readOnly, commit, textSelection]
+  )
+
+  const syncEditor = useCallback((): void => {
+    const node = activeEditorNode()
+    if (!node) return
+    const html = node.innerHTML
+    setEditing((current) => (current ? { ...current, html, plain: plainFromRichHtml(html) } : current))
+  }, [])
+
+  const runFormat = useCallback(
+    (command: 'bold' | 'italic' | 'underline' | 'strike' | 'list' | 'ordered') => {
+      if (!editing) return
+      applyFormat(command)
+      syncEditor()
+      setTextFormat(currentFormat())
+    },
+    [editing, syncEditor]
+  )
+
+  const pickTextColor = useCallback(
+    (color: string) => {
+      const node = editing ? activeEditorNode() : null
+      const selection = window.getSelection()
+      const anchor = selection?.anchorNode ?? null
+      if (node && anchor && selection && !selection.isCollapsed && node.contains(anchor)) {
+        applyTextColor(color)
+        syncEditor()
+        return
+      }
+      paintText(color)
+    },
+    [editing, syncEditor, paintText]
   )
 
   const pasteIntoBoard = useCallback(
@@ -4163,7 +4320,7 @@ const navigateTo = useCallback(
       }
       const payload = html ? parseClipboardHtml(html) : text ? parseClipboardText(text) : null
       if (!payload || !payload.items.length) {
-        toast('В буфере обмена нет объектов для вставки', 'error')
+        toast('В буфере обмена нет объектов для вставки', 'clipboard')
         return
       }
       const bounds = pastePayloadBounds(payload.items)
@@ -4182,8 +4339,8 @@ const navigateTo = useCallback(
         const renamed = appended.renamed ?? {}
         const loaded = await api.board.open(props.docId)
         if (doc && live.connected) {
-          shareImageAssets(payload.images)
           commitAgainst(doc.items, loaded.items)
+          shareImageAssets(payload.images.map((image) => ({ itemId: renamed[image.itemId] ?? image.itemId, dataUrl: image.dataUrl })))
         } else if (doc) remember(doc.items)
         setDoc(loaded)
         setSelection(new Set(pastedIds.map((id) => renamed[id] ?? id)))
@@ -4258,8 +4415,8 @@ const navigateTo = useCallback(
         })
         const loaded = await api.board.open(props.docId)
         if (doc && live.connected) {
-          shareImageAssets(items.map((item, index) => ({ itemId: item.id, dataUrl: entries[index].dataUrl })))
           commitAgainst(doc.items, loaded.items)
+          shareImageAssets(items.map((item, index) => ({ itemId: item.id, dataUrl: entries[index].dataUrl })))
         } else if (doc) remember(doc.items)
         setDoc(loaded)
         setSelection(new Set(items.map((item) => item.id)))
@@ -4297,7 +4454,7 @@ const navigateTo = useCallback(
     try {
       const dataUrl = await api.clipboard.readImage()
       if (!dataUrl) {
-        toast('В буфере нет картинки', 'error')
+        toast('В буфере нет картинки', 'clipboard')
         return
       }
       await insertImages([{ dataUrl, name: 'Картинка из буфера' }])
@@ -4423,6 +4580,10 @@ const navigateTo = useCallback(
       if (event.key === 'Escape') {
         event.preventDefault()
         if (document.querySelector('.modal')) return
+        if (editing) {
+          commitEditing()
+          return
+        }
         if (cropEdit) {
           setCropEdit(null)
           return
@@ -4485,6 +4646,11 @@ const navigateTo = useCallback(
         copyItems([...selection])
         return
       }
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'v' && imageSelection.length) {
+        event.preventDefault()
+        void replaceImagesFromClipboard().catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
+        return
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v' && readObjectClipboard()) {
         event.preventDefault()
         void pasteObjects()
@@ -4545,7 +4711,7 @@ const navigateTo = useCallback(
       window.removeEventListener('keydown', listener)
       window.removeEventListener('keyup', listener)
     }
-  }, [doc, selection, zoomBy, fitAll, deleteItems, duplicateItems, copyItems, pasteObjects, commit, persist, undo, redo, readOnly, animateTo, pasteIntoBoard, fail, present, stopPresent, stepFrame, changeGrid, gridMode, railOrder, railExtras, menu, moreOpen, showExport, boardSettingsOpen, calculatorOpen, detailsOpen, showInspector, throughAnchor, editing, byId, startEditing, tool])
+  }, [doc, selection, zoomBy, fitAll, deleteItems, duplicateItems, copyItems, pasteObjects, commit, persist, undo, redo, readOnly, animateTo, pasteIntoBoard, fail, present, stopPresent, stepFrame, changeGrid, gridMode, railOrder, railExtras, menu, moreOpen, showExport, boardSettingsOpen, calculatorOpen, detailsOpen, showInspector, throughAnchor, editing, byId, startEditing, commitEditing, tool, imageSelection, replaceImagesFromClipboard])
 
   const penBox = drag.kind === 'pen' ? inkGeometry(penPointsRef.current, penStraightRef.current, '') : null
 
@@ -4750,6 +4916,230 @@ const navigateTo = useCallback(
     }
   })()
 
+  const boardMenuItems = (onItem: string): MenuItem[] => {
+    if (onItem) {
+      const locked = selectedItems.length > 0 && selectedItems.every((item) => item.locked)
+      const groupable = selectedItems.length > 1
+      const grouped = selectedItems.some((item) => !!item.groupId)
+      const textTargets = selectedItems.filter((item) => item.kind === 'text' || item.kind === 'sticky' || item.kind === 'shape')
+      const items: MenuItem[] = []
+      if (textTargets.length && !readOnly)
+        items.push({
+          id: 'edit-text',
+          label: textTargets.length > 1 ? 'Редактировать текст' : 'Редактировать',
+          icon: <Pencil size={14} />,
+          hint: 'Enter',
+          section: 'Объект',
+          run: () => startEditing(textTargets[0].id)
+        })
+      items.push(
+        {
+          id: 'duplicate',
+          label: 'Дублировать',
+          icon: <Copy size={14} />,
+          hint: 'Ctrl+D',
+          section: items.length ? undefined : 'Объект',
+          disabled: readOnly || locked,
+          run: () => duplicateItems([...selection])
+        },
+        {
+          id: 'copy',
+          label: 'Копировать',
+          icon: <ClipboardCopy size={14} />,
+          hint: 'Ctrl+C',
+          run: () => copyItems([...selection])
+        },
+        {
+          id: 'lock',
+          label: locked ? 'Разблокировать' : 'Заблокировать',
+          icon: locked ? <LockOpen size={14} /> : <Lock size={14} />,
+          disabled: readOnly,
+          run: () => toggleLock([...selection])
+        },
+        {
+          id: 'delete',
+          label: 'Удалить',
+          icon: <Trash2 size={14} />,
+          hint: 'Delete',
+          danger: true,
+          disabled: readOnly || locked,
+          line: true,
+          run: () => deleteItems([...selection])
+        },
+        {
+          id: 'raise',
+          label: 'На самый верх',
+          icon: <ArrowUpToLine size={14} />,
+          section: 'Порядок',
+          disabled: readOnly,
+          run: () => bringSelection(true)
+        },
+        {
+          id: 'lower',
+          label: 'На самый низ',
+          icon: <ArrowDownToLine size={14} />,
+          disabled: readOnly,
+          run: () => bringSelection(false)
+        }
+      )
+      if (groupable && !readOnly)
+        items.push({
+          id: 'group',
+          label: 'В группу',
+          icon: <Group size={14} />,
+          section: 'Группа',
+          run: () => groupSelection()
+        })
+      if (grouped && !readOnly)
+        items.push({
+          id: 'ungroup',
+          label: 'Из группы',
+          icon: <Ungroup size={14} />,
+          section: items.some((item) => item.section === 'Группа') ? undefined : 'Группа',
+          run: () => ungroupSelection()
+        })
+      if (imageSelection.length === 1) {
+        const target = imageSelection[0]
+        items.push(
+          {
+            id: 'crop',
+            label: 'Обрезать',
+            icon: <Crop size={14} />,
+            section: 'Картинка',
+            disabled: readOnly,
+            run: () => {
+              void startCrop(target.id)
+            }
+          },
+          {
+            id: 'replace',
+            label: 'Заменить',
+            icon: <ImagePlus size={14} />,
+            disabled: readOnly,
+            submenu: [
+              { id: 'replace-clipboard', label: 'Из буфера', icon: <ClipboardPaste size={14} />, run: () => void replaceImage(target.id, 'clipboard') },
+              { id: 'replace-file', label: 'Из файла', icon: <ImagePlus size={14} />, run: () => void replaceImage(target.id, 'file') },
+              { id: 'replace-url', label: 'По ссылке', icon: <ExternalLink size={14} />, run: () => void replaceImage(target.id, 'url') }
+            ]
+          },
+          {
+            id: 'preview',
+            label: 'Открыть предпросмотр',
+            icon: <Search size={14} />,
+            run: () => void openItemPreview(target)
+          }
+        )
+      } else if (imageSelection.length > 1) {
+        items.push({
+          id: 'replace-many',
+          label: 'Заменить файлами',
+          icon: <ImagePlus size={14} />,
+          section: 'Картинка',
+          disabled: readOnly,
+          run: () => void replaceImagesFromFiles()
+        })
+      }
+      items.push(
+        {
+          id: 'fit-selection',
+          label: 'Показать целиком',
+          icon: <Maximize2 size={14} />,
+          section: 'Вид',
+          run: () => fitTo(boundsOfItems(selectedItems, 60))
+        },
+        {
+          id: 'inspector',
+          label: 'Свойства',
+          icon: <Layers size={14} />,
+          line: true,
+          run: () => setShowInspector(true)
+        }
+      )
+      return items
+    }
+    return [
+      {
+        id: 'paste',
+        label: 'Вставить объекты',
+        icon: <ClipboardPaste size={14} />,
+        hint: 'Ctrl+V',
+        disabled: readOnly,
+        run: () => {
+          void api.clipboard
+            .readHtml()
+            .then((html) => pasteIntoBoard(html || undefined))
+            .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
+        }
+      },
+      {
+        id: 'select-all',
+        label: 'Выделить всё',
+        icon: <MousePointer2 size={14} />,
+        hint: 'Ctrl+A',
+        run: () => {
+          if (doc) setSelection(new Set(doc.items.filter((item) => item.kind !== 'connector').map((item) => item.id)))
+        }
+      },
+      {
+        id: 'fit',
+        label: 'Вписать доску',
+        icon: <Maximize size={14} />,
+        section: 'Вид',
+        run: () => fitAll()
+      },
+      { id: 'zoom-out', label: 'Уменьшить', icon: <ZoomOut size={14} />, run: () => zoomBy(1 / 1.25) },
+      { id: 'zoom-in', label: 'Увеличить', icon: <ZoomIn size={14} />, run: () => zoomBy(1.25) },
+      {
+        id: 'grid',
+        label: 'Сетка',
+        icon: <Grid3x3 size={14} />,
+        submenu: [
+          ...GRID_MODES.map((entry) => ({
+            id: `grid-${entry.id}`,
+            label: entry.label,
+            radio: true,
+            active: gridMode === entry.id,
+            run: () => changeGrid({ gridMode: entry.id })
+          })),
+          {
+            id: 'snap',
+            label: 'Привязка к сетке',
+            icon: <Magnet size={14} />,
+            active: snapGrid,
+            line: true,
+            run: () => changeGrid({ snapGrid: !snapGrid })
+          }
+        ]
+      },
+      {
+        id: 'present',
+        label: 'Режим докладчика',
+        icon: <Play size={14} />,
+        section: 'Инструменты',
+        run: () => {
+          if (present) stopPresent()
+          else startPresent()
+        }
+      },
+      {
+        id: 'calculator',
+        label: 'Калькулятор',
+        icon: <Calculator size={14} />,
+        run: () => {
+          setCalculatorOpen(true)
+          setDetailsOpen(false)
+          setShowInspector(false)
+        }
+      },
+      {
+        id: 'preview',
+        label: 'Предпросмотр по ссылке',
+        icon: <Link2 size={14} />,
+        run: () => void openLinkPreview()
+      }
+    ]
+  }
+
   const saveTitle = async (): Promise<void> => {
     if (!doc) return
     const next = titleDraft.trim()
@@ -4892,12 +5282,14 @@ const navigateTo = useCallback(
                 code={live.code}
                 myName={settings?.userName ?? ''}
                 partner={live.partner}
+                partnerAway={live.partnerAway}
                 ping={live.ping}
                 connected={live.connected}
                 canEdit={live.canEdit}
                 preparing={live.preparing}
                 watching={live.watching}
                 following={live.following}
+                topMenuOpen={detailsOpen || boardSettingsOpen || calculatorOpen || showInspector}
                 onTogglePermission={live.togglePermission}
                 onWatchPartner={() => {
                   if (live.following) live.stopFollow()
@@ -4907,10 +5299,16 @@ const navigateTo = useCallback(
                   const current = viewRef.current
                   live.pullPartner({ x: current.x, y: current.y, zoom: current.zoom })
                 }}
+                onGoToPartner={() => {
+                  const at = live.cursors[0]
+                  if (!at) return
+                  if (live.following) live.stopFollow()
+                  animateTo({ x: at.targetX, y: at.targetY, zoom: viewRef.current.zoom }, 420)
+                }}
                 onTransferHost={live.transferHost}
                 onSaveBoard={saveCopyToLibrary}
                 onLeave={live.role === 'guest' ? live.leaveAndCleanup : live.leave}
-                onToast={(text, kind) => toast(text, kind === 'error' ? 'error' : kind === 'success' ? 'success' : 'info')}
+                onToast={(text, kind) => toast(text, kind)}
               />
             ) : null}
             <div className="bbar__sep" />
@@ -4919,7 +5317,7 @@ const navigateTo = useCallback(
             </button>
           </div>
 
-          {missingImages ? (
+          {showMissing ? (
             <div className="bbar bbar--panel bbar--warn">
               <ImageOff size={15} />
               <span>
@@ -4942,6 +5340,14 @@ const navigateTo = useCallback(
                 onClick={() => void fillMissingImages()}
               >
                 Заменить файлами
+              </button>
+              <button
+                type="button"
+                className="bbar__close"
+                aria-label="Скрыть уведомление"
+                onClick={() => setMissingDismissed(missingImages)}
+              >
+                <X size={14} />
               </button>
             </div>
           ) : null}
@@ -5018,6 +5424,7 @@ const navigateTo = useCallback(
             media={media}
             livePos={livePosRef.current}
             cropId={cropEdit?.id ?? null}
+            loading={assetProgress}
           />
           {resizeTargets.map((target) => {
             const box = itemBounds(target)
@@ -5138,7 +5545,7 @@ const navigateTo = useCallback(
               />
             )
           )}
-          {textSelection.length && tool === 'select' && drag.kind !== 'move' && textPanelSpot ? (
+          {textPanelShown && textPanelSpot ? (
             <div
               className="textpanel"
               style={{
@@ -5147,89 +5554,154 @@ const navigateTo = useCallback(
                 transform: `scale(${1 / Math.max(0.25, liveZoom)})`
               }}
               onPointerDown={(event) => event.stopPropagation()}
+              onMouseDown={keepFocus}
             >
-              <button
-                type="button"
-                className="toolbtn"
-                onClick={() => startEditing(editTargetId ?? [...selection][0])}
-                title="Изменить текст"
-              >
-                <Type size={16} />
-              </button>
-              <div className="bbar__sep" />
-              <button type="button" className="toolbtn" onClick={() => adjustFontSize(-1)} title="Уменьшить шрифт">
-                <Minus size={16} />
-              </button>
-              <span className="zoomval" style={{ minWidth: 24 }}>
-                {textSelection[0] ? fontSizeOf(textSelection[0]) : 16}
-              </span>
-              <button type="button" className="toolbtn" onClick={() => adjustFontSize(1)} title="Увеличить шрифт">
-                <Plus size={16} />
-              </button>
-              <div className="bbar__sep" />
-              {(['left', 'center', 'right'] as const).map((align) => (
+              <div className="textpanel__row">
                 <button
-                  key={align}
                   type="button"
                   className="toolbtn"
-                  data-active={textSelection.every((item) => alignOf(item) === align)}
-                  onClick={() => setTextAlign(align)}
-                  title={align === 'left' ? 'Влево' : align === 'center' ? 'По центру' : 'Вправо'}
+                  onClick={() => (editing ? commitEditing() : startEditing(editTargetId ?? [...selection][0]))}
+                  title={editing ? 'Сохранить текст' : 'Изменить текст'}
                 >
-                  <AlignIcon align={align} />
+                  {editing ? <Check size={16} /> : <Type size={16} />}
                 </button>
-              ))}
-              <div className="bbar__sep" />
-              {(textSelection.length > 0 && textSelection.every((item) => item.kind === 'sticky')
-                ? STICKY_COLORS
-                : QUICK_COLORS
-              ).map((color) => (
+                <div className="textpanel__sep" />
                 <button
-                  key={color}
                   type="button"
-                  className="swatch"
-                  aria-label={`Цвет ${color}`}
-                  onClick={() => paintText(color)}
-                  style={{
-                    background: color,
-                    outline:
-                      textSelection.length > 0 && paintColorOf(textSelection[0]).toLowerCase() === color.toLowerCase()
-                        ? '2px solid var(--inverse)'
-                        : '1px solid var(--border)'
-                  }}
-                />
-              ))}
+                  className="toolbtn"
+                  disabled={!editing}
+                  data-active={textFormat.b ? 'true' : undefined}
+                  onClick={() => runFormat('bold')}
+                  title="Полужирный"
+                >
+                  <Bold size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="toolbtn"
+                  disabled={!editing}
+                  data-active={textFormat.i ? 'true' : undefined}
+                  onClick={() => runFormat('italic')}
+                  title="Курсив"
+                >
+                  <Italic size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="toolbtn"
+                  disabled={!editing}
+                  data-active={textFormat.u ? 'true' : undefined}
+                  onClick={() => runFormat('underline')}
+                  title="Подчёркнутый"
+                >
+                  <Underline size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="toolbtn"
+                  disabled={!editing}
+                  data-active={textFormat.s ? 'true' : undefined}
+                  onClick={() => runFormat('strike')}
+                  title="Зачёркнутый"
+                >
+                  <Strikethrough size={16} />
+                </button>
+                <div className="textpanel__sep" />
+                <button
+                  type="button"
+                  className="toolbtn"
+                  disabled={!editing}
+                  data-active={textFormat.list ? 'true' : undefined}
+                  onClick={() => runFormat('list')}
+                  title="Маркированный список"
+                >
+                  <List size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="toolbtn"
+                  disabled={!editing}
+                  data-active={textFormat.ordered ? 'true' : undefined}
+                  onClick={() => runFormat('ordered')}
+                  title="Нумерованный список"
+                >
+                  <ListOrdered size={16} />
+                </button>
+                <div className="textpanel__sep" />
+                <button type="button" className="toolbtn" onClick={() => adjustFontSize(-1)} title="Уменьшить шрифт">
+                  <Minus size={16} />
+                </button>
+                <span className="textpanel__size">
+                  {panelItem ? fontSizeOf(panelItem) : 16}
+                </span>
+                <button type="button" className="toolbtn" onClick={() => adjustFontSize(1)} title="Увеличить шрифт">
+                  <Plus size={16} />
+                </button>
+                <div className="textpanel__sep" />
+                {(['left', 'center', 'right'] as const).map((align) => (
+                  <button
+                    key={align}
+                    type="button"
+                    className="toolbtn"
+                    data-active={textSelection.every((item) => alignOf(item) === align)}
+                    onClick={() => setTextAlign(align)}
+                    title={align === 'left' ? 'Влево' : align === 'center' ? 'По центру' : 'Вправо'}
+                  >
+                    <AlignIcon align={align} />
+                  </button>
+                ))}
+              </div>
+              <div className="textpanel__row textpanel__row--colors">
+                <span className="textpanel__group">
+                  <span className="textpanel__cap">Текст</span>
+                  <PaletteSwatches
+                    colors={QUICK_COLORS}
+                    value={panelItem ? textColorOf(panelItem) : '#1a1a1a'}
+                    nameFor={colorName}
+                    customLabel="Свой цвет текста"
+                    onPick={pickTextColor}
+                    onCustom={pickTextColor}
+                  />
+                </span>
+                {panelHasFill ? (
+                  <span className="textpanel__group">
+                    <span className="textpanel__cap">Заливка</span>
+                    <PaletteSwatches
+                      colors={STICKY_COLORS}
+                      value={panelItem ? fillColorOf(panelItem) : '#ffffff'}
+                      nameFor={colorName}
+                      customLabel="Свой цвет заливки"
+                      onPick={paintFill}
+                      onCustom={paintFill}
+                    />
+                  </span>
+                ) : null}
+              </div>
             </div>
           ) : null}
           {editing && editingItem && editingBox ? (
-            <textarea
-              ref={editorRef}
-              className="texteditor"
-              autoFocus
-              value={editing.value}
+            <TextEditor
+              itemId={editing.id}
+              html={editing.html}
               placeholder="Введите текст"
-              onChange={(event) => setEditing({ id: editing.id, value: event.target.value })}
-              onBlur={() => commitEditing()}
-              onPointerDown={(event) => event.stopPropagation()}
-              onKeyDown={(event) => {
-                event.stopPropagation()
-                if (event.key === 'Escape') {
-                  event.preventDefault()
-                  commitEditing()
-                }
-                if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-                  event.preventDefault()
-                  commitEditing()
-                }
+              selectAll={freshEditingRef.current === editing.id}
+              autoWidth={editingItem.kind === 'text'}
+              box={{ x: editingBox.x, y: editingBox.y }}
+              minWidth={120}
+              onInput={(html, plain) => setEditing({ id: editing.id, html, plain })}
+              onFormat={setTextFormat}
+              onCommit={commitEditing}
+              onMeasure={(width, height) => {
+                editorSizeRef.current = { width, height }
               }}
               style={{
-                left: editingBox.x,
-                top: editingBox.y,
-                width: Math.max(120, editingBox.width),
-                height: Math.max(36, editingBox.height),
+                width: editingItem.kind === 'text' ? undefined : Math.max(120, editingBox.width),
+                minHeight: Math.max(36, editingBox.height),
+                padding:
+                  editingItem.kind === 'sticky' ? '6px 8px' : editingItem.kind === 'shape' ? '5px 6px' : '2px',
                 fontSize: fontSizeOf(editingItem),
                 fontFamily: editingItem.kind === 'text' ? editingItem.fontFamily : undefined,
-                lineHeight: 1.25,
+                lineHeight: editingItem.kind === 'text' ? 1.34 : 1.25,
                 textAlign: alignOf(editingItem),
                 color: textColorOf(editingItem)
               }}
@@ -5375,7 +5847,16 @@ const navigateTo = useCallback(
             </div>
           ) : null}
           {rubberRect ? (
-            <div className="rubber" style={{ left: rubberRect.x, top: rubberRect.y, width: rubberRect.width, height: rubberRect.height }} />
+            <div
+              className="rubber"
+              style={{
+                left: rubberRect.x,
+                top: rubberRect.y,
+                width: rubberRect.width,
+                height: rubberRect.height,
+                borderWidth: 1 / Math.max(0.02, liveZoom)
+              }}
+            />
           ) : null}
           {strokeBox ? (
             <div className="inkpreview" style={{ left: strokeBox.x, top: strokeBox.y, width: strokeBox.width, height: strokeBox.height }}>
@@ -5428,175 +5909,13 @@ const navigateTo = useCallback(
       </div>
 
       {menu ? (
-        <>
-          <div className="ctxmenu__shade" onPointerDown={() => setMenu(null)} onContextMenu={(event) => event.preventDefault()} />
-          <div
-            ref={menuRef}
-            className="ctxmenu"
-            style={{ left: menuPos.x, top: menuPos.y }}
-            onPointerDown={(event) => event.stopPropagation()}
-          >
-            {menu.onItem ? (
-              <>
-                <div className="ctxmenu__title">{`Выбрано: ${selection.size}`}</div>
-                <button
-                  type="button"
-                  disabled={readOnly}
-                  onClick={() => {
-                    bringSelection(true)
-                    setMenu(null)
-                  }}
-                >
-                  <ArrowUpToLine size={15} /> На самый верх
-                </button>
-                <button
-                  type="button"
-                  disabled={readOnly}
-                  onClick={() => {
-                    bringSelection(false)
-                    setMenu(null)
-                  }}
-                >
-                  <ArrowDownToLine size={15} /> На самый низ
-                </button>
-                {imageSelection.length === 1 ? (
-                  <button
-                    type="button"
-                    disabled={readOnly}
-                    onClick={() => {
-                      const item = imageSelection[0]
-                      setMenu(null)
-                      if (item) void startCrop(item.id)
-                    }}
-                  >
-                    <Crop size={15} /> Обрезать
-                  </button>
-                ) : null}
-                <div className="ctxmenu__sep" />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenu(null)
-                    setShowInspector(true)
-                  }}
-                >
-                  <Layers size={15} /> Свойства
-                </button>
-              </>
-            ) : (
-              <>
-            <div className="ctxmenu__title">Доска</div>
-            <button
-              type="button"
-              disabled={readOnly}
-              onClick={() => {
-                setMenu(null)
-                void api.clipboard
-                  .readHtml()
-                  .then((html) => pasteIntoBoard(html || undefined))
-                  .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
-              }}
-            >
-              <ClipboardPaste size={15} /> Вставить объекты
-            </button>
-            <div className="ctxmenu__sep" />
-            <button
-              type="button"
-              onClick={() => {
-                setMenu(null)
-                if (present) stopPresent()
-                else startPresent()
-              }}
-            >
-              <Play size={15} /> Режим докладчика
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMenu(null)
-                setCalculatorOpen(true)
-                setDetailsOpen(false)
-                setShowInspector(false)
-              }}
-            >
-              <Calculator size={15} /> Калькулятор
-            </button>
-            <div className="ctxmenu__sep" />
-            <button
-              type="button"
-              onClick={() => {
-                setMenu(null)
-                void openLinkPreview()
-              }}
-            >
-              <Link2 size={15} /> Предпросмотр по ссылке
-            </button>
-            <div className="ctxmenu__sep" />
-            <button
-              type="button"
-              onClick={() => {
-                if (doc) setSelection(new Set(doc.items.filter((item) => item.kind !== 'connector').map((item) => item.id)))
-                setMenu(null)
-              }}
-            >
-              <MousePointer2 size={15} /> Выделить всё
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                fitAll()
-                setMenu(null)
-              }}
-            >
-              <Maximize size={15} /> Вписать доску
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                zoomBy(1 / 1.25)
-                setMenu(null)
-              }}
-            >
-              <ZoomOut size={15} /> Уменьшить
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                zoomBy(1.25)
-                setMenu(null)
-              }}
-            >
-              <ZoomIn size={15} /> Увеличить
-            </button>
-            <div className="ctxmenu__sep" />
-            <div className="ctxmenu__title">Сетка</div>
-            {GRID_MODES.map((entry) => (
-              <button
-                key={entry.id}
-                type="button"
-                onClick={() => {
-                  changeGrid({ gridMode: entry.id })
-                  setMenu(null)
-                }}
-              >
-                <span className="ctxmenu__radio" data-active={gridMode === entry.id} />
-                {entry.label}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => {
-                changeGrid({ snapGrid: !snapGrid })
-                setMenu(null)
-              }}
-            >
-              <Magnet size={15} /> Привязка к сетке
-              <span className="ctxmenu__check">{snapGrid ? 'вкл' : 'выкл'}</span>
-            </button>
-              </>
-            )}
-          </div>
-        </>
+        <ContextMenu
+          title={menu.onItem ? `Выбрано: ${selection.size}` : 'Доска'}
+          items={boardMenuItems(menu.onItem)}
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+        />
       ) : null}
 
       <div className="boardview__tools">
@@ -5615,262 +5934,125 @@ const navigateTo = useCallback(
         />
         {panelKind === 'selection' ? (
           <div className="toolgroup toolpalette">
-            <div className="toolpalette__grid">
-              <button
-                type="button"
-                className="toolbtn"
-                onClick={() => groupSelection()}
-                disabled={selection.size < 2 || readOnly}
-                title="Объединить выделенные в группу"
-              >
-                <Group size={16} />
-              </button>
-              <button
-                type="button"
-                className="toolbtn"
-                onClick={() => ungroupSelection()}
-                disabled={!groupedSelection || readOnly}
-                title="Разделить группу на отдельные объекты"
-              >
-                <Ungroup size={16} />
-              </button>
-            </div>
-            <div className="toolpalette__sep" />
+            <PaletteGroup title={selection.size > 1 ? `Выбрано: ${selection.size}` : 'Объект'}>
+              <PaletteGrid columns={2}>
+                <PaletteCell title="Объединить выделенные в группу" icon={<Group size={16} />} disabled={selection.size < 2 || readOnly} onClick={() => groupSelection()}>
+                  В группу
+                </PaletteCell>
+                <PaletteCell title="Разделить группу на отдельные объекты" icon={<Ungroup size={16} />} disabled={!groupedSelection || readOnly} onClick={() => ungroupSelection()}>
+                  Из группы
+                </PaletteCell>
+                <PaletteCell title="Дублировать (Ctrl+D)" icon={<Copy size={16} />} disabled={!selection.size || readOnly} onClick={() => duplicateItems([...selection])}>
+                  Дубликат
+                </PaletteCell>
+                <PaletteCell title="Удалить (Delete)" icon={<Trash2 size={16} />} disabled={!selection.size || readOnly} onClick={() => deleteItems([...selection])}>
+                  Удалить
+                </PaletteCell>
+                <PaletteCell
+                  title={selectionLocked ? 'Разблокировать' : 'Заблокировать'}
+                  icon={selectionLocked ? <LockOpen size={16} /> : <Lock size={16} />}
+                  active={selectionLocked}
+                  disabled={!selection.size || readOnly}
+                  onClick={() => toggleLock([...selection])}
+                >
+                  {selectionLocked ? 'Открыть' : 'Закрыть'}
+                </PaletteCell>
+                <PaletteCell title="Снять выделение (Escape)" icon={<X size={16} />} onClick={() => setSelection(new Set())}>
+                  Снять
+                </PaletteCell>
+              </PaletteGrid>
+            </PaletteGroup>
             {imageSelection.length === 1 ? (
-              <>
-                <div className="toolpalette__label">Заменить картинку</div>
-                <div className="toolpalette__grid">
-                  <button type="button" className="toolbtn" onClick={() => void replaceImage(imageSelection[0].id, 'clipboard')} title="Заменить из буфера обмена">
-                    <ClipboardPaste size={16} />
-                  </button>
-                  <button type="button" className="toolbtn" onClick={() => void replaceImage(imageSelection[0].id, 'file')} title="Заменить из файла">
-                    <ImagePlus size={16} />
-                  </button>
-                  <button type="button" className="toolbtn" onClick={() => void replaceImage(imageSelection[0].id, 'url')} title="Заменить картинкой по ссылке">
-                    <ExternalLink size={16} />
-                  </button>
-                  <button type="button" className="toolbtn" onClick={() => void openItemPreview(imageSelection[0])} title="Открыть предпросмотр">
-                    <Search size={16} />
-                  </button>
-                </div>
-              </>
+              <PaletteGroup title="Заменить картинку">
+                <PaletteGrid columns={2}>
+                  <PaletteCell title="Заменить из буфера" icon={<ClipboardPaste size={16} />} onClick={() => void replaceImage(imageSelection[0].id, 'clipboard')}>
+                    Буфер
+                  </PaletteCell>
+                  <PaletteCell title="Заменить из файла" icon={<ImagePlus size={16} />} onClick={() => void replaceImage(imageSelection[0].id, 'file')}>
+                    Файл
+                  </PaletteCell>
+                  <PaletteCell title="Заменить картинкой по ссылке" icon={<ExternalLink size={16} />} onClick={() => void replaceImage(imageSelection[0].id, 'url')}>
+                    Ссылка
+                  </PaletteCell>
+                  <PaletteCell title="Открыть предпросмотр" icon={<Search size={16} />} onClick={() => void openItemPreview(imageSelection[0])}>
+                    Просмотр
+                  </PaletteCell>
+                </PaletteGrid>
+              </PaletteGroup>
             ) : null}
             {imageSelection.length > 1 ? (
-              <>
-                <div className="toolpalette__label">Картинок выбрано: {imageSelection.length}</div>
-                <button
-                  type="button"
-                  className="toolpalette__action"
-                  disabled={readOnly}
-                  onClick={() => void replaceImagesFromFiles()}
-                >
-                  <ImagePlus size={15} />
-                  Заменить файлами
-                </button>
-              </>
+              <PaletteGroup title={`Картинок выбрано: ${imageSelection.length}`}>
+                <PaletteAction label="Заменить файлами" icon={<ImagePlus size={15} />} disabled={readOnly} onClick={() => void replaceImagesFromFiles()} />
+              </PaletteGroup>
             ) : null}
-            <div className="toolpalette__grid">
-              <button
-                type="button"
-                className="toolbtn"
-                onClick={() => toggleLock([...selection])}
-                disabled={!selection.size || readOnly}
-                title={selectionLocked ? 'Разблокировать' : 'Заблокировать'}
-              >
-                {selectionLocked ? <LockOpen size={16} /> : <Lock size={16} />}
-              </button>
-              <button
-                type="button"
-                className="toolbtn"
-                onClick={() => duplicateItems([...selection])}
-                disabled={!selection.size || readOnly}
-                title="Дублировать (Ctrl+D)"
-              >
-                <Copy size={16} />
-              </button>
-              <button
-                type="button"
-                className="toolbtn"
-                onClick={() => deleteItems([...selection])}
-                disabled={!selection.size || readOnly}
-                title="Удалить (Delete)"
-              >
-                <Trash2 size={16} />
-              </button>
-              <button
-                type="button"
-                className="toolbtn"
-                onClick={() => {
-                  setSelection(new Set())
-                }}
-                title="Снять выделение (Escape)"
-              >
-                <X size={16} />
-              </button>
-            </div>
           </div>
         ) : null}
         {panelKind === 'solid' && solidPanel ? (
           <div className="toolgroup toolpalette">
-            <div className="toolpalette__hint">{solidPanel.hint}</div>
-            <div className="toolpalette__row">
-              {SOLID_KINDS.map((entry) => (
-                <button
-                  key={entry.id}
-                  type="button"
-                  className="toolbtn"
-                  data-active={solidKind === entry.id}
-                  onClick={() => {
-                    setSolidKind(entry.id)
-                    if (solidPanel.target) patchSolid({ solid: entry.id })
-                  }}
-                  title={entry.label}
-                >
-                  {solidIcon(entry.id)}
-                </button>
-              ))}
-            </div>
-            <div className="toolpalette__label">Режим</div>
-            <div className="toolpalette__grid">
-              {SOLID_MODES.map((entry) => (
-                <button
-                  key={entry.id}
-                  type="button"
-                  className="toolbtn"
-                  data-active={solidMode === entry.id}
-                  onClick={() => setSolidMode(entry.id)}
-                  title={entry.title}
-                >
-                  {entry.icon}
-                </button>
-              ))}
-            </div>
-            <div className="toolpalette__sep" />
-            <label className="toolpalette__slider" title="Размер ребра">
-              <span>Размер</span>
-              <input
-                type="range"
-                min={60}
-                max={600}
-                step={10}
-                value={solidPanel.edge}
-                onChange={(event) => patchSolid({ edge: Number(event.target.value) }, true)}
+            <PaletteGroup title={solidPanel.target ? 'Фигура' : 'Новая фигура'}>
+              <PaletteGrid columns={3}>
+                {SOLID_KINDS.map((entry) => (
+                  <PaletteCell
+                    key={entry.id}
+                    title={entry.label}
+                    icon={solidIcon(entry.id)}
+                    active={solidKind === entry.id}
+                    onClick={() => {
+                      setSolidKind(entry.id)
+                      if (solidPanel.target) patchSolid({ solid: entry.id })
+                    }}
+                  />
+                ))}
+              </PaletteGrid>
+            </PaletteGroup>
+            <PaletteGroup title="Режим">
+              <PaletteGrid columns={2}>
+                {SOLID_MODES.map((entry) => (
+                  <PaletteCell
+                    key={entry.id}
+                    title={entry.title}
+                    icon={entry.icon}
+                    active={solidMode === entry.id}
+                    onClick={() => setSolidMode(entry.id)}
+                  >
+                    {SOLID_MODE_LABELS[entry.id]}
+                  </PaletteCell>
+                ))}
+              </PaletteGrid>
+            </PaletteGroup>
+            <PaletteGroup title="Геометрия">
+              <PaletteSlider label="Размер" value={solidPanel.edge} min={60} max={600} step={10} onChange={(value) => patchSolid({ edge: value }, true)} />
+              <PaletteSlider label="Наклон" suffix="°" value={solidPanel.pitch} min={-80} max={80} onChange={(value) => patchSolid({ pitch: value }, true)} />
+              <PaletteSlider label="Поворот" suffix="°" value={solidPanel.yaw} min={0} max={359} onChange={(value) => patchSolid({ yaw: value }, true)} />
+              <PaletteSlider label="Линия" value={solidPanel.lineWidth} min={1} max={10} onChange={(value) => patchSolid({ lineWidth: value }, true)} />
+            </PaletteGroup>
+            <PaletteGroup title="Вид">
+              <PaletteCheck label="Рёбра" checked={solidPanel.showEdges !== false} onChange={(value) => patchSolid({ showEdges: value })} />
+              <PaletteCheck label="Скрытые линии пунктиром" checked={solidPanel.showHidden === true} onChange={(value) => patchSolid({ showHidden: value })} />
+            </PaletteGroup>
+            <PaletteGroup title={solidMode === 'paint' ? 'Цвет грани' : 'Цвет рёбер и штрихов'}>
+              <PaletteSwatches
+                colors={QUICK_COLORS}
+                value={solidMode === 'paint' ? strokeColor : solidPanel.color}
+                customLabel="Свой цвет"
+                nameFor={colorName}
+                onPick={(color) => (solidMode === 'paint' ? setStrokeColor(color) : solidPanel.target ? patchSolid({ color }) : setStrokeColor(color))}
+                onCustom={(color) =>
+                  solidMode === 'paint' ? setStrokeColor(color) : solidPanel.target ? patchSolid({ color }) : setStrokeColor(color)
+                }
               />
-              <span>{Math.round(solidPanel.edge)}</span>
-            </label>
-            <label className="toolpalette__slider" title="Наклон">
-              <span>Наклон</span>
-              <input
-                type="range"
-                min={-80}
-                max={80}
-                step={1}
-                value={solidPanel.pitch}
-                onChange={(event) => patchSolid({ pitch: Number(event.target.value) }, true)}
-              />
-              <span>{Math.round(solidPanel.pitch)}</span>
-            </label>
-            <label className="toolpalette__slider" title="Поворот">
-              <span>Поворот</span>
-              <input
-                type="range"
-                min={0}
-                max={359}
-                step={1}
-                value={Math.round(solidPanel.yaw)}
-                onChange={(event) => patchSolid({ yaw: Number(event.target.value) }, true)}
-              />
-              <span>{Math.round(solidPanel.yaw)}</span>
-            </label>
-            <div className="toolpalette__sep" />
-            <label className="toolpalette__check">
-              <input
-                type="checkbox"
-                checked={solidPanel.showEdges !== false}
-                onChange={(event) => patchSolid({ showEdges: event.target.checked })}
-              />
-              Рёбра
-            </label>
-            <label className="toolpalette__check">
-              <input
-                type="checkbox"
-                checked={solidPanel.showHidden === true}
-                onChange={(event) => patchSolid({ showHidden: event.target.checked })}
-              />
-              Скрытые линии пунктиром
-            </label>
-            <div className="toolpalette__sep" />
-            <div className="toolpalette__label">{solidMode === 'paint' ? 'Цвет грани' : 'Цвет рёбер и штрихов'}</div>
-            <div className="toolpalette__row">
-              {QUICK_COLORS.map((color) => (
-                <button
-                  key={color}
-                  type="button"
-                  className="swatch"
-                  aria-label={`Цвет ${color}`}
-                  onClick={() => (solidMode === 'paint' ? setStrokeColor(color) : solidPanel.target ? patchSolid({ color }) : setStrokeColor(color))}
-                  style={{
-                    background: color,
-                    outline: (solidMode === 'paint' ? strokeColor : solidPanel.color).toLowerCase() === color ? '2px solid var(--inverse)' : '1px solid var(--border)'
-                  }}
-                />
-              ))}
-              <label className="swatch swatch--custom" title="Свой цвет">
-                <input
-                  type="color"
-                  value={solidMode === 'paint' ? strokeColor : solidPanel.color}
-                  onChange={(event) =>
-                    solidMode === 'paint' ? setStrokeColor(event.target.value) : solidPanel.target ? patchSolid({ color: event.target.value }) : setStrokeColor(event.target.value)
-                  }
-                  aria-label="Свой цвет"
-                />
-                <Pipette size={14} />
-              </label>
-            </div>
-            <label className="toolpalette__slider" title="Толщина линии">
-              <span>Линия</span>
-              <input
-                type="range"
-                min={1}
-                max={10}
-                step={1}
-                value={solidPanel.lineWidth}
-                onChange={(event) => patchSolid({ lineWidth: Number(event.target.value) }, true)}
-              />
-              <span>{Math.round(solidPanel.lineWidth)}</span>
-            </label>
+            </PaletteGroup>
             {solidPanel.target ? (
-              <>
-                <div className="toolpalette__label">Оттенок граней</div>
-                <div className="toolpalette__row">
-                  {SOLID_TINTS.map((tint) => (
-                    <button
-                      key={tint}
-                      type="button"
-                      className="swatch"
-                      aria-label={`Оттенок ${tint}`}
-                      title="Собрать грани из оттенков этого цвета"
-                      onClick={() => patchSolid({ tint, faces: tintFaces(tint, solidPanel.faces.map((face) => face.id)) })}
-                      style={{
-                        background: tint,
-                        outline: solidPanel.tint.toLowerCase() === tint ? '2px solid var(--inverse)' : '1px solid var(--border)'
-                      }}
-                    />
-                  ))}
-                  <label className="swatch swatch--custom" title="Свой оттенок">
-                    <input
-                      type="color"
-                      value={solidPanel.tint}
-                      onChange={(event) =>
-                        patchSolid({ tint: event.target.value, faces: tintFaces(event.target.value, solidPanel.faces.map((face) => face.id)) })
-                      }
-                      aria-label="Свой оттенок граней"
-                    />
-                    <Pipette size={14} />
-                  </label>
-                </div>
-                <div className="toolpalette__label">Цвета граней</div>
-                <div className="toolpalette__row">
+              <PaletteGroup title="Грани">
+                <PaletteSwatches
+                  colors={SOLID_TINTS}
+                  value={solidPanel.tint}
+                  customLabel="Свой оттенок"
+                  note="Собрать грани из оттенков этого цвета"
+                  onPick={(tint) => patchSolid({ tint, faces: tintFaces(tint, solidPanel.faces.map((face) => face.id)) })}
+                  onCustom={(tint) => patchSolid({ tint, faces: tintFaces(tint, solidPanel.faces.map((face) => face.id)) })}
+                />
+                <div className="toolpalette__colors">
                   {solidPanel.faces.slice(0, 8).map((face) => (
                     <button
                       key={face.id}
@@ -5879,262 +6061,163 @@ const navigateTo = useCallback(
                       aria-label={`Грань ${face.id}`}
                       title={face.id}
                       onClick={() => paintSolidFace(doc?.items ?? [], solidPanel.targetId, face.id, strokeColor)}
-                      style={{
-                        background: face.color,
-                        outline: strokeColor.toLowerCase() === face.color.toLowerCase() ? '2px solid var(--inverse)' : '1px solid var(--border)'
-                      }}
+                      style={{ background: face.color }}
                     />
                   ))}
                 </div>
-              </>
+              </PaletteGroup>
             ) : null}
+            <PaletteGroup>
+              <PaletteNote>{solidPanel.hint}</PaletteNote>
+            </PaletteGroup>
           </div>
         ) : null}
         {panelKind === 'create' ? (
           <div className="toolgroup toolpalette">
-            <div className="toolpalette__row">
-              {CREATE_SHAPES.map((entry) => (
-                <button
-                  key={entry.label}
-                  type="button"
-                  className="toolbtn"
-                  data-active={CREATE_STROKES.has(entry.id) ? createTool === entry.id : createShape === entry.shape}
-                  onClick={() => {
-                    if (!CREATE_STROKES.has(entry.id)) setCreateShape(entry.shape)
-                    setCreateTool(entry.id)
-                  }}
-                  title={entry.label}
-                >
-                  {entry.id === 'line' ? (
-                    <Minus size={17} />
-                  ) : entry.id === 'arrow' ? (
-                    <MoveUpRight size={17} />
-                  ) : (
-                    shapeIcon(entry.shape)
-                  )}
-                </button>
-              ))}
-            </div>
-            <div className="toolpalette__row">
-              {QUICK_COLORS.map((color) => (
-                <button
-                  key={color}
-                  type="button"
-                  className="swatch"
-                  aria-label={`Цвет ${color}`}
-                  onClick={() => (createIsLine ? setStrokeColor(color) : setShapeColor(color))}
-                  style={{
-                    background: color,
-                    outline: (createIsLine ? strokeColor : shapeColor).toLowerCase() === color ? '2px solid var(--inverse)' : '1px solid var(--border)'
-                  }}
-                />
-              ))}
-              <label className="swatch swatch--custom" title="Свой цвет">
-                <input
-                  type="color"
-                  value={createIsLine ? strokeColor : shapeColor}
-                  onChange={(event) => (createIsLine ? setStrokeColor(event.target.value) : setShapeColor(event.target.value))}
-                  aria-label="Свой цвет"
-                />
-                <Pipette size={14} />
-              </label>
-            </div>
-            <label className="toolpalette__slider" title={createIsLine ? 'Толщина линии' : 'Толщина рамки'}>
-              <span>Линия</span>
-              <input
-                type="range"
+            <PaletteGroup title="Фигура">
+              <PaletteGrid columns={4}>
+                {CREATE_SHAPES.map((entry) => (
+                  <PaletteCell
+                    key={`${entry.id}-${entry.shape}`}
+                    title={entry.label}
+                    active={CREATE_STROKES.has(entry.id) ? createTool === entry.id : createShape === entry.shape}
+                    icon={
+                      entry.id === 'line' ? (
+                        <Minus size={17} />
+                      ) : entry.id === 'arrow' ? (
+                        <MoveUpRight size={17} />
+                      ) : (
+                        shapeIcon(entry.shape)
+                      )
+                    }
+                    onClick={() => {
+                      if (!CREATE_STROKES.has(entry.id)) setCreateShape(entry.shape)
+                      setCreateTool(entry.id)
+                    }}
+                  />
+                ))}
+              </PaletteGrid>
+            </PaletteGroup>
+            <PaletteGroup title={createIsLine ? 'Цвет линии' : 'Цвет фигуры'}>
+              <PaletteSwatches
+                colors={QUICK_COLORS}
+                value={createIsLine ? strokeColor : shapeColor}
+                nameFor={colorName}
+                onPick={(color) => (createIsLine ? setStrokeColor(color) : setShapeColor(color))}
+                onCustom={(color) => (createIsLine ? setStrokeColor(color) : setShapeColor(color))}
+              />
+            </PaletteGroup>
+            <PaletteGroup title="Начертание">
+              <PaletteSlider
+                label={createIsLine ? 'Толщина' : 'Рамка'}
+                value={createIsLine ? strokeWidth : shapeStroke}
                 min={1}
                 max={24}
-                step={1}
-                value={createIsLine ? strokeWidth : shapeStroke}
-                onChange={(event) => (createIsLine ? setStrokeWidth(Number(event.target.value)) : setShapeStroke(Number(event.target.value)))}
+                onChange={(value) => (createIsLine ? setStrokeWidth(value) : setShapeStroke(value))}
               />
-              <span>{createIsLine ? strokeWidth : shapeStroke}</span>
-            </label>
+            </PaletteGroup>
           </div>
         ) : null}
         {panelKind === 'pen' ? (
           <div className="toolgroup toolpalette">
-            <div className="toolpalette__row">
-              <button
-                type="button"
-                className="toolbtn"
-                data-active={penMode === 'pen'}
-                onClick={() => setPenMode('pen')}
-                title="Ручка"
-                aria-label="Ручка"
-              >
-                <PenTool size={16} />
-              </button>
-              <button
-                type="button"
-                className="toolbtn"
-                data-active={penMode === 'highlighter'}
-                onClick={() => setPenMode('highlighter')}
-                title="Выделитель"
-                aria-label="Выделитель"
-              >
-                <Highlighter size={16} />
-              </button>
-            </div>
-            <div className="toolpalette__sep" />
-            <div className="toolpalette__row">
-              {QUICK_COLORS.map((color) => (
-                <button
-                  key={color}
-                  type="button"
-                  className="swatch"
-                  aria-label={`Цвет ${color}`}
-                  onClick={() => setStrokeColor(color)}
-                  style={{ background: color, outline: strokeColor.toLowerCase() === color ? '2px solid var(--inverse)' : '1px solid var(--border)' }}
-                />
-              ))}
-              <label className="swatch swatch--custom" title="Свой цвет">
-                <input type="color" value={strokeColor} onChange={(event) => setStrokeColor(event.target.value)} aria-label="Свой цвет" />
-                <Pipette size={14} />
-              </label>
-            </div>
-            <label className="toolpalette__slider" title="Толщина линии">
-              <span>Толщина</span>
-              <input
-                type="range"
-                min={1}
-                max={24}
-                step={1}
-                value={strokeWidth}
-                onChange={(event) => setStrokeWidth(Number(event.target.value))}
-              />
-              <span>{strokeWidth}</span>
-            </label>
+            <PaletteGroup title="Инструмент">
+              <PaletteOption label="Ручка" icon={<PenTool size={15} />} active={penMode === 'pen'} onClick={() => setPenMode('pen')} />
+              <PaletteOption label="Выделитель" icon={<Highlighter size={15} />} active={penMode === 'highlighter'} onClick={() => setPenMode('highlighter')} />
+            </PaletteGroup>
+            <PaletteGroup title="Цвет">
+              <PaletteSwatches colors={QUICK_COLORS} value={strokeColor} nameFor={colorName} onPick={setStrokeColor} onCustom={setStrokeColor} />
+            </PaletteGroup>
+            <PaletteGroup title="Начертание">
+              <PaletteSlider label="Толщина" value={strokeWidth} min={1} max={24} onChange={setStrokeWidth} />
+            </PaletteGroup>
           </div>
         ) : null}
         {panelKind === 'link' ? (
           <div className="toolgroup toolpalette">
-            <div className="toolpalette__grid">
-              <button
-                type="button"
-                className="toolbtn"
-                data-active={linkStyle === 'straight'}
-                onClick={() => setLinkStyle('straight')}
-                title="Прямая линия"
+            <PaletteGroup title="Линия связи">
+              <PaletteGrid columns={3}>
+                <PaletteCell title="Прямая линия" icon={<Minus size={16} />} active={linkStyle === 'straight'} onClick={() => setLinkStyle('straight')} />
+                <PaletteCell title="Кривая" icon={<MoveUpRight size={16} />} active={linkStyle === 'curved'} onClick={() => setLinkStyle('curved')} />
+                <PaletteCell title="Ломаная" icon={<Link2 size={16} />} active={linkStyle === 'elbowed'} onClick={() => setLinkStyle('elbowed')} />
+              </PaletteGrid>
+            </PaletteGroup>
+            <PaletteGroup title="Вид">
+              <PaletteSlider label="Толщина" value={linkWidth} min={1} max={12} onChange={setLinkWidth} />
+              <PaletteCheck label="Стрелка на конце" checked={linkArrow} onChange={setLinkArrow} />
+            </PaletteGroup>
+            <PaletteGroup title="Как связать">
+              <PaletteNote
+                action={
+                  linkFrom ? (
+                    <button type="button" className="toolbtn" onClick={() => setLinkFrom(null)} title="Отменить выбор" aria-label="Отменить выбор">
+                      <X size={14} />
+                    </button>
+                  ) : null
+                }
               >
-                <Minus size={15} />
-              </button>
-              <button
-                type="button"
-                className="toolbtn"
-                data-active={linkStyle === 'curved'}
-                onClick={() => setLinkStyle('curved')}
-                title="Кривая"
-              >
-                <MoveUpRight size={15} />
-              </button>
-              <button
-                type="button"
-                className="toolbtn"
-                data-active={linkStyle === 'elbowed'}
-                onClick={() => setLinkStyle('elbowed')}
-                title="Ломаная"
-              >
-                <Link2 size={15} />
-              </button>
-            </div>
-            <label className="toolpalette__slider" title="Толщина линии">
-              <span>Толщина</span>
-              <input
-                type="range"
-                min={1}
-                max={12}
-                step={1}
-                value={linkWidth}
-                onChange={(event) => setLinkWidth(Number(event.target.value))}
-              />
-              <span>{linkWidth}</span>
-            </label>
-            <label className="toolpalette__check">
-              <input
-                type="checkbox"
-                checked={linkArrow}
-                onChange={(event) => setLinkArrow(event.target.checked)}
-              />
-              Стрелка на конце
-            </label>
-            <div className="toolpalette__sep" />
-            <div className="toolpalette__hint">
-              {linkFrom ? 'Теперь по второму объекту' : 'Щёлкните по первому'}
-            </div>
-            {linkFrom ? (
-              <button type="button" className="toolbtn" onClick={() => setLinkFrom(null)} title="Отменить выбор">
-                <X size={15} />
-              </button>
-            ) : null}
+                {linkFrom ? 'Теперь по второму объекту' : 'Щёлкните по первому объекту'}
+              </PaletteNote>
+            </PaletteGroup>
             {linkPreview ? (
-              <>
-                <div className="toolpalette__sep" />
-                <div className="toolpalette__hint truncate">{linkPreview}</div>
-                <button
-                  type="button"
-                  className="toolbtn"
-                  onClick={() => void openLinkPreview(linkPreview)}
-                  title="Открыть в окне предпросмотра"
+              <PaletteGroup title="Ссылка">
+                <PaletteNote
+                  action={
+                    <button
+                      type="button"
+                      className="toolbtn"
+                      onClick={() => void openLinkPreview(linkPreview)}
+                      title="Открыть в окне предпросмотра"
+                      aria-label="Открыть в окне предпросмотра"
+                    >
+                      <ExternalLink size={14} />
+                    </button>
+                  }
                 >
-                  <ExternalLink size={16} />
-                </button>
-              </>
+                  <span className="truncate">{linkPreview}</span>
+                </PaletteNote>
+              </PaletteGroup>
             ) : null}
           </div>
         ) : null}
         {panelKind === 'erase' ? (
           <div className="toolgroup toolpalette">
-            <label className="toolpalette__slider" title="Размер ластика">
-              <span>Размер</span>
-              <input
-                type="range"
-                min={6}
-                max={48}
-                step={2}
-                value={eraseSize}
-                onChange={(event) => setEraseSize(Number(event.target.value))}
-              />
-              <span>{eraseSize}</span>
-            </label>
+            <PaletteGroup title="Ластик">
+              <PaletteSlider label="Размер" value={eraseSize} min={6} max={48} step={2} onChange={setEraseSize} />
+            </PaletteGroup>
           </div>
         ) : null}
         {panelKind === 'image' ? (
           <div className="toolgroup toolpalette">
-            <div className="toolpalette__row">
-              <button
-                type="button"
-                className="toolbtn"
+            <PaletteGroup title="Картинка">
+              <PaletteOption
+                label="Из файла"
+                icon={<ImagePlus size={15} />}
+                title="Вставить картинку из файла"
                 onClick={() =>
                   void api.dialog.pickImage().then((dataUrl) => {
                     if (!dataUrl) return
                     return addImageAt(dataUrl, { x: viewRef.current.x, y: viewRef.current.y })
                   })
                 }
-                title="Вставить картинку из файла"
-              >
-                <ImagePlus size={16} />
-              </button>
-              <button
-                type="button"
-                className="toolbtn"
+              />
+              <PaletteOption
+                label="Из буфера"
+                icon={<ClipboardPaste size={15} />}
+                title="Вставить картинку из буфера"
                 onClick={() =>
                   void api.clipboard.readImage().then((dataUrl) => {
                     if (!dataUrl) {
-                      toast('В буфере нет картинки', 'info')
+                      toast('В буфере нет картинки', 'clipboard')
                       return
                     }
                     return addImageAt(dataUrl, { x: viewRef.current.x, y: viewRef.current.y })
                   })
                 }
-                title="Вставить картинку из буфера"
-              >
-                <ClipboardPaste size={16} />
-              </button>
-              <button
-                type="button"
-                className="toolbtn"
+              />
+              <PaletteOption
+                label="По ссылке"
+                icon={<ExternalLink size={15} />}
+                title="Вставить картинку по ссылке"
                 onClick={() => {
                   void ask('Ссылка на картинку', '', 'https://').then((value) => {
                     const url = value?.trim()
@@ -6142,180 +6225,126 @@ const navigateTo = useCallback(
                     return insertImageFromUrl(url)
                   })
                 }}
-                title="Вставить картинку по ссылке"
-              >
-                <ExternalLink size={16} />
-              </button>
-            </div>
+              />
+            </PaletteGroup>
           </div>
         ) : null}
         {panelKind === 'text' || panelKind === 'sticky' ? (
           <div className="toolgroup toolpalette">
-            <div className="toolpalette__label">
-              {panelKind === 'text' ? 'Текст' : 'Стикер'}
-            </div>
-            <div className="toolpalette__row">
-              <label className="swatch swatch--custom" title="Цвет текста">
-                <input
-                  type="color"
-                  value={textColor}
-                  onChange={(event) => setTextColor(event.target.value)}
-                  aria-label="Цвет текста"
-                />
-                <Pipette size={14} />
-              </label>
-            </div>
-            <label className="toolpalette__slider" title="Размер шрифта">
-              <span>Шрифт</span>
-              <input
-                type="range"
-                min={8}
-                max={72}
-                step={1}
-                value={textSize}
-                onChange={(event) => setTextSize(Number(event.target.value))}
-              />
-              <span>{textSize}</span>
-            </label>
-            <div className="toolpalette__hint">
-              {panelKind === 'text' ? 'Щёлкните по доске или по грани 3D-фигуры' : 'Щёлкните по доске, чтобы поставить стикер.'}
-            </div>
+            <PaletteGroup title="Цвет текста">
+              <PaletteSwatches colors={QUICK_COLORS} value={textColor} nameFor={colorName} onPick={setTextColor} onCustom={setTextColor} />
+            </PaletteGroup>
+            <PaletteGroup title="Начертание">
+              <PaletteSlider label="Размер" value={textSize} min={8} max={72} onChange={setTextSize} />
+            </PaletteGroup>
+            <PaletteGroup>
+              <PaletteNote>
+                {panelKind === 'text' ? 'Щёлкните по доске или по грани 3D-фигуры' : 'Щёлкните по доске, чтобы поставить стикер.'}
+              </PaletteNote>
+            </PaletteGroup>
           </div>
         ) : null}
         {panelKind === 'graph' && graphPanel ? (
           <div className="toolgroup toolpalette">
-            <label className="toolpalette__slider" title="Пикселей на единицу">
-              <span>Масштаб</span>
-              <input
-                type="range"
-                min={10}
-                max={160}
-                step={5}
-                value={graphPanel.scale}
-                onChange={(event) => patchGraph({ scale: Number(event.target.value) }, true)}
+            <PaletteGroup title="Плоскость">
+              <PaletteSlider label="Масштаб" value={graphPanel.scale} min={10} max={160} step={5} onChange={(value) => patchGraph({ scale: value }, true)} />
+              <label className="graphpanel__row" title="Сколько единиц в одной клетке сетки">
+                <span>Цена деления</span>
+                <select
+                  className="graphpanel__select"
+                  value={String(graphPanel.gridStep)}
+                  onChange={(event) => patchGraph({ gridStep: Number(event.target.value) })}
+                >
+                  {GRAPH_DIVISIONS.map((value) => (
+                    <option key={value} value={String(value)}>
+                      {value}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </PaletteGroup>
+            <PaletteGroup title="Размер">
+              <PaletteGrid columns={3}>
+                <PaletteCell title="Маленькая плоскость" icon={<span className="toolpalette__dims">360×260</span>} onClick={() => patchGraph({ w: 360, h: 260 })} />
+                <PaletteCell title="Обычная плоскость" icon={<span className="toolpalette__dims">640×440</span>} onClick={() => patchGraph({ w: 640, h: 440 })} />
+                <PaletteCell title="Широкая плоскость" icon={<span className="toolpalette__dims">960×640</span>} onClick={() => patchGraph({ w: 960, h: 640 })} />
+              </PaletteGrid>
+              <PaletteAction label="Вписать в окно" icon={<Maximize2 size={15} />} title="Вписать плоскость в окно" onClick={() => fitGraphToView()} />
+            </PaletteGroup>
+            <PaletteGroup title="Показывать">
+              <PaletteCheck label="Сетка" checked={graphPanel.showGrid} onChange={(value) => patchGraph({ showGrid: value })} />
+              <PaletteCheck label="Подписи чисел" checked={graphPanel.showLabels} onChange={(value) => patchGraph({ showLabels: value })} />
+            </PaletteGroup>
+            <PaletteGroup title="Графики">
+              {graphPanel.expressions.map((expression) => {
+                const broken = expression.formula.trim() !== '' && !compileFormula(expression.formula)
+                return (
+                  <div key={expression.id} className="graphrow" data-broken={broken || undefined}>
+                    <input
+                      className="graphrow__swatch"
+                      type="color"
+                      value={expression.color}
+                      onChange={(event) => patchExpression(expression.id, { color: event.target.value }, true)}
+                      aria-label="Цвет графика"
+                    />
+                    <input
+                      className="graphrow__input"
+                      value={graphDraft[expression.id] ?? expression.formula}
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setGraphDraft({ ...graphDraft, [expression.id]: value })
+                        patchExpression(expression.id, { formula: value }, true)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') patchExpression(expression.id, { formula: graphDraft[expression.id] ?? expression.formula })
+                      }}
+                      placeholder="x^2"
+                    />
+                    <button
+                      type="button"
+                      className="toolbtn graphrow__width"
+                      onClick={() => {
+                        const at = GRAPH_STROKES.indexOf(expression.lineWidth)
+                        patchExpression(expression.id, { lineWidth: GRAPH_STROKES[(at + 1) % GRAPH_STROKES.length] })
+                      }}
+                      title="Толщина линии графика"
+                    >
+                      <span>{expression.lineWidth}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="toolbtn toolbtn--compact"
+                      data-active={expression.visible}
+                      onClick={() => patchExpression(expression.id, { visible: !expression.visible })}
+                      title="Показать или скрыть"
+                    >
+                      {expression.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                    </button>
+                    <button
+                      type="button"
+                      className="toolbtn toolbtn--compact"
+                      onClick={() => patchGraph({ expressions: graphPanel.expressions.filter((entry) => entry.id !== expression.id) })}
+                      title="Удалить график"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                )
+              })}
+              <PaletteAction
+                label="Добавить график"
+                icon={<Plus size={15} />}
+                title="Добавить график"
+                onClick={() =>
+                  patchGraph({
+                    expressions: [
+                      ...graphPanel.expressions,
+                      { id: uid('ex_'), formula: 'x', color: QUICK_COLORS[(graphPanel.expressions.length + 1) % QUICK_COLORS.length], lineWidth: 3, visible: true }
+                    ]
+                  })
+                }
               />
-              <span>{graphPanel.scale}</span>
-            </label>
-            <label className="graphpanel__row" title="Сколько единиц в одной клетке сетки">
-              <span>Цена деления</span>
-              <select
-                className="graphpanel__select"
-                value={String(graphPanel.gridStep)}
-                onChange={(event) => patchGraph({ gridStep: Number(event.target.value) })}
-              >
-                {GRAPH_DIVISIONS.map((value) => (
-                  <option key={value} value={String(value)}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="toolpalette__grid toolpalette__grid--3">
-              <button type="button" className="toolbtn" onClick={() => fitGraphToView()} title="Вписать плоскость в окно">
-                <Maximize2 size={16} />
-              </button>
-              <button type="button" className="toolbtn" onClick={() => patchGraph({ w: 360, h: 260 })} title="Маленькая плоскость">
-                <span className="toolpalette__dims">360×260</span>
-              </button>
-              <button type="button" className="toolbtn" onClick={() => patchGraph({ w: 640, h: 440 })} title="Обычная плоскость">
-                <span className="toolpalette__dims">640×440</span>
-              </button>
-            </div>
-            <div className="toolpalette__grid toolpalette__grid--3">
-              <button type="button" className="toolbtn" onClick={() => patchGraph({ w: 960, h: 640 })} title="Широкая плоскость">
-                <span className="toolpalette__dims">960×640</span>
-              </button>
-              <button
-                type="button"
-                className="toolbtn"
-                onClick={() => patchGraph({ showGrid: !graphPanel.showGrid })}
-                data-active={graphPanel.showGrid}
-                title="Сетка"
-              >
-                <Grid3x3 size={16} />
-              </button>
-              <button
-                type="button"
-                className="toolbtn"
-                onClick={() => patchGraph({ showLabels: !graphPanel.showLabels })}
-                data-active={graphPanel.showLabels}
-                title="Подписи чисел"
-              >
-                <Type size={16} />
-              </button>
-            </div>
-            <div className="toolpalette__sep" />
-            <div className="toolpalette__label">Графики</div>
-            {graphPanel.expressions.map((expression) => {
-              const broken = expression.formula.trim() !== '' && !compileFormula(expression.formula)
-              return (
-                <div key={expression.id} className="graphrow" data-broken={broken || undefined}>
-                  <input
-                    className="graphrow__swatch"
-                    type="color"
-                    value={expression.color}
-                    onChange={(event) => patchExpression(expression.id, { color: event.target.value }, true)}
-                    aria-label="Цвет графика"
-                  />
-                  <input
-                    className="graphrow__input"
-                    value={graphDraft[expression.id] ?? expression.formula}
-                    onChange={(event) => {
-                      const value = event.target.value
-                      setGraphDraft({ ...graphDraft, [expression.id]: value })
-                      patchExpression(expression.id, { formula: value }, true)
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') patchExpression(expression.id, { formula: graphDraft[expression.id] ?? expression.formula })
-                    }}
-                    placeholder="x^2"
-                  />
-                  <button
-                    type="button"
-                    className="toolbtn graphrow__width"
-                    onClick={() => {
-                      const at = GRAPH_STROKES.indexOf(expression.lineWidth)
-                      patchExpression(expression.id, { lineWidth: GRAPH_STROKES[(at + 1) % GRAPH_STROKES.length] })
-                    }}
-                    title="Толщина линии графика"
-                  >
-                    <span>{expression.lineWidth}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="toolbtn toolbtn--compact"
-                    data-active={expression.visible}
-                    onClick={() => patchExpression(expression.id, { visible: !expression.visible })}
-                    title="Показать или скрыть"
-                  >
-                    {expression.visible ? <Eye size={14} /> : <EyeOff size={14} />}
-                  </button>
-                  <button
-                    type="button"
-                    className="toolbtn toolbtn--compact"
-                    onClick={() => patchGraph({ expressions: graphPanel.expressions.filter((entry) => entry.id !== expression.id) })}
-                    title="Удалить график"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              )
-            })}
-            <button
-              type="button"
-              className="toolpalette__action"
-              onClick={() =>
-                patchGraph({
-                  expressions: [
-                    ...graphPanel.expressions,
-                    { id: uid('ex_'), formula: 'x', color: QUICK_COLORS[(graphPanel.expressions.length + 1) % QUICK_COLORS.length], lineWidth: 3, visible: true }
-                  ]
-                })
-              }
-              title="Добавить график"
-            >
-              <Plus size={15} /> Добавить график
-            </button>
+            </PaletteGroup>
           </div>
         ) : null}
       </div>

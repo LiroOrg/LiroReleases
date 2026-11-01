@@ -93,7 +93,7 @@ export const LiveCursors = memo(function LiveCursors(props: {
           ...(fresh.has(cursor.id) ? { transition: 'none' } : null)
         }
         return (
-          <div key={cursor.id} className="livecursor" style={style}>
+          <div key={cursor.id} className={cursor.away ? 'livecursor livecursor--away' : 'livecursor'} style={style}>
             <span className="livecursor__pointer" style={{ rotate: `${angle}deg`, translate: TIP_OFFSET }}>
               <svg
                 className="livecursor__arrow"

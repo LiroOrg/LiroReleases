@@ -752,8 +752,8 @@ function widgetBox(json: WidgetJson, widgetType: string, origin?: SourcePoint): 
   const offsetY = origin ? origin.y : numOr(offset.y)
   if (offsetX !== undefined && offsetY !== undefined) {
     return {
-      x: offsetX,
-      y: offsetY,
+      x: offsetX - (baseWidth * scale) / 2,
+      y: offsetY - (baseHeight * scale) / 2,
       width: baseWidth * scale,
       height: baseHeight * scale,
       scale,
@@ -777,8 +777,8 @@ function strokeBox(widgetType: string, json: WidgetJson, origin?: SourcePoint): 
   if (points.length === 0) return base
   const shape = boxOfPoints(points)
   return {
-    x: base.x + shape.x,
-    y: base.y + shape.y,
+    x: base.x + base.width / 2 - shape.width / 2,
+    y: base.y + base.height / 2 - shape.height / 2,
     width: Math.max(1, shape.width),
     height: Math.max(1, shape.height),
     scale,
@@ -982,13 +982,26 @@ function buildRawItem(info: WidgetInfo, byObjectId: Map<number, WidgetInfo>): Ra
     case 'pen':
     case 'drawing': {
       const points = strokePointsOf(info)
-      if (points.length < 2) return null
+      if (points.length === 0) return null
       item.type = 'path'
       const stroke = styleColor(info.style.lc) ?? '#1a1a1a'
+      const lineWidth = Math.max(1, num(info.style.t, 2))
       item.style.strokeColor = stroke
-      item.style.strokeWidth = Math.max(1, num(info.style.t, 2))
+      item.style.strokeWidth = lineWidth
       item.style.opacity = clamp01(num(info.style.lo, 1))
-      item.data.points = points
+      if (points.length === 1) {
+        const side = lineWidth
+        const center = { x: info.box.x + points[0].x, y: info.box.y + points[0].y }
+        item.x = center.x - side / 2
+        item.y = center.y - side / 2
+        item.width = side
+        item.height = side
+        item.position = { x: center.x, y: center.y, origin: 'center', relativeTo: 'canvas_center' }
+        item.geometry = { width: side, height: side, rotation: info.rotation }
+        item.data.points = [{ x: side / 2, y: side / 2 }, { x: side / 2, y: side / 2 }]
+      } else {
+        item.data.points = points
+      }
       item.data.closed = false
       return item
     }
@@ -1105,11 +1118,18 @@ function resolveWidgetOrigins(list: ClipboardObject[]): Map<number, SourcePoint>
     for (const memberId of members) {
       const member = byId.get(memberId)
       if (!member || attachedTo(member)) continue
-      const resolved = visit(member, new Set([id]))
+      const resolved = parentTopLeft(member, visit(member, new Set([id])))
       if (!resolved) continue
       point = point ? { x: Math.min(point.x, resolved.x), y: Math.min(point.y, resolved.y) } : resolved
     }
     return point
+  }
+  const parentTopLeft = (object: ClipboardObject, anchor: SourcePoint | null): SourcePoint | null => {
+    if (!anchor) return null
+    const widget = asRecord(object.widgetData)
+    const type = str(widget.type).toLowerCase() || 'shape'
+    const box = strokeBox(type, asRecord(widget.json), anchor)
+    return { x: box.x, y: box.y }
   }
   const visit = (object: ClipboardObject, trail: Set<number>): SourcePoint | null => {
     const cached = origins.get(object.id)
@@ -1127,7 +1147,7 @@ function resolveWidgetOrigins(list: ClipboardObject[]): Map<number, SourcePoint>
       const parent = byId.get(parentIndex)
       const next = new Set(trail)
       next.add(object.id)
-      const base = parent && parent !== object ? visit(parent, next) : groupOrigin(parentIndex)
+      const base = parent && parent !== object ? parentTopLeft(parent, visit(parent, next)) : groupOrigin(parentIndex)
       if (base) point = { x: base.x + x, y: base.y + y }
     }
     origins.set(object.id, point)
@@ -1560,11 +1580,11 @@ export function selfTest(): boolean {
     const anchoredImage = anchoredRaw[0]
     const anchoredStroke = anchoredRaw[1]
     if (Math.round(anchoredImage.width) !== 1377 || Math.round(anchoredImage.height) !== 722) return false
-    if (Math.round(anchoredImage.x) !== -4025 || Math.round(anchoredImage.y) !== -2857) return false
+    if (Math.round(anchoredImage.x) !== -4714 || Math.round(anchoredImage.y) !== -3218) return false
     if (anchoredStroke.type !== 'path' || anchoredStroke.parentId !== anchoredImage.id) return false
     if (Math.round(anchoredStroke.width) !== 165 || Math.round(anchoredStroke.height) !== 110) return false
-    if (Math.abs(anchoredStroke.position.x - -3753) > 1) return false
-    if (Math.abs(anchoredStroke.position.y - -2775) > 1) return false
+    if (Math.abs(anchoredStroke.position.x - -4524) > 1) return false
+    if (Math.abs(anchoredStroke.position.y - -3191) > 1) return false
     const groupObjects: ClipboardObject[] = [
       {
         type: WIDGET_TYPE,
@@ -1625,8 +1645,32 @@ export function selfTest(): boolean {
     const danglingLine = groupRaw.find((item) => item.id === 'dangling-line')
     if (!plainShape || !relativeShape || !danglingLine) return false
     if (str(plainShape.groupId) === '' || plainShape.groupId !== relativeShape.groupId) return false
-    if (Math.round(relativeShape.x) !== 200 || Math.round(relativeShape.y) !== 50) return false
+    if (Math.round(relativeShape.x) !== 100 || Math.round(relativeShape.y) !== 0) return false
     if (str(danglingLine.data.endItem?.id) !== '') return false
+    const dotRaw = clipboardObjectsToRawItems([
+      {
+        type: WIDGET_TYPE,
+        id: 0,
+        initialId: 'single-point-brush',
+        widgetData: {
+          type: 'paint',
+          json: {
+            _position: { offsetPx: { x: 40, y: -70 }, schema: 'canvasOffsetPx' },
+            scale: { scale: 1 },
+            points: [{ x: 0, y: 0 }],
+            style: JSON.stringify({ lc: 0x1a1a1a, t: 6 })
+          }
+        }
+      }
+    ])
+    if (dotRaw.length !== 1) return false
+    const dot = dotRaw[0]
+    if (dot.type !== 'path') return false
+    if (dot.width !== 6 || dot.height !== 6) return false
+    if (Math.round(dot.position.x) !== 40 || Math.round(dot.position.y) !== -70) return false
+    const dotPoints = Array.isArray(dot.data.points) ? dot.data.points : []
+    if (dotPoints.length !== 2) return false
+    if (dotPoints[0].x !== 3 || dotPoints[0].y !== 3) return false
     return true
   } catch {
     return false

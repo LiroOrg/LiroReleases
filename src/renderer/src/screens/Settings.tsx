@@ -119,7 +119,7 @@ export function SettingsScreen(): ReactNode {
   const refreshThumbs = async (): Promise<void> => {
     const boards = library.boards
     if (!boards.length) {
-      toast('Нет досок для обновления', 'image')
+      toast('Нет досок для обновления', 'preview')
       return
     }
     setThumbBusy(true)

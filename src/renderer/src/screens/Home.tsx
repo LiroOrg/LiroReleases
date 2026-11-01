@@ -134,12 +134,12 @@ export function Home(props: { onFail: (text: string) => void }): ReactNode {
     try {
       const html = await api.clipboard.readHtml()
       if (!html) {
-        toast('В буфере нет данных доски', 'info')
+        toast('В буфере нет данных доски', 'clipboard')
         return
       }
       const result = await createBoardFromClipboard(html, '')
       if (!result) {
-        toast('В буфере нет объектов для вставки', 'info')
+        toast('В буфере нет объектов для вставки', 'clipboard')
         return
       }
       await reload()

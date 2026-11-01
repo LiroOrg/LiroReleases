@@ -38,7 +38,7 @@ export type LivePreview =
 export type LiveMessage =
   | { t: 'hello'; id: string; name: string; color: string; host: boolean }
   | { t: 'perm'; canEdit: boolean }
-  | { t: 'cursor'; x: number; y: number; hidden?: boolean }
+  | { t: 'cursor'; x: number; y: number; hidden?: boolean; away?: boolean }
   | { t: 'viewport'; x: number; y: number; zoom: number; ask?: boolean }
   | { t: 'watch'; on: boolean }
   | { t: 'handover'; hostId: string; hostName: string }

@@ -2,6 +2,7 @@ import { BrowserWindow } from 'electron'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import type { Rect } from '@shared/types'
 import { clamp } from '@shared/util'
 import { docDir, getRoot } from '../paths'
 import { store } from '../store'
@@ -9,11 +10,15 @@ import { store } from '../store'
 const MAX_PIXELS = 36_000_000
 const MAX_WINDOW = 8600
 
+export const THUMB_WIDTH = 620
+export const THUMB_HEIGHT = 380
+
 export interface RenderParams {
   docId: string
-  scope: 'board' | 'frame' | 'selection'
+  scope: 'board' | 'frame' | 'selection' | 'thumb'
   targetId?: string
   selectionIds?: string[]
+  bbox?: Rect
   scale: number
   background: 'white' | 'transparent'
   print?: boolean
@@ -33,6 +38,7 @@ export function rendererEntry(): string {
 
 export function measure(params: RenderParams): { width: number; height: number } {
   const doc = store.readDoc(params.docId)
+  if (params.scope === 'thumb') return { width: THUMB_WIDTH, height: THUMB_HEIGHT }
   if (params.scope === 'frame' && params.targetId) {
     const frame = doc.items.find((item) => item.id === params.targetId)
     if (frame) return { width: Math.max(64, Math.ceil(frame.w + 140)), height: Math.max(64, Math.ceil(frame.h + 140)) }
@@ -72,6 +78,8 @@ function queryFor(params: RenderParams, extra: Record<string, string>): string {
   })
   if (params.targetId) search.set('targetId', params.targetId)
   if (params.selectionIds?.length) search.set('selection', params.selectionIds.join(','))
+  if (params.bbox)
+    search.set('bbox', [params.bbox.x, params.bbox.y, params.bbox.width, params.bbox.height].map((n) => String(Math.round(n))).join(','))
   return search.toString()
 }
 
@@ -113,6 +121,7 @@ export async function renderPng(params: RenderParams): Promise<PngResult> {
   const win = new BrowserWindow({
     width: clamp(targetWidth, 320, MAX_WINDOW),
     height: clamp(targetHeight, 240, MAX_WINDOW),
+    useContentSize: true,
     show: false,
     backgroundColor: params.background === 'transparent' ? '#00000000' : '#ffffff',
     webPreferences: {

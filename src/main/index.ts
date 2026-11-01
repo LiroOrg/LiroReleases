@@ -76,6 +76,14 @@ function createWindow(): void {
   mainWindow.on('unmaximize', () => {
     mainWindow?.webContents.send('event:window:state', { maximized: false })
   })
+  mainWindow.on('minimize', () => {
+    if (!mainWindow) return
+    mainWindow.webContents.send('event:window:state', { maximized: mainWindow.isMaximized(), minimized: true })
+  })
+  mainWindow.on('restore', () => {
+    if (!mainWindow) return
+    mainWindow.webContents.send('event:window:state', { maximized: mainWindow.isMaximized(), minimized: false })
+  })
   mainWindow.on('closed', () => {
     setMainWindow(null)
     mainWindow = null

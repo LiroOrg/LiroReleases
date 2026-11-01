@@ -42,22 +42,30 @@ const ENTRIES: Record<Tool, ToolEntry> = {
   graph: { id: 'graph', label: 'График', key: '', icon: <LineChart size={18} />, editing: true }
 }
 
-export const TOOL_ORDER: Tool[] = ['pen', 'select', 'pan', 'text', 'sticky', 'create', 'solid', 'erase', 'link', 'image', 'table', 'graph']
+export const TOOL_ORDER: Tool[] = ['select', 'pan', 'pen', 'text', 'sticky', 'create', 'solid', 'erase', 'link', 'image', 'table', 'graph']
 export const TOOL_EXTRAS: Tool[] = ['link', 'image', 'table', 'graph']
 
 export function toolEntry(id: Tool): ToolEntry {
   return ENTRIES[id]
 }
 
-const CARRIED_ORDER = ['pen', 'select', 'pan', 'text', 'sticky', 'create', 'link', 'erase', 'solid', 'image', 'table', 'graph']
-const CARRIED_EXTRAS = ['solid', 'image', 'table', 'graph']
+const LEGACY_LAYOUTS: Array<{ order: Tool[]; extras: Tool[] }> = [
+  {
+    order: ['pen', 'select', 'pan', 'text', 'sticky', 'create', 'link', 'erase', 'solid', 'image', 'table', 'graph'],
+    extras: ['solid', 'image', 'table', 'graph']
+  },
+  {
+    order: ['pen', 'select', 'pan', 'text', 'sticky', 'create', 'solid', 'erase', 'link', 'image', 'table', 'graph'],
+    extras: ['link', 'image', 'table', 'graph']
+  }
+]
 
 function sameLayout(order: string[] | undefined, extras: string[] | undefined): boolean {
   const same = (list: string[] | undefined, reference: string[]): boolean => {
     const values = list ?? []
     return values.length === reference.length && reference.every((id, index) => values[index] === id)
   }
-  return same(order, CARRIED_ORDER) && same(extras, CARRIED_EXTRAS)
+  return LEGACY_LAYOUTS.some((layout) => same(order, layout.order) && same(extras, layout.extras))
 }
 
 export function normalizeToolLayout(order?: string[], extras?: string[]): { order: Tool[]; extras: Tool[] } {

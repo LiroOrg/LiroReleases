@@ -25,6 +25,8 @@ const STYLE_KEYS: Record<string, keyof Run> = {
   'font-size': 'size'
 }
 
+const INLINE_TAGS = new Set(['b', 'strong', 'i', 'em', 'u', 's', 'strike', 'del'])
+
 function decodeEntities(input: string): string {
   return input
     .replace(/&nbsp;/gi, '\u00a0')
@@ -90,6 +92,8 @@ export function parseRichText(html: string): Block[] {
   const blocks: Block[] = []
   const tagRe = /<\s*(\/?)\s*([a-zA-Z0-9]+)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)\s*>|([^<]+)/g
   const stack: Block[] = []
+  const lists: boolean[] = []
+  let transparent = 0
   const runStack: Array<Partial<Run>> = [{}]
   let buffer = ''
   let match: RegExpExecArray | null
@@ -133,39 +137,29 @@ export function parseRichText(html: string): Block[] {
     const href = /href\s*=\s*"([^"]*)"|href\s*=\s*'([^']*)'/i.exec(attrs)
     if (closing) {
       flushRun()
-      if (tag === 'b' || tag === 'strong') delete runStack[runStack.length - 1].b
-      else if (tag === 'i' || tag === 'em') delete runStack[runStack.length - 1].i
-      else if (tag === 'u') delete runStack[runStack.length - 1].u
-      else if (tag === 's' || tag === 'strike' || tag === 'del') delete runStack[runStack.length - 1].s
-      else if (tag === 'span' && runStack.length > 1) runStack.pop()
-      else if (tag === 'a' && runStack.length > 1) runStack.pop()
-      else if (tag === 'li' && stack.length && stack[stack.length - 1].type === 'li') {
+      if (INLINE_TAGS.has(tag) || tag === 'span' || tag === 'a') {
+        if (runStack.length > 1) runStack.pop()
+      } else if (tag === 'ul' || tag === 'ol') {
+        lists.pop()
+      } else if (tag === 'li' && stack.length && stack[stack.length - 1].type === 'li') {
         const done = stack.pop()!
         flushBlock(done)
+      } else if ((tag === 'p' || tag === 'div' || /^h[1-6]$/.test(tag)) && transparent > 0) {
+        transparent -= 1
       } else if ((tag === 'p' || tag === 'div' || /^h[1-6]$/.test(tag)) && stack.length) {
         const done = stack.pop()!
         flushBlock(done)
       }
       continue
     }
-    if (tag === 'b' || tag === 'strong') {
+    if (INLINE_TAGS.has(tag)) {
       flushRun()
-      runStack[runStack.length - 1].b = true
-      continue
-    }
-    if (tag === 'i' || tag === 'em') {
-      flushRun()
-      runStack[runStack.length - 1].i = true
-      continue
-    }
-    if (tag === 'u') {
-      flushRun()
-      runStack[runStack.length - 1].u = true
-      continue
-    }
-    if (tag === 's' || tag === 'strike' || tag === 'del') {
-      flushRun()
-      runStack[runStack.length - 1].s = true
+      const next = { ...runStack[runStack.length - 1], ...style }
+      if (tag === 'b' || tag === 'strong') next.b = true
+      else if (tag === 'i' || tag === 'em') next.i = true
+      else if (tag === 'u') next.u = true
+      else next.s = true
+      runStack.push(next)
       continue
     }
     if (tag === 'span' || tag === 'a') {
@@ -184,21 +178,28 @@ export function parseRichText(html: string): Block[] {
         const done = stack.pop()!
         flushBlock(done)
       }
-      stack.push({ type: 'li', level, ordered: /value\s*=\s*"?\d+/i.test(attrs) ? undefined : false, runs: [] })
-      if (!selfClosing) continue
+      const nested = lists[lists.length - 1]
+      const numbered = /value\s*=\s*"?\d+/i.test(attrs)
+      stack.push({ type: 'li', level, ordered: nested === undefined ? numbered : nested, runs: [] })
       continue
     }
     if (tag === 'ul' || tag === 'ol') {
       flushRun()
+      lists.push(tag === 'ol')
       continue
     }
     if (tag === 'p' || tag === 'div' || /^h[1-6]$/.test(tag)) {
       flushRun()
-      if (stack.length && stack[stack.length - 1].type !== 'li') {
+      const insideListItem = stack.length && stack[stack.length - 1].type === 'li'
+      if (insideListItem) {
+        if (selfClosing) continue
+        if (stack[stack.length - 1].runs.length) buffer += '\n'
+        transparent += 1
+        continue
+      }
+      if (stack.length) {
         const done = stack.pop()!
         flushBlock(done)
-      } else if (stack.length) {
-        flushRun()
       }
       if (!selfClosing) stack.push({ type: /^h[1-6]$/.test(tag) ? 'h' : 'p', level: 1, runs: [] })
       continue

@@ -366,7 +366,7 @@
   overflow: hidden;
 }
 
-.resume__thumb > * {
+.resume__thumb > img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -523,7 +523,7 @@
   overflow: hidden;
 }
 
-.tile__thumb > * {
+.tile__thumb > img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -588,7 +588,7 @@
   background: var(--bg-subtle);
 }
 
-.homerow__thumb > * {
+.homerow__thumb > img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -688,6 +688,7 @@ button.homefoot__item:hover {
 }
 
 .tree__list {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -704,13 +705,59 @@ button.homefoot__item:hover {
   background: var(--bg-muted);
 }
 
-.tree--over {
-  outline: 1px solid var(--border-strong);
+.tree__list--drag .tree,
+.tree__list--drag .tree__board {
+  transition:
+    transform var(--dur-fast) ease,
+    opacity var(--dur-fast) ease;
 }
 
-.tree--dragging {
-  opacity: 0.55;
-  cursor: grabbing;
+.tree__gone {
+  opacity: 0;
+}
+
+.tree__slot {
+  position: absolute;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--bg-subtle);
+  pointer-events: none;
+  transition:
+    top var(--dur-fast) ease,
+    height var(--dur-fast) ease;
+}
+
+.tree__slot--root {
+  left: 0;
+  right: 2px;
+}
+
+.tree__boards > .tree__slot {
+  left: 22px;
+  right: 4px;
+}
+
+.tree__row--target {
+  background: var(--bg-subtle);
+  border-radius: var(--radius-s);
+}
+
+.tree__ghost {
+  position: fixed;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--panel);
+  color: var(--text);
+  font-size: calc(12px * var(--ui-scale));
+  box-shadow: var(--shadow-2);
+  pointer-events: none;
+  overflow: hidden;
 }
 
 .tree__row {

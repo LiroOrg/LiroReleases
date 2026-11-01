@@ -319,12 +319,12 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
     try {
       const html = await api.clipboard.readHtml()
       if (!html) {
-        toast('В буфере нет данных доски', 'info')
+        toast('В буфере нет данных доски', 'clipboard')
         return
       }
       const result = await createBoardFromClipboard(html, '')
       if (!result) {
-        toast('В буфере нет объектов для вставки', 'info')
+        toast('В буфере нет объектов для вставки', 'clipboard')
         return
       }
       await openBoard(result.id)

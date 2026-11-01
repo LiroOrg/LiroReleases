@@ -241,7 +241,7 @@ export function About(): ReactNode {
                     type="button"
                     className="btn"
                     onClick={() => {
-                      toast('Проверяем обновления', 'update')
+                      toast('Проверяем обновления', 'update-check')
                       void api.update.check()
                     }}
                   >

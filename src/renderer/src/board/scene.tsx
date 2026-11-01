@@ -201,6 +201,7 @@ export const ItemLayer = memo(function ItemLayer(props: {
   media?: MediaBridge
   livePos?: Map<string, { x: number; y: number }>
   cropId?: string | null
+  loading?: Map<string, { done: number; total: number }>
 }): ReactNode {
   return (
     <>
@@ -223,6 +224,7 @@ export const ItemLayer = memo(function ItemLayer(props: {
           media={props.media}
           live={props.livePos?.get(item.id)}
           cropping={props.cropId === item.id}
+          loading={props.loading?.get(item.id)}
         />
       ))}
     </>
@@ -246,6 +248,7 @@ export const ItemView = memo(function ItemView(props: {
   media?: MediaBridge
   live?: { x: number; y: number }
   cropping?: boolean
+  loading?: { done: number; total: number }
 }): ReactNode {
   const { item, doc, assetUrl, selected, dimmed } = props
   const style: CSSProperties = {
@@ -255,7 +258,8 @@ export const ItemView = memo(function ItemView(props: {
     height: Math.max(1, item.h),
     transform: item.rotation ? `rotate(${item.rotation}deg)` : undefined,
     zIndex: item.z + 1,
-    visibility: props.cropping ? 'hidden' : undefined
+    visibility: props.cropping ? 'hidden' : undefined,
+    pointerEvents: item.kind === 'path' ? 'none' : undefined
   }
   const classes = ['boarditem']
   if (selected) classes.push(props.moving ? 'boarditem--moving' : 'boarditem--selected')
@@ -288,6 +292,7 @@ export const ItemView = memo(function ItemView(props: {
         onPatch={props.onPatch}
         onLink={props.onLink}
         media={props.media}
+        loading={props.loading}
       />
     </div>
   )
@@ -303,6 +308,7 @@ function ItemBody(props: {
   onPatch?: (id: string, patch: Partial<BoardItem>) => void
   onLink?: (href: string) => void
   media?: MediaBridge
+  loading?: { done: number; total: number }
 }): ReactNode {
   const { item, assetUrl } = props
   switch (item.kind) {
@@ -339,7 +345,7 @@ function ItemBody(props: {
             flexDirection: 'column',
             justifyContent:
               item.textAlignVertical === 'top' ? 'flex-start' : item.textAlignVertical === 'bottom' ? 'flex-end' : 'center',
-            color: contrastColor(item.color),
+            color: item.textColor || contrastColor(item.color),
             overflow: 'hidden',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word'
@@ -418,6 +424,20 @@ function ItemBody(props: {
     case 'image': {
       const asset = item.asset
       const direct = asset?.dataUrl ?? asset?.sourceUrl ?? ''
+      if (props.loading) {
+        const percent = Math.min(99, Math.round((props.loading.done / Math.max(1, props.loading.total)) * 100))
+        return (
+          <div className="boarditem__loading">
+            <span className="boarditem__loading-title">{(item.title || 'Картинка').trim()}</span>
+            <span className="boarditem__loading-row">
+              <span className="boarditem__loading-bar">
+                <span className="boarditem__loading-fill" style={{ width: `${percent}%` }} />
+              </span>
+              <span className="boarditem__loading-percent">{percent}%</span>
+            </span>
+          </div>
+        )
+      }
       if (!asset?.file && !direct) {
         const name = (item.title || '').trim()
         return (
@@ -696,16 +716,33 @@ function ItemBody(props: {
     }
     case 'path': {
       const source = item.points.length > 1 ? item.points : [{ x: 0, y: 0 }, { x: item.w, y: item.h }]
+      const d = curvePath(source)
+      const reach = Math.max(6, item.lineWidth + 6)
       return (
-        <svg width="100%" height="100%" viewBox={`0 0 ${Math.max(1, item.w)} ${Math.max(1, item.h)}`} style={{ position: 'absolute', inset: 0, overflow: 'visible' }}>
+        <svg
+          width="100%"
+          height="100%"
+          viewBox={`0 0 ${Math.max(1, item.w)} ${Math.max(1, item.h)}`}
+          style={{ position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' }}
+        >
           <path
-            d={curvePath(source)}
+            d={d}
+            fill="none"
+            stroke="transparent"
+            strokeWidth={reach}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ pointerEvents: 'stroke' }}
+          />
+          <path
+            d={d}
             fill="none"
             stroke={item.color}
             strokeWidth={item.lineWidth}
             strokeLinecap="round"
             strokeLinejoin="round"
             opacity={item.opacity ?? 1}
+            style={{ pointerEvents: 'stroke' }}
           />
         </svg>
       )

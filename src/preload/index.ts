@@ -18,6 +18,7 @@ const api: ApiLiro = {
   boardUpdate: (docId, patch) => invoke('board:update', docId, patch),
   boardDelete: (docId, deleteFiles) => invoke('board:delete', docId, deleteFiles),
   boardDuplicate: (docId) => invoke('board:duplicate', docId),
+  boardReorder: (ids) => invoke('board:reorder', ids),
   boardReveal: (docId) => invoke('board:reveal', docId),
   boardExport: (options) => invoke('board:export', options),
   boardExportSaveAs: (options) => invoke('board:export-save-as', options),

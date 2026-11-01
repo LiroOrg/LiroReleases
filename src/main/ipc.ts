@@ -61,7 +61,7 @@ export function getCapture(): CaptureManager {
       },
       (event) => {
         if (!mainWindow || mainWindow.isDestroyed()) return
-        mainWindow.webContents.send('event:toast', { text: event.text, kind: event.kind === 'error' ? 'error' : 'info' })
+        mainWindow.webContents.send('event:toast', { text: event.text, kind: event.kind === 'error' ? 'error' : 'capture' })
       }
     )
   }
@@ -250,6 +250,11 @@ export function registerIpc(): void {
     const meta = store.duplicateDoc(docId, newId)
     sendLibraryChanged()
     return ok(meta)
+  })
+  ipcMain.handle('board:reorder', (_e, ids: string[]) => {
+    store.reorderBoards(ids)
+    sendLibraryChanged()
+    return ok(true)
   })
   ipcMain.handle('board:reveal', (_e, docId: string) => {
     revealPath(join(docDir(docId), 'board.json'))

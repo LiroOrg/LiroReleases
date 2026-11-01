@@ -22,6 +22,27 @@ export interface IpcResult<T> {
 
 export type PreviewKind = 'image' | 'pdf' | 'media' | 'web' | 'text' | 'file'
 
+export type NotifyKind =
+  | 'info'
+  | 'error'
+  | 'success'
+  | 'capture'
+  | 'update'
+  | 'update-check'
+  | 'update-ready'
+  | 'update-applied'
+  | 'live'
+  | 'live-out'
+  | 'lead'
+  | 'follow'
+  | 'locate'
+  | 'editable'
+  | 'readonly'
+  | 'clipboard'
+  | 'copy'
+  | 'board'
+  | 'archive'
+
 export interface PreviewPayload {
   kind: PreviewKind
   title: string
@@ -94,6 +115,7 @@ export interface ApiLiro {
   ) => Promise<IpcResult<BoardMeta>>
   boardDelete: (docId: string, deleteFiles: boolean) => Promise<IpcResult<boolean>>
   boardDuplicate: (docId: string) => Promise<IpcResult<BoardMeta>>
+  boardReorder: (ids: string[]) => Promise<IpcResult<boolean>>
   boardReveal: (docId: string) => Promise<IpcResult<string>>
   boardExport: (options: ExportOptions) => Promise<IpcResult<ExportResult>>
   boardExportSaveAs: (options: ExportOptions) => Promise<IpcResult<ExportResult>>
@@ -205,10 +227,10 @@ export interface Events {
   'settings:changed': Settings
   'library:changed': LibraryIndex
   'board:opened': string
-  'window:state': { maximized: boolean }
+  'window:state': { maximized: boolean; minimized?: boolean }
   'nav:go': string
   'board:command': BoardCommand
-  'toast': { text: string; kind: 'info' | 'error' | 'success' }
+  'toast': { text: string; kind: NotifyKind }
   'update:status': UpdateStatus
   'live:join': string
 }

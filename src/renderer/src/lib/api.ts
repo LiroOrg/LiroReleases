@@ -51,6 +51,7 @@ export const api = {
       unwrap<BoardMeta>(window.liro.api.boardUpdate(docId, patch as never)),
     remove: (docId: string, deleteFiles: boolean) => unwrap(window.liro.api.boardDelete(docId, deleteFiles)),
     duplicate: (docId: string) => unwrap<BoardMeta>(window.liro.api.boardDuplicate(docId)),
+    reorder: (ids: string[]) => unwrap<boolean>(window.liro.api.boardReorder(ids)),
     reveal: (docId: string) => unwrap(window.liro.api.boardReveal(docId)),
     export: (options: ExportOptions) => unwrap<ExportResult>(window.liro.api.boardExport(options)),
     exportSaveAs: (options: ExportOptions) => unwrap<ExportResult>(window.liro.api.boardExportSaveAs(options)),

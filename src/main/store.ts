@@ -77,11 +77,18 @@ export class Store {
         changed = true
       }
     }
+    if (this.index.boards.some((board) => typeof board.order !== 'number')) {
+      const legacy = [...this.index.boards].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+      legacy.forEach((board, i) => {
+        board.order = i
+      })
+      changed = true
+    }
     if (changed) this.saveIndex()
   }
 
   saveIndex(): void {
-    this.index.boards.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+    this.index.boards.sort(compareBoards)
     writeAtomic(indexFile(), JSON.stringify(this.index, null, 2))
   }
 
@@ -142,6 +149,22 @@ export class Store {
     this.saveIndex()
   }
 
+  reorderBoards(ids: string[]): void {
+    const placed = new Set<string>()
+    let at = 0
+    for (const id of ids) {
+      const board = this.meta(id)
+      if (!board || placed.has(id)) continue
+      placed.add(id)
+      board.order = at++
+    }
+    for (const board of [...this.index.boards].sort(compareBoards)) {
+      if (placed.has(board.id)) continue
+      board.order = at++
+    }
+    this.saveIndex()
+  }
+
   createDoc(docId: string, doc: BoardDoc): void {
     mkdirSync(assetsDir(docId), { recursive: true })
     this.writeDoc(doc)
@@ -171,8 +194,14 @@ export class Store {
       assetBytes: doc.stats.assetsBytes
     }
     if (existing) Object.assign(existing, meta)
-    else this.index.boards.unshift(meta)
+    else this.index.boards.unshift({ ...meta, order: this.topOrder() - 1 })
     this.saveIndex()
+  }
+
+  private topOrder(): number {
+    let top = 0
+    for (const board of this.index.boards) top = Math.min(top, board.order ?? 0)
+    return top
   }
 
   readDoc(docId: string): BoardDoc {
@@ -267,8 +296,12 @@ export class Store {
   }
 }
 
-function folderSize(dir: string): number {
-  let total = 0
+function compareBoards(a: BoardMeta, b: BoardMeta): number {
+  if (a.order !== b.order) return (a.order ?? 0) - (b.order ?? 0)
+  return a.updatedAt < b.updatedAt ? 1 : -1
+}
+
+function folderSize(dir: string): number {  let total = 0
   const walk = (current: string): void => {
     let entries: string[] = []
     try {

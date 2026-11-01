@@ -4,6 +4,7 @@ import https from 'node:https'
 import { join } from 'node:path'
 import { app, BrowserWindow } from 'electron'
 import updater from 'electron-updater'
+import type { NotifyKind } from '@shared/api'
 
 const { autoUpdater } = updater
 
@@ -32,6 +33,7 @@ interface Paths {
 
 const FIRST_DELAY = 9000
 const PERIOD = 10 * 60 * 1000
+const STALL = 30000
 const RELEASES = 'LiroOrg/LiroReleases'
 const MIN_ASAR = 1000000
 const MIN_UPDATER = 10000
@@ -52,7 +54,7 @@ function send(status: UpdateStatus, terminal = false): void {
   if (win && !win.isDestroyed()) win.webContents.send('event:update:status', payload)
 }
 
-function notify(text: string, kind: 'info' | 'error' | 'success'): void {
+function notify(text: string, kind: NotifyKind): void {
   if (win && !win.isDestroyed()) win.webContents.send('event:toast', { text, kind })
 }
 
@@ -68,7 +70,7 @@ function paths(): Paths | null {
   const work = join(app.getPath('userData'), 'updater')
   return {
     target: join(process.resourcesPath, 'app.asar'),
-    staged: join(work, 'app.asar'),
+    staged: join(work, 'app.next'),
     backup: join(process.resourcesPath, 'app.asar.bak'),
     lock: join(app.getPath('userData'), 'updating.json'),
     report: join(app.getPath('userData'), 'update-result.txt'),
@@ -107,8 +109,9 @@ async function ensureUpdater(version: string): Promise<string | null> {
     await download(link, where.downloaded)
     if (statSync(where.downloaded).size < MIN_UPDATER) throw new Error('апдейтер слишком мал')
     return where.downloaded
-  } catch {
+  } catch (error) {
     rmSync(where.downloaded, { force: true })
+    note(where, `апдейтер ${version}: ${reason(error)}`)
     return null
   }
 }
@@ -189,13 +192,21 @@ function download(link: string, file: string): Promise<void> {
         const total = Number(response.headers['content-length'] ?? 0)
         let got = 0
         const sink = createWriteStream(file)
+        sink.on('error', (error) => {
+          response.destroy()
+          reject(error)
+        })
         response.on('data', (chunk: Buffer) => {
+          request.setTimeout(STALL)
           got += chunk.length
           if (total) report(Math.min(99, Math.round((got / total) * 100)))
         })
+        response.on('error', (error) => reject(error))
         response.pipe(sink)
         sink.on('finish', () => sink.close(() => resolve()))
-        sink.on('error', (error) => reject(error))
+      })
+      request.setTimeout(STALL, () => {
+        request.destroy(new Error('скачивание встало'))
       })
       request.on('error', (error) => reject(error))
     }
@@ -219,19 +230,31 @@ async function patchAsar(version: string): Promise<void> {
   stagedSize = 0
   send({ phase: 'downloading', version, percent: 0 })
   try {
+    mkdirSync(where.work, { recursive: true })
     await download(`https://github.com/${RELEASES}/releases/download/v${version}/app.asar`, where.staged)
     stagedSize = statSync(where.staged).size
     if (stagedSize < MIN_ASAR) throw new Error('файл слишком мал')
     stagedVersion = version
     send({ phase: 'ready', version }, true)
-  } catch {
+  } catch (error) {
     rmSync(where.staged, { force: true })
     stagedSize = 0
+    note(where, `скачивание ${version}: ${reason(error)}`)
     send({ phase: 'error' }, true)
   } finally {
     downloading = false
     lastPercent = -1
   }
+}
+
+function reason(error: unknown): string {
+  return error instanceof Error ? `${error.message}` : String(error)
+}
+
+function note(where: Paths, text: string): void {
+  try {
+    writeFileSync(join(where.work, 'error.txt'), `${new Date().toISOString()} ${text}`)
+  } catch {}
 }
 
 function stopTimers(): void {
@@ -259,9 +282,11 @@ function wire(): void {
     send({ phase: 'current' }, true)
   })
 
-  autoUpdater.on('error', () => {
+  autoUpdater.on('error', (error: unknown) => {
     downloading = false
     lastPercent = -1
+    const where = paths()
+    if (where) note(where, `проверка: ${reason(error)}`)
     send({ phase: 'error' }, true)
   })
 }
@@ -288,7 +313,7 @@ export function startUpdater(getWindow: () => BrowserWindow | null): void {
   setTimeout(() => {
     const result = takeSwapReport()
     if (!result) return
-    if (result.ok) notify(`Liro обновлён до ${result.version}`, 'success')
+    if (result.ok) notify(`Liro обновлён до ${result.version}`, 'update-applied')
     else notify(`Обновление ${result.version} не применилось: файлы были заняты. Попробуйте ещё раз.`, 'error')
   }, 1600)
   try {

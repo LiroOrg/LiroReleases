@@ -17,9 +17,10 @@ const PAPER_MM: Record<string, { width: number; height: number }> = {
 
 export interface RenderQuery {
   docId: string
-  scope: 'board' | 'frame' | 'selection'
+  scope: 'board' | 'frame' | 'selection' | 'thumb'
   targetId?: string
   selection?: string
+  bbox?: Rect
   scale: number
   background: 'white' | 'transparent'
   mode: 'png' | 'html' | 'print'
@@ -38,11 +39,17 @@ export function readRenderQuery(): RenderQuery | null {
   const docId = search.get('docId')
   if (!docId) return null
   const selection = search.get('selection') ?? ''
+  const bboxRaw = (search.get('bbox') ?? '').split(',').map(Number)
+  const bbox =
+    bboxRaw.length === 4 && bboxRaw.every((n) => Number.isFinite(n)) && bboxRaw[2] > 0 && bboxRaw[3] > 0
+      ? { x: bboxRaw[0], y: bboxRaw[1], width: bboxRaw[2], height: bboxRaw[3] }
+      : undefined
   return {
     docId,
     scope: (search.get('scope') as RenderQuery['scope']) ?? 'board',
     targetId: search.get('targetId') ?? undefined,
     selection: selection || undefined,
+    bbox,
     scale: Number(search.get('scale') ?? '1') || 1,
     background: (search.get('background') as 'white' | 'transparent') ?? 'white',
     mode: (search.get('mode') as RenderQuery['mode']) ?? 'png',
@@ -83,6 +90,7 @@ export function RenderMode(): ReactNode {
 
   const region = useMemo<Rect>(() => {
     if (!doc) return { x: 0, y: 0, width: 100, height: 100 }
+    if (query?.scope === 'thumb' && query.bbox) return query.bbox
     if (query?.scope === 'frame' && query.targetId) {
       const frame = doc.items.find((item) => item.id === query.targetId)
       if (frame) return { x: frame.x - 60, y: frame.y - 60, width: frame.w + 120, height: frame.h + 120 }
@@ -146,6 +154,12 @@ export function RenderMode(): ReactNode {
       height = paper.height * query.tileRows
       const mm = PAPER_MM[query.paper] ?? PAPER_MM.a3
       setInfo({ width, height, printWidth: String(mm.width), printHeight: String(mm.height), ready: true })
+      return
+    }
+    if (query.scope === 'thumb') {
+      width = Math.max(1, Math.round(query.width))
+      height = Math.max(1, Math.round(query.height))
+      setInfo({ width, height, printWidth: '0', printHeight: '0', ready: true })
       return
     }
     width = Math.max(1, Math.round(region.width * query.scale))
@@ -361,6 +375,23 @@ ${viewer}
       >
         <style>{`@page{size:${mm.width}mm ${mm.height}mm;margin:0}`}</style>
         {pages}
+      </div>
+    )
+  }
+
+  if (query.scope === 'thumb') {
+    const frameWidth = Math.max(1, Math.round(query.width))
+    const frameHeight = Math.max(1, Math.round(query.height))
+    const fit = Math.min(1, frameWidth / region.width, frameHeight / region.height)
+    const offsetX = (frameWidth - region.width * fit) / 2 - region.x * fit
+    const offsetY = (frameHeight - region.height * fit) / 2 - region.y * fit
+    return (
+      <div
+        className="rendermode"
+        data-background={query.background}
+        style={{ position: 'fixed', inset: 0, overflow: 'hidden' }}
+      >
+        {stage(offsetX, offsetY, fit, frameWidth / fit, frameHeight / fit, 'main')}
       </div>
     )
   }
