@@ -15,12 +15,12 @@ export async function readChanges(): Promise<ChangeEntry[]> {
     const remote = parseChanges(await response.text())
     if (remote.length) return remote
   } catch {
-    return bundled()
+    return readBundledChanges()
   }
-  return bundled()
+  return readBundledChanges()
 }
 
-function bundled(): ChangeEntry[] {
+export function readBundledChanges(): ChangeEntry[] {
   for (const file of [join(app.getAppPath(), 'changes.yml'), join(__dirname, '../../changes.yml')]) {
     try {
       const entries = parseChanges(readFileSync(file, 'utf8'))

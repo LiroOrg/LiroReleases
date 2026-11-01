@@ -14,6 +14,8 @@ import { deriveConnectorPoints } from '@shared/geometry'
 import { buildSvg } from './export/svg'
 import { fitScale } from './export/render'
 import { parseRoute } from '@shared/route'
+import { parseChanges } from '@shared/changes'
+import { readBundledChanges } from './changes'
 import { decryptRoom, encryptRoom, newCode, normalizeCode, roomId } from './live/crypto'
 import { codeFromLink, linkFromArgv } from './live/protocol'
 import {
@@ -743,6 +745,43 @@ export function runSelfTest(): SelfTestResult {
     'маршрут подключения',
     parseRoute(`#/join/${code}`).name === 'join' &&
       (parseRoute(`#/join/${code}`) as { code: string }).code === code
+  )
+
+  const tuple = (value: string): number[] => value.split('.').map((part) => Number(part) || 0)
+  const notOlder = (left: string, right: string): boolean => {
+    const a = tuple(left)
+    const b = tuple(right)
+    for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+      const delta = (a[index] ?? 0) - (b[index] ?? 0)
+      if (delta !== 0) return delta > 0
+    }
+    return true
+  }
+  const sample = parseChanges(
+    '- version: 1.2.3\n  notes:\n    - Первая строка\n    - Вторая строка\n\n- version: 1.2.2\n  notes:\n    - Одна строка\n'
+  )
+  check(results, 'изменения: версии', sample.length === 2 && sample[0].version === '1.2.3', JSON.stringify(sample))
+  check(results, 'изменения: заметки', sample[0].notes.length === 2 && sample[1].notes[0] === 'Одна строка')
+  check(results, 'изменения: пустая версия отбрасывается', parseChanges('- version: 1.0.0\n  notes:\n').length === 0)
+  check(results, 'изменения: порядок версий', notOlder('1.14.9', '1.14.10') === false && notOlder('1.14.10', '1.14.9'))
+
+  const shipped = readBundledChanges()
+  check(results, 'файл изменений: читается', shipped.length > 0)
+  check(
+    results,
+    'файл изменений: свежие версии сверху',
+    shipped.every((entry, index) => index === 0 || notOlder(shipped[index - 1].version, entry.version))
+  )
+  check(
+    results,
+    'файл изменений: только про доску',
+    shipped.every((entry) => entry.notes.every((note) => !/updater|asar|значк|обновл|electron|github|миро/i.test(note))),
+    JSON.stringify(shipped.find((entry) => entry.notes.some((note) => /updater|asar|значк|обновл|electron|github|миро/i.test(note))))
+  )
+  check(
+    results,
+    'файл изменений: короткие строки',
+    shipped.every((entry) => entry.notes.every((note) => note.length <= 120))
   )
 
   return results
