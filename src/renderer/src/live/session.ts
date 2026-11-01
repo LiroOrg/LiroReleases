@@ -45,6 +45,7 @@ export interface LiveSessionOptions {
   role: 'host' | 'guest'
   selfId: string
   selfName: string
+  canEdit: boolean
   onMessage: (message: LiveMessage) => void
   onStateChange: (connected: boolean) => void
   onCursor: (cursor: RemoteCursor) => void
@@ -74,7 +75,7 @@ export class LiveSession {
   private received = 0
   private partnerId = ''
   private partnerName = ''
-  private canEdit = false
+  private canEdit: boolean
   private partnerIsHost = false
   private readonly pendingChunks = new Map<string, { total: number; parts: string[]; createdAt: number }>()
   private solidPreview: { id: string; pitch: number; yaw: number; targetPitch: number; targetYaw: number } | null = null
@@ -84,6 +85,7 @@ export class LiveSession {
     this.currentRole = options.role
     this.selfId = options.selfId
     this.selfName = options.selfName
+    this.canEdit = options.canEdit
   }
 
   get isConnected(): boolean {
@@ -229,6 +231,7 @@ export class LiveSession {
       this.partnerName = message.name || 'Участник'
       this.partnerIsHost = message.host
       this.options.onParticipant(this.partner!)
+      if (this.currentRole === 'host' && !message.host) this.sendOps({ t: 'perm', canEdit: this.canEdit })
       return
     }
     if (message.t === 'ping') {

@@ -68,7 +68,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
   const [partner, setPartner] = useState<LiveParticipant | null>(null)
   const [ping, setPing] = useState(0)
   const [connected, setConnected] = useState(false)
-  const [canEdit, setCanEdit] = useState(false)
+  const [canEdit, setCanEdit] = useState(true)
   const [preparing, setPreparing] = useState(false)
   const [watching, setWatching] = useState(false)
   const [following, setFollowing] = useState(false)
@@ -82,7 +82,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
   const cursorTimerRef = useRef<number | null>(null)
   const pendingCursorRef = useRef<{ x: number; y: number; hidden: boolean } | null>(null)
   const selfIdRef = useRef(randomId())
-  const canEditRef = useRef(false)
+  const canEditRef = useRef(true)
   const codeRef = useRef<string | null>(null)
   const roleRef = useRef<LiveRole>('host')
   const lastCursorSentRef = useRef(0)
@@ -129,6 +129,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       const session = new LiveSession({
         role,
         selfId: selfIdRef.current,
+        canEdit: role === 'host' ? canEditRef.current : true,
         selfName: options.userName || (role === 'host' ? 'Хост' : 'Гость'),
         onMessage: handleMessage,
         onStateChange: (value) => {
