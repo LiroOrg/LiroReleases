@@ -19,10 +19,11 @@ import {
   Save
 } from 'lucide-react'
 import { api } from '../lib/api'
+import type { ChangeEntry } from '@shared/changes'
 import logo from '../../../../resources/icon-512.png'
 import { useApp } from '../lib/store'
 import { selfTest } from '../lib/boardClipboard'
-import { usePrompt } from '../components/ui'
+import { Modal, usePrompt } from '../components/ui'
 import { navigate } from '../router'
 
 function errorText(error: unknown): string {
@@ -94,6 +95,8 @@ export function About(): ReactNode {
   const toast = useApp((state) => state.toast)
   const capture = useApp((state) => state.capture)
   const [storage, setStorage] = useState('')
+  const [changes, setChanges] = useState<ChangeEntry[] | null>(null)
+  const [changesOpen, setChangesOpen] = useState(false)
   const { ask, element: promptElement } = usePrompt()
 
   useEffect(() => {
@@ -123,6 +126,19 @@ export function About(): ReactNode {
       toast(`Папка: ${path}`, 'file')
     } catch (error) {
       toast(errorText(error), 'error')
+    }
+  }
+
+  const openChanges = async (): Promise<void> => {
+    setChangesOpen(true)
+    if (changes) return
+    try {
+      const entries = await api.changes.read()
+      if (!entries.length) throw new Error('Список изменений недоступен')
+      setChanges(entries)
+    } catch (error) {
+      toast(errorText(error), 'error')
+      setChangesOpen(false)
     }
   }
 
@@ -169,10 +185,10 @@ export function About(): ReactNode {
 
         <div className="card">
           <div className="rowlist">
-            <div className="rowitem">
+            <button type="button" className="rowitem rowitem--action" onClick={() => void openChanges()}>
               <span className="rowitem__grow">Версия</span>
               <span className="mono">{appInfo?.version || '—'}</span>
-            </div>
+            </button>
             <div className="rowitem">
               <span className="rowitem__grow">Electron</span>
               <span className="mono">{appInfo?.electron || '—'}</span>
@@ -369,6 +385,26 @@ export function About(): ReactNode {
           </div>
         </div>
       </div>
+      <Modal open={changesOpen} title="Что нового" onClose={() => setChangesOpen(false)}>
+        <div className="changelog">
+          {changes ? (
+            changes.map((entry) => (
+              <div key={entry.version} className="changelog__entry">
+                <div className="changelog__version mono">{entry.version}</div>
+                <div className="changelog__notes">
+                  {entry.notes.map((note) => (
+                    <div key={note} className="changelog__note">
+                      {note}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="changelog__loading spinner" />
+          )}
+        </div>
+      </Modal>
       {promptElement}
     </div>
   )

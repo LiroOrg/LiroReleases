@@ -1,7 +1,7 @@
 {
   "name": "liro",
   "productName": "Liro",
-  "version": "1.14.11",
+  "version": "1.14.12",
   "description": "Настольное приложение для досок. Работает офлайн",
   "main": "./out/main/index.js",
   "author": "Liro",
@@ -31,6 +31,7 @@
     "files": [
       "out/**/*",
       "resources/**/*",
+      "changes.yml",
       "!resources/updater/**",
       "!resources/liro-file.ico"
     ],

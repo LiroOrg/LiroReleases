@@ -26,6 +26,7 @@ import { exportBoard, exportToPath } from './export/exporter'
 import { exportFolder } from './export/render'
 import { openPreview, previewFor, readPreviewText, type PreviewPayload } from './preview'
 import { askToRestart, checkForUpdate } from './updater'
+import { readChanges } from './changes'
 import { sanitizeFileName } from '@shared/util'
 import type { RawItem } from './import/normalize'
 import { dataUrlToBuffer } from './import/server'
@@ -772,6 +773,13 @@ export function registerIpc(): void {
   ipcMain.handle('update:apply', () => {
     askToRestart()
     return ok(true)
+  })
+  ipcMain.handle('changes:read', async () => {
+    try {
+      return ok(await readChanges())
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error), 'changes')
+    }
   })
   ipcMain.handle('shell:open-external', async (_e, url: string) => {
     await shell.openExternal(url)

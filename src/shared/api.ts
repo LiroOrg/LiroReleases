@@ -1,3 +1,4 @@
+import type { ChangeEntry } from './changes'
 import type {
   ApiImportOptions,
   BoardDoc,
@@ -188,6 +189,7 @@ export interface ApiLiro {
   pickFiles: (filters?: { name: string; extensions: string[] }[]) => Promise<IpcResult<FileRef[]>>
   updateCheck: (quiet?: boolean) => Promise<IpcResult<boolean>>
   updateApply: () => Promise<IpcResult<boolean>>
+  changesRead: () => Promise<IpcResult<ChangeEntry[]>>
 
   liveHostCreate: (offer: string, code?: string) => Promise<IpcResult<string>>
   liveHostCode: () => Promise<IpcResult<string>>

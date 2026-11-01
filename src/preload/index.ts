@@ -80,6 +80,7 @@ const api: ApiLiro = {
   pickFiles: (filters) => invoke('dialog:pick-files', filters),
   updateCheck: (quiet?: boolean) => invoke('update:check', quiet),
   updateApply: () => invoke('update:apply'),
+  changesRead: () => invoke('changes:read'),
   liveHostCreate: (offer, code) => invoke('live:host-create', offer, code),
   liveHostCode: () => invoke('live:host-code'),
   liveHostWait: (code) => invoke('live:host-wait', code),

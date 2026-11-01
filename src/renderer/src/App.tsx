@@ -98,7 +98,7 @@ export function App(): ReactNode {
         const name = payload.version ?? version
         pending = true
         readyVersion = name
-        toast(`Обновление ${name} скачано. Желаете ли перезагрузить приложение для применения обновлений?`, 'update-ready', {
+        toast(`Обновление ${name} скачано. Желаете ли перезагрузить приложение?`, 'update-ready', {
           sticky: true,
           actions: [
             { id: 'apply', label: 'Да', primary: true, run: () => void api.update.apply() },

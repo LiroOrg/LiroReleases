@@ -1,5 +1,6 @@
 import type { CaptureSnapshot, FileRef, SourceBoardSummary, PreviewPayload, PreviewText } from '@shared/api'
 import type { IpcResult } from '@shared/api'
+import type { ChangeEntry } from '@shared/changes'
 import type { ApiImportOptions, CaptureOptions } from '@shared/types'
 import type {
   BoardDoc,
@@ -150,6 +151,9 @@ export const api = {
   update: {
     check: (quiet?: boolean) => unwrap(window.liro.api.updateCheck(quiet)),
     apply: () => unwrap(window.liro.api.updateApply())
+  },
+  changes: {
+    read: () => unwrap<ChangeEntry[]>(window.liro.api.changesRead())
   },
   live: {
     hostCreate: (offer: string, code?: string) => unwrap<string>(window.liro.api.liveHostCreate(offer, code)),
