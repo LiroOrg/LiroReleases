@@ -4,18 +4,20 @@ const os = require('os')
 const path = require('path')
 
 function findMakeNsis() {
-  const roots = [
-    path.join(process.env.LOCALAPPDATA || '', 'electron-builder', 'Cache', 'nsis'),
-    path.join(process.env.LOCALAPPDATA || '', 'electron-builder', 'Cache')
-  ]
+  const root = path.join(process.env.LOCALAPPDATA || '', 'electron-builder', 'Cache')
   const found = []
-  for (const root of roots) {
-    if (!root || !fs.existsSync(root)) continue
-    for (const entry of fs.readdirSync(root)) {
-      const candidate = path.join(root, entry, 'makensis.exe')
-      if (fs.existsSync(candidate)) found.push(candidate)
+  const walk = (dir, depth) => {
+    if (depth > 3 || !fs.existsSync(dir)) return
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const target = path.join(dir, entry.name)
+      if (entry.isFile() && entry.name === 'makensis.exe') {
+        found.push(target)
+        continue
+      }
+      if (entry.isDirectory()) walk(target, depth + 1)
     }
   }
+  walk(root, 0)
   if (!found.length) throw new Error('makensis не найден')
   return found.sort().reverse()[0]
 }
