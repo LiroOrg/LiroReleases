@@ -2,14 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { Archive, ChevronDown, ChevronRight, Copy, FolderInput, LayoutGrid, Pencil, Pin, PinOff, Plus, Trash2 } from 'lucide-react'
+import { Archive, ChevronDown, ChevronRight, Copy, FolderInput, LayoutGrid, MoreHorizontal, Pencil, Pin, PinOff, Plus, Trash2 } from 'lucide-react'
 import type { BoardMeta, LibraryIndex, Project } from '@shared/types'
 import type { ToastKind } from '../lib/store'
 import { api } from '../lib/api'
 import { navigate, type Route } from '../router'
 import { FOLDER_COLORS, FOLDER_ICONS, FolderIcon, folderIconImageUrl } from './folderIcon'
 import type { MenuItem } from './menu'
-import { ContextMenu } from './menu'
+import { ContextMenu, Menu } from './menu'
 import { Modal } from './ui'
 
 const NONE = 'none'
@@ -484,6 +484,18 @@ export function FolderTree(props: TreeProps): ReactNode {
     { id: 'delete', label: 'Удалить папку', icon: <Trash2 size={14} />, danger: true, line: true, run: () => void removeProject(project) }
   ]
 
+  const folderMenu = (project: Project): MenuItem[] => [
+    {
+      id: 'pin',
+      label: project.pinned ? 'Открепить' : 'Закрепить',
+      icon: project.pinned ? <PinOff size={14} /> : <Pin size={14} />,
+      active: project.pinned,
+      run: () => void togglePin(project)
+    },
+    { id: 'rename', label: 'Настроить папку', icon: <Pencil size={14} />, run: () => setEditing(project) },
+    { id: 'delete', label: 'Удалить папку', icon: <Trash2 size={14} />, danger: true, line: true, run: () => void removeProject(project) }
+  ]
+
   const rowStyle = (container: string, id: string): CSSProperties | undefined => {
     const offset = shift(container, id)
     return offset ? { transform: `translateY(${offset}px)` } : undefined
@@ -594,15 +606,12 @@ export function FolderTree(props: TreeProps): ReactNode {
           </button>
           {project ? (
             <div className="tree__tools">
-              <button type="button" title={project.pinned ? 'Открепить' : 'Закрепить'} onClick={() => void togglePin(project)}>
-                {project.pinned ? <PinOff size={13} /> : <Pin size={13} />}
+              <button type="button" title="Новая доска в папке" onClick={() => void newBoard(project.id)}>
+                <Plus size={13} />
               </button>
-              <button type="button" title="Настроить папку" onClick={() => setEditing(project)}>
-                <Pencil size={13} />
-              </button>
-              <button type="button" title="Удалить папку" onClick={() => void removeProject(project)}>
-                <Trash2 size={13} />
-              </button>
+              <Menu label="Папка" align="left" items={folderMenu(project)}>
+                <MoreHorizontal size={13} />
+              </Menu>
             </div>
           ) : null}
         </div>

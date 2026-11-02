@@ -831,7 +831,8 @@ button.homefoot__item:hover {
   flex: none;
 }
 
-.tree:hover .tree__tools {
+.tree:hover .tree__tools,
+.tree:has(.menu__trigger[data-active='true']) .tree__tools {
   display: flex;
 }
 
