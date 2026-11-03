@@ -42,7 +42,6 @@ function strokeColorOf(item: BoardItem): string | null {
 }
 
 function fillColorOf(item: BoardItem): string | null {
-  if (item.kind === 'shape') return item.fillColor
   if (item.kind === 'sticky') return item.color
   return null
 }
@@ -401,15 +400,16 @@ export function Inspector(props: InspectorProps): ReactNode {
             }}
           />
 
-          <ColorRow
-            label="Заливка"
-            value={fillColorOf(single)}
-            colors={single.kind === 'sticky' ? STICKY_PALETTE : PALETTE}
-            onPick={(color) => {
-              if (single.kind === 'shape') props.onPatch(single.id, { fillColor: color } as Partial<BoardItem>)
-              else if (single.kind === 'sticky') props.onPatch(single.id, { color } as Partial<BoardItem>)
-            }}
-          />
+          {single.kind === 'sticky' ? (
+            <ColorRow
+              label="Заливка"
+              value={fillColorOf(single)}
+              colors={STICKY_PALETTE}
+              onPick={(color) => {
+                props.onPatch(single.id, { color } as Partial<BoardItem>)
+              }}
+            />
+          ) : null}
 
           <ColorRow
             label="Цвет текста"
@@ -540,15 +540,16 @@ export function Inspector(props: InspectorProps): ReactNode {
             }}
           />
 
-          <ColorRow
-            label="Заливка"
-            value={items.map(fillColorOf).find((value) => value !== null) ?? null}
-            colors={PALETTE}
-            onPick={(color) => {
-              props.onPatchMany(idsOf(items, ['shape']), { fillColor: color } as Partial<BoardItem>)
-              props.onPatchMany(idsOf(items, ['sticky']), { color } as Partial<BoardItem>)
-            }}
-          />
+          {items.some((item) => item.kind === 'sticky') ? (
+            <ColorRow
+              label="Заливка"
+              value={items.map(fillColorOf).find((value) => value !== null) ?? null}
+              colors={STICKY_PALETTE}
+              onPick={(color) => {
+                props.onPatchMany(idsOf(items, ['sticky']), { color } as Partial<BoardItem>)
+              }}
+            />
+          ) : null}
 
           <ColorRow
             label="Цвет текста"

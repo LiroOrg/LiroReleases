@@ -133,8 +133,8 @@ export function TextEditor(props: {
       spellCheck={false}
       role="textbox"
       aria-multiline="true"
-      aria-label={props.placeholder}
-      data-placeholder={props.placeholder}
+      aria-label={props.placeholder || 'Текст'}
+      data-placeholder={props.placeholder || undefined}
       data-auto={props.autoWidth ? 'true' : undefined}
       style={{
         left: props.box.x,

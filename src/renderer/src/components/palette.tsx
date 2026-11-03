@@ -26,30 +26,24 @@ function isLight(hex: string): boolean {
 }
 
 const HUES: Array<[number, number]> = [
-  [2, 0.7], [20, 0.78], [36, 0.82], [50, 0.78], [76, 0.62], [140, 0.52],
-  [172, 0.52], [196, 0.62], [216, 0.7], [248, 0.62], [280, 0.56], [322, 0.62]
+  [2, 0.95], [20, 0.98], [36, 1], [50, 0.98], [76, 0.9], [140, 0.8],
+  [172, 0.78], [196, 0.88], [216, 0.95], [248, 0.85], [280, 0.82], [322, 0.88]
 ]
 
 const TONES: Array<[number, number]> = [
-  [0.9, 0.6], [0.78, 0.82], [0.64, 1], [0.48, 1], [0.32, 0.88]
+  [0.5, 1], [0.66, 0.92], [0.8, 0.78], [0.91, 0.56], [0.34, 0.9], [0.2, 0.72]
 ]
 
-const GRAYS = [0.97, 0.93, 0.86, 0.77, 0.66, 0.55, 0.44, 0.35, 0.27, 0.19, 0.12, 0.06]
+const GRAYS = [0.97, 0.88, 0.74, 0.55, 0.33, 0.12]
 
 const GRID_COLUMNS = 6
 
-function serpentine(colors: string[]): string[] {
-  const rows: string[][] = []
-  for (let index = 0; index < colors.length; index += GRID_COLUMNS)
-    rows.push(colors.slice(index, index + GRID_COLUMNS))
-  return rows.flatMap((row, index) => (index % 2 ? row.slice().reverse() : row))
-}
-
 function buildAllColors(): string[] {
-  const ramp = GRAYS.slice().reverse().map((tone) => hslToHex(220, 0.02, tone))
-  for (const [lightness, saturation] of TONES)
-    for (const [hue, base] of HUES) ramp.push(hslToHex(hue, base * saturation, lightness))
-  return serpentine(ramp)
+  const ramp: string[] = []
+  for (const [hue, base] of HUES)
+    for (const [lightness, saturation] of TONES) ramp.push(hslToHex(hue, base * saturation, lightness))
+  for (const tone of GRAYS) ramp.push(hslToHex(220, 0.02, tone))
+  return ramp
 }
 
 const ALL_COLORS = buildAllColors()

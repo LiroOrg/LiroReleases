@@ -26,6 +26,12 @@ const DEFAULT_SETTINGS: Settings = {
     { color: '#3f74cf', width: 12 }
   ],
   brushIndex: 0,
+  markerPresets: [
+    { color: '#fff9b1', width: 12 },
+    { color: '#cfe8fb', width: 18 },
+    { color: '#d9f2e3', width: 24 }
+  ],
+  markerIndex: 0,
   captureToken: ''
 }
 

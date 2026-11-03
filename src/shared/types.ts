@@ -95,6 +95,7 @@ export interface TextItem extends ItemBase {
   align: 'left' | 'center' | 'right'
   fontSize: number
   fontFamily?: string
+  column?: boolean
   urls: string[]
 }
 
@@ -145,6 +146,13 @@ export const SHAPE_NAMES = [
   'arrow_up',
   'arrow_down',
   'arrow_double',
+  'arrow_up_down',
+  'arrow_four_way',
+  'arrow_bend',
+  'arrow_bend_flip',
+  'arrow_circular',
+  'speech_rect',
+  'speech_cloud',
   'flowchart_start',
   'flowchart_end',
   'flowchart_process',
@@ -152,6 +160,20 @@ export const SHAPE_NAMES = [
   'flowchart_input_output',
   'flowchart_document',
   'flowchart_database',
+  'flowchart_stored',
+  'flowchart_predefined',
+  'flowchart_internal',
+  'flowchart_manual_input',
+  'flowchart_manual_op',
+  'flowchart_display',
+  'flowchart_merge',
+  'flowchart_or',
+  'flowchart_sum',
+  'flowchart_extract',
+  'flowchart_delay',
+  'flowchart_connector',
+  'flowchart_offpage',
+  'flowchart_preparation',
   'unknown'
 ] as const
 
@@ -172,6 +194,10 @@ export interface ShapeItem extends ItemBase {
   fontSize: number
   textColor?: string
   fontFamily?: string
+  adjust?: number
+  adjust2?: number
+  tail?: RelativeOffset
+  vertices?: RelativeOffset[]
   urls: string[]
 }
 
@@ -238,6 +264,12 @@ export interface RelativeOffset {
   y: number
 }
 
+export interface ConnectorBend {
+  at: number
+  x: number
+  y: number
+}
+
 export interface ConnectorItem extends ItemBase {
   kind: 'connector'
   points: TextPoint[]
@@ -253,6 +285,7 @@ export interface ConnectorItem extends ItemBase {
   endOffset?: RelativeOffset
   captions?: string[]
   textColor?: string
+  bends?: ConnectorBend[]
   unsupported?: boolean
 }
 
@@ -542,6 +575,8 @@ export interface Settings {
   toolbarExtras: string[]
   brushPresets?: BrushPreset[]
   brushIndex?: number
+  markerPresets?: BrushPreset[]
+  markerIndex?: number
   captureToken?: string
 }
 

@@ -4,6 +4,7 @@ import { parseRichText, type Block, type Run } from '@shared/richtext'
 import { contrastColor } from '@shared/color'
 import type { BoardDoc, BoardItem, Rect, SolidItem, TextItem } from '@shared/types'
 import { curvePath } from '@shared/curve'
+import { connectorBounds } from '@shared/geometry'
 import { rotatedBox } from '@shared/util'
 import { solidBounds } from '@shared/three'
 import { youtubeId } from '../lib/youtube'
@@ -30,8 +31,11 @@ function solidRect(item: SolidItem): Rect {
   return rect
 }
 
-export function itemBounds(item: BoardItem): Rect {
+const noItems = new Map<string, BoardItem>()
+
+export function itemBounds(item: BoardItem, byId: Map<string, BoardItem> = noItems): Rect {
   if (item.kind === 'solid') return solidRect(item)
+  if (item.kind === 'connector') return connectorBounds(item, byId)
   return { x: item.x, y: item.y, width: Math.max(1, item.w), height: Math.max(1, item.h) }
 }
 
@@ -43,9 +47,10 @@ export function visibleItems(doc: BoardDoc, visible: Rect): BoardItem[] {
     width: visible.width + margin * 2,
     height: visible.height + margin * 2
   }
+  const index = new Map(doc.items.map((entry) => [entry.id, entry]))
   const out: BoardItem[] = []
   for (const item of doc.items) {
-    const rect = item.kind === 'solid' ? itemBounds(item) : rotatedBox(itemBounds(item), item.rotation)
+    const rect = item.kind === 'solid' ? itemBounds(item) : rotatedBox(itemBounds(item, index), item.rotation)
     if (
       rect.x > area.x + area.width ||
       rect.x + rect.width < area.x ||
@@ -234,6 +239,10 @@ function clampFont(value: number): number {
   return Math.max(6, Math.min(72, Math.round(value)))
 }
 
+export function shapeTextSize(item: { plain: string; w: number; h: number; fontSize: number }): number {
+  return fitFontSize(item.plain, item.w - 12, item.h - 10, Math.max(10, item.fontSize * 1.4), 7)
+}
+
 export const ItemLayer = memo(function ItemLayer(props: {
   items: BoardItem[]
   doc: BoardDoc
@@ -255,6 +264,7 @@ export const ItemLayer = memo(function ItemLayer(props: {
   cropId?: string | null
   loading?: Map<string, { done: number; total: number }>
 }): ReactNode {
+  const index = useMemo(() => new Map(props.doc.items.map((entry) => [entry.id, entry])), [props.doc.items])
   return (
     <>
       {props.items.map((item) => (
@@ -262,6 +272,7 @@ export const ItemLayer = memo(function ItemLayer(props: {
           key={item.id}
           item={item}
           doc={props.doc}
+          byId={index}
           assetUrl={props.assetUrl}
           selected={props.selectable && props.selection.has(item.id)}
           dimmed={false}
@@ -287,6 +298,7 @@ export const ItemLayer = memo(function ItemLayer(props: {
 export const ItemView = memo(function ItemView(props: {
   item: BoardItem
   doc: BoardDoc
+  byId?: Map<string, BoardItem>
   assetUrl: (file: string) => string
   selected: boolean
   dimmed: boolean
@@ -305,11 +317,12 @@ export const ItemView = memo(function ItemView(props: {
   loading?: { done: number; total: number }
 }): ReactNode {
   const { item, doc, assetUrl, selected, dimmed } = props
+  const box = item.kind === 'connector' ? itemBounds(item, props.byId ?? noItems) : null
   const style: CSSProperties = {
-    left: props.live?.x ?? item.x,
-    top: props.live?.y ?? item.y,
-    width: Math.max(1, item.w),
-    height: Math.max(1, item.h),
+    left: (props.live?.x ?? item.x) + (box ? box.x - item.x : 0),
+    top: (props.live?.y ?? item.y) + (box ? box.y - item.y : 0),
+    width: box ? Math.max(1, box.width) : Math.max(1, item.w),
+    height: box ? Math.max(1, box.height) : Math.max(1, item.h),
     transform: item.rotation ? `rotate(${item.rotation}deg)` : undefined,
     zIndex: item.z + 1,
     visibility: props.cropping ? 'hidden' : undefined,
@@ -418,12 +431,9 @@ function ItemBody(props: {
       return <TextFlow item={item} onFit={props.onFit} onLink={props.onLink} />
     }
     case 'shape': {
-      const fill = item.fillColor === 'transparent' ? 'none' : item.fillColor
-      const textColor = item.textColor ?? contrastColor(item.fillColor === 'transparent' ? '#ffffff' : item.fillColor)
+      const textColor = item.textColor ?? '#1a1a1a'
       const imported = Boolean(item.sourceType)
-      const size = imported
-        ? item.fontSize
-        : fitFontSize(item.plain, item.w - 12, item.h - 10, Math.max(10, item.fontSize * 1.4), 7)
+      const size = imported ? item.fontSize : shapeTextSize(item)
       const dash = strokeDash(item.borderStyle)
       return (
         <>
@@ -434,8 +444,8 @@ function ItemBody(props: {
             style={{ position: 'absolute', inset: 0, overflow: 'visible', opacity: item.opacity }}
           >
             <path
-              d={shapePath(item.shape, item.w, item.h)}
-              fill={fill}
+              d={shapePath(item.shape, item.w, item.h, item)}
+              fill="none"
               stroke={item.borderColor}
               strokeWidth={item.borderWidth}
               strokeDasharray={dash}

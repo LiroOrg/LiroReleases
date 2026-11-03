@@ -67,6 +67,11 @@ body,
   margin: 0;
 }
 
+html,
+body {
+  overflow: clip;
+}
+
 body {
   font-family: var(--font);
   font-size: calc(14px * var(--ui-scale));
@@ -75,7 +80,6 @@ body {
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  overflow: hidden;
   font-feature-settings: 'cv05' 1, 'ss03' 1;
   user-select: none;
   -webkit-user-select: none;

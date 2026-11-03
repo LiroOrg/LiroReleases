@@ -45,6 +45,7 @@ import {
   Redo2,
   RotateCw,
   Search,
+  Spline,
   SlidersHorizontal,
   Strikethrough,
   Trash2,
@@ -56,7 +57,7 @@ import {
   ZoomIn,
   ZoomOut
 } from 'lucide-react'
-import type { AssetRef, BoardDoc, BoardItem, BrushPreset, GraphExpr, GraphItem, GridMode, PathItem, Rect, ShapeName, SolidFace, SolidItem, SolidKind } from '@shared/types'
+import type { AssetRef, BoardDoc, BoardItem, BrushPreset, ConnectorBend, ConnectorItem, GraphExpr, GraphItem, GridMode, PathItem, Rect, ShapeItem, ShapeName, SolidFace, SolidItem, SolidKind, StrokeEnd } from '@shared/types'
 import { solidBounds, solidFaceAt, solidPolygons } from '@shared/three'
 import { compileFormula } from '@shared/graph'
 import { contrastColor, shadesOf } from '@shared/color'
@@ -64,14 +65,16 @@ import { faceLocalToWorld, faceWorldToLocal, polygonOverlapArea, projectPoint, s
 import { snapBox, unionBox } from './align'
 import type { Guide, Placed } from './align'
 import { boundsOfItems, clamp, fitTextBox, measureTextBox, rotatedBox, uid, withoutDanglingConnectors } from '@shared/util'
+import { anchorPoint, arrowHeadPath, bendByGrip, boundaryPoint, connectorGrips, curveControl, deriveConnectorPoints, sampleConnector, straightenConnector } from '@shared/geometry'
+import type { BendGrip } from '@shared/geometry'
 import { curvePath } from '@shared/curve'
 import { buildStroke, distanceToStroke, straightStroke } from '@shared/stroke'
 import { api } from '../lib/api'
 import { useApp } from '../lib/store'
 import { navigate } from '../router'
-import { ItemLayer, itemBounds, visibleItems } from './scene'
+import { ItemLayer, itemBounds, shapeTextSize, visibleItems } from './scene'
 import { sheetSize } from './tableView'
-import { SHAPE_GROUPS, SHAPE_LABELS, shapePath } from '@shared/shapes'
+import { SHAPE_GROUPS, SHAPE_LABELS, cornerRadius, hasCornerRadius, isVertexShape, shapeHandleValue, shapeHandles, shapeParams, shapePath, shapeVertices, snapVertexPoint } from '@shared/shapes'
 import { ConnectorLayer } from './connectors'
 import { BoardDetails } from './boardDetails'
 import { BoardSettings } from './boardSettings'
@@ -139,10 +142,11 @@ type DragMode =
       moved: boolean
     }
   | { kind: 'rubber'; startX: number; startY: number; currentX: number; currentY: number }
+  | { kind: 'textdraft'; startX: number; startY: number; currentX: number; currentY: number }
   | { kind: 'move'; startX: number; startY: number; ids: string[]; origins: Map<string, { x: number; y: number }>; moved: boolean }
   | { kind: 'erase'; removed: Set<string> }
   | { kind: 'create'; startX: number; startY: number; currentX: number; currentY: number; tool: CreateTool; shape: ShapeName }
-  | { kind: 'link'; fromId: string; point: { x: number; y: number } }
+  | { kind: 'link'; fromId: string; point: { x: number; y: number }; anchor: { x: number; y: number } }
   | { kind: 'rotate'; id: string; startX: number; startY: number; pitch: number; yaw: number }
   | {
       kind: 'face'
@@ -163,6 +167,25 @@ type DragMode =
       moved: boolean
     }
   | {
+      kind: 'adjust'
+      id: string
+      handle: ShapeAdjustHandle
+      startX: number
+      startY: number
+      base: ShapeItem
+      moved: boolean
+    }
+  | {
+      kind: 'bend'
+      id: string
+      grip: BendGrip
+      base: ConnectorBend[]
+      connector: ConnectorItem
+      from: { x: number; y: number }
+      to: { x: number; y: number }
+      moved: boolean
+    }
+  | {
       kind: 'turn'
       id: string
       centerX: number
@@ -175,11 +198,13 @@ type DragMode =
 
 type Tool = 'select' | 'pan' | 'pen' | 'erase' | 'create' | 'link' | 'text' | 'sticky' | 'image' | 'solid' | 'graph' | 'table'
 
-type CreateTool = 'rect' | 'ellipse' | 'triangle' | 'line' | 'arrow'
+type CreateTool = 'shape' | 'line' | 'arrow'
 
 type SolidMode = 'rotate' | 'move' | 'paint' | 'through'
 
 type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
+
+type ShapeAdjustHandle = string
 
 const RESIZE_HANDLES: Array<{ id: ResizeHandle; cx: number; cy: number; cursor: string }> = [
   { id: 'nw', cx: 0, cy: 0, cursor: 'nwse-resize' },
@@ -211,6 +236,22 @@ function rotatePoint(point: { x: number; y: number }, degrees: number): { x: num
   }
 }
 
+function attachOffset(item: BoardItem, point: { x: number; y: number }): { x: number; y: number } | null {
+  const box = itemBounds(item)
+  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  const dx = point.x - center.x
+  const dy = point.y - center.y
+  const distance = Math.hypot(dx, dy)
+  if (distance < 0.5) return null
+  const reach = Math.hypot(box.width, box.height)
+  const edge = boundaryPoint(item, { x: center.x + (dx / distance) * reach, y: center.y + (dy / distance) * reach })
+  const local = rotatePoint({ x: edge.x - center.x, y: edge.y - center.y }, -(item.rotation || 0))
+  return {
+    x: clamp((local.x + box.width / 2) / Math.max(1, box.width), 0, 1),
+    y: clamp((local.y + box.height / 2) / Math.max(1, box.height), 0, 1)
+  }
+}
+
 interface ResizeBox {
   x: number
   y: number
@@ -238,11 +279,23 @@ function resizedItem(item: BoardItem, origin: Rect, next: ResizeBox, handle: Res
   }
   if (item.kind === 'text') {
     const corner = handle.length > 1
+    if (handle === 'e' || handle === 'w') {
+      const inner = measureTextBox(item.plain || '', item.fontSize, Math.max(20, width - 4))
+      return {
+        ...item,
+        x,
+        y,
+        w: width,
+        h: Math.max(Math.round(item.fontSize * 1.3), inner.height + 4),
+        fontSize: item.fontSize,
+        column: true
+      }
+    }
     const scale = corner
       ? Math.max(width / Math.max(1, origin.width), height / Math.max(1, origin.height))
       : 1
     const fontSize = corner ? Math.round(clamp(item.fontSize * scale, 6, 400)) : item.fontSize
-    return { ...item, x, y, w: width, h: height, fontSize }
+    return { ...item, x, y, w: width, h: height, fontSize, column: corner ? item.column : true }
   }
   if (item.kind === 'sticky') {
     const fit = fitTextBox(item.plain, { width, minHeight: height, fontSize: item.fontSize, padX: 8, padY: 6 })
@@ -270,27 +323,84 @@ function resizedItem(item: BoardItem, origin: Rect, next: ResizeBox, handle: Res
 
 const CREATE_STROKES = new Set<CreateTool>(['line', 'arrow'])
 
-const ROUND_SHAPES = new Set<ShapeName>([
-  'circle',
-  'semicircle',
-  'quarter_circle',
-  'arch',
-  'cloud',
-  'blob',
-  'ring',
-  'seal',
-  'lens',
-  'speech_round',
-  'speech_oval',
-  'flowchart_start',
-  'flowchart_end',
-  'flowchart_document'
-])
+function LinkDraft(props: {
+  from: BoardItem | null
+  to: BoardItem | null
+  anchor: { x: number; y: number }
+  point: { x: number; y: number }
+  style: 'straight' | 'curved' | 'elbowed'
+  color: string
+  width: number
+  zoom: number
+  arrow: boolean
+}): ReactNode {
+  const { from: source, to: target, anchor, point, style, color, width, zoom, arrow } = props
+  const offset = source ? attachOffset(source, anchor) : null
+  const start = source ? (offset ? anchorPoint(source, offset) : boundaryPoint(source, point)) : anchor
+  const end = target && target.id !== source?.id ? boundaryPoint(target, start) : point
 
-function createToolForShape(shape: ShapeName): CreateTool {
-  if (ROUND_SHAPES.has(shape)) return 'ellipse'
-  if (shape === 'triangle' || shape === 'right_triangle') return 'triangle'
-  return 'rect'
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  const bend = Math.abs(dx) >= Math.abs(dy)
+  let control: { x: number; y: number } | null = null
+  let tail = start
+  let d = `M ${start.x} ${start.y} L ${end.x} ${end.y}`
+  if (style === 'curved') {
+    control = curveControl(start, end)
+    tail = control
+    d = `M ${start.x} ${start.y} Q ${control.x} ${control.y} ${end.x} ${end.y}`
+  } else if (style === 'elbowed') {
+    const corners = bend
+      ? [{ x: start.x + dx / 2, y: start.y }, { x: start.x + dx / 2, y: end.y }]
+      : [{ x: start.x, y: start.y + dy / 2 }, { x: end.x, y: start.y + dy / 2 }]
+    tail = corners[1]
+    d = [start, ...corners, end].map((entry, index) => `${index === 0 ? 'M' : 'L'} ${entry.x} ${entry.y}`).join(' ')
+  }
+
+  const angle = Math.atan2(end.y - tail.y, end.x - tail.x)
+  const head = Math.min(34 / zoom, Math.max(16 / zoom, (width * 6) / zoom))
+  const spread = head * 0.6
+  const barbs = { x: end.x - Math.cos(angle) * head, y: end.y - Math.sin(angle) * head }
+  const notch = { x: end.x - Math.cos(angle) * head * 0.55, y: end.y - Math.sin(angle) * head * 0.55 }
+  const left = { x: barbs.x - Math.sin(angle) * spread, y: barbs.y + Math.cos(angle) * spread }
+  const right = { x: barbs.x + Math.sin(angle) * spread, y: barbs.y - Math.cos(angle) * spread }
+
+  const pad = head + 16 / zoom
+  const box = {
+    x: Math.min(start.x, end.x) - pad,
+    y: Math.min(start.y, end.y) - pad,
+    w: Math.abs(dx) + pad * 2,
+    h: Math.abs(dy) + pad * 2
+  }
+
+  return (
+    <div className="linkdraft" style={{ left: box.x, top: box.y, width: box.w, height: box.h }}>
+      <svg width="100%" height="100%" viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`} overflow="visible">
+        <path
+          d={d}
+          fill="none"
+          stroke={color}
+          strokeWidth={Math.max(width, 1.6 / zoom)}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        {arrow ? (
+          <path
+            d={`M ${end.x} ${end.y} L ${left.x} ${left.y} L ${notch.x} ${notch.y} L ${right.x} ${right.y} Z`}
+            fill={color}
+          />
+        ) : null}
+        <circle
+          cx={start.x}
+          cy={start.y}
+          r={4.5 / zoom}
+          fill="#ffffff"
+          stroke={color}
+          strokeWidth={1.8 / zoom}
+        />
+      </svg>
+    </div>
+  )
 }
 
 function solidIcon(kind: SolidKind): ReactNode {
@@ -335,8 +445,8 @@ function alignOf(item: BoardItem): 'left' | 'center' | 'right' {
   return 'left'
 }
 
-function shapeTextColorOf(item: { textColor?: string; fillColor: string }): string {
-  return item.textColor ?? contrastColor(item.fillColor === 'transparent' ? '#ffffff' : item.fillColor)
+function shapeTextColorOf(item: { textColor?: string }): string {
+  return item.textColor ?? '#1a1a1a'
 }
 
 function textColorOf(item: BoardItem): string {
@@ -348,8 +458,12 @@ function textColorOf(item: BoardItem): string {
 
 function fillColorOf(item: BoardItem): string {
   if (item.kind === 'sticky') return item.color
-  if (item.kind === 'shape') return item.fillColor
   return '#ffffff'
+}
+
+function borderColorOf(item: BoardItem): string {
+  if (item.kind === 'shape') return item.borderColor
+  return NEW_SHAPE_BORDER
 }
 
 const SHAPE_ICON_BOX: Partial<Record<ShapeName, [number, number]>> = { pill: [20, 9] }
@@ -361,6 +475,41 @@ function shapeIcon(shape: ShapeName): ReactNode {
   return (
     <svg width="19" height="19" viewBox="-1.6 -1.6 23.2 23.2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
       <path d={shapePath(shape, box[0], box[1])} transform={shiftX || shiftY ? `translate(${shiftX} ${shiftY})` : undefined} />
+    </svg>
+  )
+}
+
+function dashIcon(style: 'normal' | 'dotted' | 'dashed'): ReactNode {
+  const dash = style === 'dashed' ? '7 5' : style === 'dotted' ? '1.5 4' : undefined
+  return (
+    <svg width="22" height="12" viewBox="0 0 22 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+      {dash ? <line x1="1" y1="6" x2="21" y2="6" strokeDasharray={dash} /> : <line x1="1" y1="6" x2="21" y2="6" />}
+    </svg>
+  )
+}
+
+const ARROW_CAP_ICON = arrowHeadPath(9)
+
+function capIcon(cap: StrokeEnd): ReactNode {
+  const shape = cap.toLowerCase()
+  const hollow = (shape.includes('diamond') || shape.includes('oval') || shape.includes('circle')) && !shape.includes('filled')
+  const paint = hollow ? { fill: 'none', stroke: 'currentColor', strokeWidth: 1.4 } : { fill: 'currentColor', stroke: 'none' }
+  const plain = !shape.includes('diamond') && !shape.includes('oval') && !shape.includes('circle') && !shape.includes('stealth')
+  const body = shape.includes('diamond')
+    ? '15,1.4 20.5,6 15,10.6 9.5,6'
+    : shape.includes('stealth')
+      ? '21,6 12.5,1.8 16.5,6 12.5,10.2'
+      : ''
+  return (
+    <svg width="22" height="12" viewBox="0 0 22 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <line x1="1" y1="6" x2={cap === 'none' ? '21' : '14'} y2="6" />
+      {shape.includes('oval') || shape.includes('circle') ? (
+        <ellipse cx="16.5" cy="6" rx="4.6" ry="3.4" {...paint} />
+      ) : cap === 'none' ? null : plain ? (
+        <path d={ARROW_CAP_ICON} transform="translate(21 6)" {...paint} />
+      ) : (
+        <polygon points={body} {...paint} />
+      )}
     </svg>
   )
 }
@@ -380,10 +529,23 @@ const HISTORY_LIMIT = 200
 const FIRST_BATCH = 300
 const MOVE_EASE = 0.4
 const QUICK_COLORS = ['#1f2023', '#d6484a', '#e0873a', '#3d9a68', '#3f74cf']
+const CONNECTOR_CAPS: StrokeEnd[] = ['none', 'arrow', 'stealth', 'filled_diamond', 'filled_oval']
+const CONNECTOR_CAP_LABELS: Record<string, string> = {
+  none: 'Без наконечника',
+  arrow: 'Стрела',
+  stealth: 'Узкая стрела',
+  filled_diamond: 'Ромб',
+  filled_oval: 'Овал'
+}
 const DEFAULT_BRUSHES: BrushPreset[] = [
   { color: '#1f2023', width: 3 },
   { color: '#d6484a', width: 6 },
   { color: '#3f74cf', width: 12 }
+]
+const DEFAULT_MARKERS: BrushPreset[] = [
+  { color: '#fff9b1', width: 12 },
+  { color: '#cfe8fb', width: 18 },
+  { color: '#d9f2e3', width: 24 }
 ]
 const STICKY_COLORS = ['#fff9b1', '#ffd8b1', '#cfe8fb', '#d9f2e3', '#f3e0ff']
 const GRAPH_DIVISIONS = [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100]
@@ -469,8 +631,7 @@ function cloneParent(parentId: string | undefined, source: BoardItem[], cloneIds
   return index < 0 ? undefined : cloneIds[index]
 }
 
-const NEW_SHAPE_COLOR = '#ffffff'
-const NEW_SHAPE_STROKE = '#1a1a1a'
+const NEW_SHAPE_BORDER = '#1a1a1a'
 
 function changed(base: BoardItem[], next: BoardItem[]): boolean {
   return next.some((entry, index) => entry !== base[index])
@@ -618,6 +779,7 @@ export function BoardView(props: { docId: string }): ReactNode {
   const [penOpacity, setPenOpacity] = useState(1)
   const [tool, setTool] = useState<Tool>('select')
   const [paletteHidden, setPaletteHidden] = useState(false)
+  const [shapePoints, setShapePoints] = useState<string | null>(null)
   const [faceLabel, setFaceLabel] = useState<{
     itemId: string
     face: string
@@ -664,28 +826,41 @@ export function BoardView(props: { docId: string }): ReactNode {
     [calculatorOpen, detailsOpen, showInspector, boardSettingsOpen, showExport]
   )
   
-  const [createTool, setCreateTool] = useState<CreateTool>('rect')
+  const [createTool, setCreateTool] = useState<CreateTool>('shape')
   const [createShape, setCreateShape] = useState<ShapeName>('rectangle')
   const [editing, setEditing] = useState<{ id: string; html: string; plain: string } | null>(null)
   const [textFormat, setTextFormat] = useState<TextFormatState>(emptyFormat)
   const [solidKind, setSolidKind] = useState<SolidKind>('cube')
   const [strokeColor, setStrokeColor] = useState(settings?.brushPresets?.[settings.brushIndex ?? 0]?.color ?? '#1f2023')
   const [strokeWidth, setStrokeWidth] = useState(settings?.brushPresets?.[settings.brushIndex ?? 0]?.width ?? 4)
-  const [shapeColor, setShapeColor] = useState(NEW_SHAPE_COLOR)
+  const [shapeBorder, setShapeBorder] = useState(NEW_SHAPE_BORDER)
   const [shapeStroke, setShapeStroke] = useState(2)
-  const [brushes, setBrushes] = useState<BrushPreset[]>(settings?.brushPresets?.length ? settings.brushPresets : DEFAULT_BRUSHES)
-  const [brushIndex, setBrushIndex] = useState(settings?.brushIndex ?? 0)
+  const [penBrushes, setPenBrushes] = useState<BrushPreset[]>(
+    settings?.brushPresets?.length ? settings.brushPresets : DEFAULT_BRUSHES
+  )
+  const [markerBrushes, setMarkerBrushes] = useState<BrushPreset[]>(
+    settings?.markerPresets?.length ? settings.markerPresets : DEFAULT_MARKERS
+  )
+  const [penIndex, setPenIndex] = useState(settings?.brushIndex ?? 0)
+  const [markerIndex, setMarkerIndex] = useState(settings?.markerIndex ?? 0)
+  const markerMode = penMode === 'highlighter'
+  const brushes = markerMode ? markerBrushes : penBrushes
+  const brushIndex = markerMode ? markerIndex : penIndex
   const brushRestoreRef = useRef(false)
+  const brushModeRef = useRef(penMode)
   const brushSaveTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (!settings || brushRestoreRef.current) return
     brushRestoreRef.current = true
-    const saved = settings.brushPresets?.length ? settings.brushPresets : DEFAULT_BRUSHES
-    setBrushes(saved)
-    const index = Math.min(Math.max(settings.brushIndex ?? 0, 0), saved.length - 1)
-    setBrushIndex(index)
-    const preset = saved[index]
+    const savedPen = settings.brushPresets?.length ? settings.brushPresets : DEFAULT_BRUSHES
+    const savedMarker = settings.markerPresets?.length ? settings.markerPresets : DEFAULT_MARKERS
+    setPenBrushes(savedPen)
+    setMarkerBrushes(savedMarker)
+    const index = Math.min(Math.max(settings.brushIndex ?? 0, 0), savedPen.length - 1)
+    setPenIndex(index)
+    setMarkerIndex(Math.min(Math.max(settings.markerIndex ?? 0, 0), savedMarker.length - 1))
+    const preset = savedPen[index]
     if (preset) {
       setStrokeColor(preset.color)
       setStrokeWidth(preset.width)
@@ -693,12 +868,22 @@ export function BoardView(props: { docId: string }): ReactNode {
   }, [settings])
 
   const persistBrushes = useCallback(
-    (next: BrushPreset[], index: number): void => {
+    (
+      nextPen: BrushPreset[],
+      nextPenIndex: number,
+      nextMarker: BrushPreset[],
+      nextMarkerIndex: number
+    ): void => {
       if (brushSaveTimerRef.current !== null) window.clearTimeout(brushSaveTimerRef.current)
       brushSaveTimerRef.current = window.setTimeout(() => {
         brushSaveTimerRef.current = null
         void api.settings
-          .set({ brushPresets: next, brushIndex: index })
+          .set({
+            brushPresets: nextPen,
+            brushIndex: nextPenIndex,
+            markerPresets: nextMarker,
+            markerIndex: nextMarkerIndex
+          })
           .then((saved) => setSettings(saved))
           .catch(() => undefined)
       }, 250)
@@ -708,38 +893,67 @@ export function BoardView(props: { docId: string }): ReactNode {
 
   const selectBrush = useCallback(
     (index: number): void => {
-      setBrushIndex(index)
+      if (markerMode) setMarkerIndex(index)
+      else setPenIndex(index)
       const preset = brushes[index]
       if (preset) {
         setStrokeColor(preset.color)
         setStrokeWidth(preset.width)
       }
-      persistBrushes(brushes, index)
+      persistBrushes(penBrushes, markerMode ? penIndex : index, markerBrushes, markerMode ? index : markerIndex)
     },
-    [brushes, persistBrushes]
+    [brushes, markerMode, penBrushes, penIndex, markerBrushes, markerIndex, persistBrushes]
   )
 
   const editBrush = useCallback(
     (index: number, patch: { color?: string; width?: number }): void => {
       const next = brushes.map((preset, position) => (position === index ? { ...preset, ...patch } : preset))
-      setBrushes(next)
+      if (markerMode) setMarkerBrushes(next)
+      else setPenBrushes(next)
       if (index === brushIndex) {
         if (patch.color !== undefined) setStrokeColor(patch.color)
         if (patch.width !== undefined) setStrokeWidth(patch.width)
       }
-      persistBrushes(next, brushIndex)
+      persistBrushes(
+        markerMode ? penBrushes : next,
+        markerMode ? penIndex : brushIndex,
+        markerMode ? next : markerBrushes,
+        markerMode ? brushIndex : markerIndex
+      )
     },
-    [brushes, brushIndex, persistBrushes]
+    [brushes, brushIndex, markerMode, penBrushes, penIndex, markerBrushes, markerIndex, persistBrushes]
   )
 
   useEffect(() => {
     if (!brushRestoreRef.current) return
+    if (brushModeRef.current !== penMode) {
+      brushModeRef.current = penMode
+      const preset = brushes[brushIndex]
+      if (preset) {
+        setStrokeColor(preset.color)
+        setStrokeWidth(preset.width)
+      }
+      return
+    }
     const preset = brushes[brushIndex]
     if (!preset || (preset.color === strokeColor && preset.width === strokeWidth)) return
     const next = brushes.map((value, position) => (position === brushIndex ? { color: strokeColor, width: strokeWidth } : value))
-    setBrushes(next)
-    persistBrushes(next, brushIndex)
-  }, [brushes, brushIndex, strokeColor, strokeWidth, persistBrushes])
+    if (markerMode) setMarkerBrushes(next)
+    else setPenBrushes(next)
+    persistBrushes(markerMode ? penBrushes : next, penIndex, markerMode ? next : markerBrushes, markerIndex)
+  }, [
+    brushes,
+    brushIndex,
+    strokeColor,
+    strokeWidth,
+    penMode,
+    markerMode,
+    persistBrushes,
+    penBrushes,
+    penIndex,
+    markerBrushes,
+    markerIndex
+  ])
   const createIsLine = CREATE_STROKES.has(createTool)
   const [renaming, setRenaming] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
@@ -770,6 +984,7 @@ export function BoardView(props: { docId: string }): ReactNode {
   const [linkArrow, setLinkArrow] = useState(true)
   const [eraseSize, setEraseSize] = useState(14)
   const [textColor, setTextColor] = useState('#1f2023')
+  const [stickyColor, setStickyColor] = useState('#cfe8fb')
   const [textSize, setTextSize] = useState(16)
   const [graphDraft, setGraphDraft] = useState<Record<string, string>>({})
 
@@ -791,11 +1006,15 @@ export function BoardView(props: { docId: string }): ReactNode {
 
   const flushMovePositions = useCallback((): void => {
     moveFrameRef.current = 0
-    for (const [id, position] of livePosRef.current) {
+    const live = livePosRef.current
+    const index = new Map((docRef.current?.items ?? []).map((entry) => [entry.id, entry]))
+    for (const [id, position] of live) {
       const node = itemNodesRef.current.get(id)
       if (!node) continue
-      node.style.left = `${position.x}px`
-      node.style.top = `${position.y}px`
+      const item = index.get(id)
+      const box = item && item.kind === 'connector' ? itemBounds(item, index) : null
+      node.style.left = `${position.x + (box ? box.x - (item?.x ?? 0) : 0)}px`
+      node.style.top = `${position.y + (box ? box.y - (item?.y ?? 0) : 0)}px`
     }
   }, [])
 
@@ -811,7 +1030,7 @@ export function BoardView(props: { docId: string }): ReactNode {
   const inkGeometry = (raw: Array<{ x: number; y: number; t: number }>, straight: boolean, id: string): InkBox | null => {
     if (raw.length < 2) return null
     const marker = penMode === 'highlighter'
-    const base = marker ? 14 : Math.max(1, strokeWidth)
+    const base = Math.max(1, strokeWidth)
     const points = straight
       ? straightStroke(raw[0], raw[raw.length - 1])
       : buildStroke(raw, { width: base, marker }).points
@@ -864,6 +1083,7 @@ export function BoardView(props: { docId: string }): ReactNode {
   const pointerWorldRef = useRef<{ x: number; y: number } | null>(null)
 
   const worldRef = useRef<HTMLDivElement | null>(null)
+  const chromeRef = useRef<HTMLDivElement | null>(null)
   const zoomLabelRef = useRef<HTMLButtonElement | null>(null)
   const viewRef = useRef<Viewport>(viewport)
   const targetRef = useRef<Viewport>(viewport)
@@ -945,13 +1165,16 @@ export function BoardView(props: { docId: string }): ReactNode {
   const applyDom = useCallback(
     (next: Viewport): void => {
       const world = worldRef.current
+      const chrome = chromeRef.current
       const prev = viewRef.current
       const moved = next.zoom !== prev.zoom || next.x !== prev.x || next.y !== prev.y
       viewRef.current = next
+      const transform = `translate3d(${size.width / 2 - next.x * next.zoom}px, ${
+        size.height / 2 - next.y * next.zoom
+      }px, 0) scale(${next.zoom})`
+      if (chrome) chrome.style.transform = transform
       if (world) {
-        world.style.transform = `translate3d(${size.width / 2 - next.x * next.zoom}px, ${
-          size.height / 2 - next.y * next.zoom
-        }px, 0) scale(${next.zoom})`
+        world.style.transform = transform
         if (moved) {
           world.classList.add('boardview__world--live')
           if (viewSettleRef.current !== null) clearTimeout(viewSettleRef.current)
@@ -1486,6 +1709,7 @@ export function BoardView(props: { docId: string }): ReactNode {
   const solidSelection = useMemo(() => selectedItems.filter((item): item is SolidItem => item.kind === 'solid'), [selectedItems])
   const imageSelection = useMemo(() => selectedItems.filter((item) => item.kind === 'image'), [selectedItems])
   const graphSelection = useMemo(() => selectedItems.filter((item): item is GraphItem => item.kind === 'graph'), [selectedItems])
+  const connectorTarget = selectedItems.length === 1 && selectedItems[0].kind === 'connector' ? (selectedItems[0] as ConnectorItem) : null
   const selectionLocked = selectedItems.length > 0 && selectedItems.every((item) => item.locked)
   const editingItem = editing ? byId.get(editing.id) : undefined
   const movingItems = drag.kind === 'move' && drag.moved
@@ -1493,6 +1717,27 @@ export function BoardView(props: { docId: string }): ReactNode {
     tool === 'select' && !readOnly && !editingItem && !movingItems && !cropEdit
       ? selectedItems.filter((item) => !item.locked && item.kind !== 'solid' && item.kind !== 'connector')
       : []
+  useEffect(() => {
+    const chrome = chromeRef.current
+    const world = worldRef.current
+    if (chrome && world) chrome.style.transform = world.style.transform
+  }, [resizeTargets])
+  useEffect(() => {
+    setShapePoints((current) => (current && selection.size === 1 && selection.has(current) ? current : null))
+  }, [selection])
+  const shapePanelTarget =
+    resizeTargets.length === 1 && resizeTargets[0].kind === 'shape' ? (resizeTargets[0] as ShapeItem) : null
+  const pointsTarget = shapePanelTarget && shapePoints === shapePanelTarget.id ? shapePanelTarget : null
+  const setShapeRadius = useCallback(
+    (id: string, value: number): void => {
+      if (!doc) return
+      setDoc({
+        ...doc,
+        items: doc.items.map((entry) => (entry.id === id && entry.kind === 'shape' ? ({ ...entry, adjust: value } as BoardItem) : entry))
+      })
+    },
+    [doc]
+  )
   const toolPanelKind: 'none' | 'selection' | 'solid' | 'graph' | 'create' | 'erase' | 'link' | 'text' | 'sticky' | 'image' | 'table' | 'pen' = (() => {
     if (tool === 'graph') return 'graph'
     if (tool === 'solid') return 'solid'
@@ -2199,11 +2444,18 @@ export function BoardView(props: { docId: string }): ReactNode {
   )
 
   const [linkFrom, setLinkFrom] = useState<string | null>(null)
+  const [linkFromPoint, setLinkFromPoint] = useState<{ x: number; y: number } | null>(null)
 
   const addConnector = useCallback(
-    (fromId: string, toId: string): void => {
+    (
+      fromId: string,
+      toId: string,
+      fromPoint?: { x: number; y: number },
+      toPoint?: { x: number; y: number }
+    ): void => {
       if (!doc || readOnly || fromId === toId) return
       const source = doc.items.find((item) => item.id === fromId)
+      const target = doc.items.find((item) => item.id === toId)
       if (!source) return
       const box = itemBounds(source)
       const connector: BoardItem = {
@@ -2217,18 +2469,21 @@ export function BoardView(props: { docId: string }): ReactNode {
         z: doc.items.length,
         points: [],
         shape: linkStyle,
-        color: strokeColor,
+        color: shapeBorder,
         lineWidth: linkWidth,
         lineStyle: 'normal',
         startStroke: 'none',
         endStroke: linkArrow ? 'arrow' : 'none',
         startItemId: fromId,
-        endItemId: toId
+        endItemId: toId,
+        startOffset: fromPoint ? attachOffset(source, fromPoint) ?? undefined : undefined,
+        endOffset: toPoint && target ? attachOffset(target, toPoint) ?? undefined : undefined
       }
       commit([...doc.items, connector])
       setSelection(new Set([connector.id]))
+      setTool('select')
     },
-    [doc, readOnly, commit, linkStyle, linkWidth, linkArrow, strokeColor]
+    [doc, readOnly, commit, linkStyle, linkWidth, linkArrow, shapeBorder]
   )
 
   const itemAt = useCallback(
@@ -2253,6 +2508,50 @@ export function BoardView(props: { docId: string }): ReactNode {
       return best?.id ?? null
     },
     [doc]
+  )
+
+  const connectorAt = useCallback(
+    (point: { x: number; y: number }): string | null => {
+      if (!doc) return null
+      const zoom = Math.max(0.05, viewRef.current.zoom)
+      for (const item of doc.items) {
+        if (item.kind !== 'connector') continue
+        const path = sampleConnector(item, deriveConnectorPoints(item, byId))
+        if (path.length < 2) continue
+        if (distanceToStroke(point, path) > Math.max(5, item.lineWidth / 2 + 5) / zoom) continue
+        return item.id
+      }
+      return null
+    },
+    [doc, byId]
+  )
+
+  const startMove = useCallback(
+    (ids: Iterable<string>, point: { x: number; y: number }): void => {
+      if (!doc || readOnly) return
+      const origins = new Map<string, { x: number; y: number }>()
+      for (const itemId of ids) {
+        const target = byId.get(itemId)
+        if (!target || target.locked) continue
+        if (target.kind === 'connector' && (target.startItemId || target.endItemId)) continue
+        origins.set(itemId, { x: target.x, y: target.y })
+      }
+      if (!origins.size) return
+      dragBaseRef.current = doc.items
+      if (snapEnabled) {
+        const near: Placed[] = []
+        for (const item of doc.items) {
+          if (origins.has(item.id) || item.kind === 'connector') continue
+          const box = item.kind === 'solid' ? itemBounds(item) : rotatedBox(itemBounds(item), item.rotation)
+          near.push({ id: item.id, x: box.x, y: box.y, width: box.width, height: box.height })
+        }
+        snapTargetsRef.current = near
+      } else {
+        snapTargetsRef.current = []
+      }
+      setDrag({ kind: 'move', startX: point.x, startY: point.y, ids: [...origins.keys()], origins, moved: false })
+    },
+    [byId, doc, readOnly, snapEnabled]
   )
 
   const addImageAt = useCallback(
@@ -2299,7 +2598,7 @@ export function BoardView(props: { docId: string }): ReactNode {
   )
 
   const createAt = useCallback(
-    async (point: { x: number; y: number }, kind: 'text' | 'sticky' | 'image' | 'solid' | 'graph' | 'table'): Promise<void> => {
+    async (point: { x: number; y: number }, kind: 'text' | 'sticky' | 'image' | 'solid' | 'graph' | 'table', columnWidth?: number): Promise<void> => {
       if (!doc || readOnly) return
       if (kind === 'table') {
         const columns = 3
@@ -2414,38 +2713,42 @@ export function BoardView(props: { docId: string }): ReactNode {
         raw: undefined
       }
       if (kind === 'text') {
-        const fitted = fitTextBox('Текст', { width: 320, minHeight: 48, fontSize: textSize, padX: 2, padY: 2 })
+        const column = columnWidth && columnWidth >= 60 ? Math.round(columnWidth) : 0
+        const width = column || 120
+        const height = Math.round(textSize * 1.34) + 4
         const item: BoardItem = {
           ...base,
           kind: 'text',
-          w: fitted.width,
-          h: fitted.height,
-          content: '<p>Текст</p>',
-          plain: 'Текст',
+          w: width,
+          h: height,
+          content: '',
+          plain: '',
           color: textColor,
           align: 'left',
-          fontSize: fitted.fontSize,
+          fontSize: textSize,
           fontFamily: "'Inter', 'Segoe UI', sans-serif",
+          column: column ? true : undefined,
           urls: []
         }
         commit([...doc.items, item])
         setSelection(new Set([id]))
-        setEditing({ id, html: '<p>Текст</p>', plain: 'Текст' })
+        setEditing({ id, html: item.content, plain: item.plain })
         freshEditingRef.current = id
         editingBaseRef.current = null
         editingDirtyRef.current = false
         setTool('select')
         return
       }
-      const stickyFit = fitTextBox('Заметка', { width: 200, minHeight: 200, fontSize: textSize, padX: 8, padY: 6 })
+      const stickyFit = fitTextBox('', { width: 200, minHeight: 200, fontSize: textSize, padX: 8, padY: 6 })
       const item: BoardItem = {
         ...base,
         kind: 'sticky',
         w: stickyFit.width,
         h: stickyFit.height,
-        content: '<p>Заметка</p>',
-        plain: 'Заметка',
-        color: textColor,
+        content: '',
+        plain: '',
+        color: stickyColor,
+        textColor: contrastColor(stickyColor),
         shape: 'square',
         textAlign: 'center',
         textAlignVertical: 'middle',
@@ -2455,13 +2758,13 @@ export function BoardView(props: { docId: string }): ReactNode {
       }
       commit([...doc.items, item])
       setSelection(new Set([id]))
-      setEditing({ id, html: '<p>Заметка</p>', plain: 'Заметка' })
+      setEditing({ id, html: '', plain: '' })
       freshEditingRef.current = id
       editingBaseRef.current = null
       editingDirtyRef.current = false
       setTool('select')
     },
-    [doc, readOnly, commit, toast, solidKind, strokeColor, size, textColor, textSize, addImageAt]
+    [doc, readOnly, commit, toast, solidKind, strokeColor, size, textColor, stickyColor, textSize, addImageAt]
   )
 
   const insertImageFromUrl = useCallback(
@@ -2514,8 +2817,8 @@ export function BoardView(props: { docId: string }): ReactNode {
             { x: x2 - box.x, y: y2 - box.y }
           ],
           shape: 'straight',
-          color: strokeColor,
-          lineWidth: strokeWidth,
+          color: shapeBorder,
+          lineWidth: shapeStroke,
           lineStyle: 'normal',
           startStroke: 'none',
           endStroke: drag.tool === 'arrow' ? 'arrow' : 'none'
@@ -2532,10 +2835,11 @@ export function BoardView(props: { docId: string }): ReactNode {
         rotation: 0,
         z: doc.items.length,
         shape: drag.shape,
+        ...shapeParams(drag.shape),
         content: '',
         plain: '',
-        fillColor: shapeColor,
-        borderColor: NEW_SHAPE_STROKE,
+        fillColor: 'transparent',
+        borderColor: shapeBorder,
         borderWidth: shapeStroke,
         borderStyle: 'normal',
         opacity: 1,
@@ -2547,7 +2851,7 @@ export function BoardView(props: { docId: string }): ReactNode {
       }
       return item
     },
-    [doc, strokeColor, strokeWidth, shapeColor, shapeStroke]
+    [doc, shapeBorder, shapeStroke]
   )
 
   const startResize = useCallback(
@@ -2566,6 +2870,48 @@ export function BoardView(props: { docId: string }): ReactNode {
     [byId, doc, readOnly, toWorld]
   )
 
+  const startAdjust = useCallback(
+    (id: string, handle: ShapeAdjustHandle, event: React.PointerEvent): void => {
+      event.stopPropagation()
+      if (readOnly || !doc) return
+      const item = byId.get(id)
+      if (!item || item.locked || item.kind !== 'shape') return
+      dragBaseRef.current = doc.items
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+      const insert = /^add(\d+)$/.exec(handle)
+      if (insert && isVertexShape(item.shape)) {
+        const index = Number(insert[1])
+        const list = shapeVertices(item.shape, item)
+        const before = list[index]
+        const after = list[(index + 1) % list.length]
+        if (before && after) {
+          const spot = {
+            x: Math.round(((before.x + after.x) / 2) * 1000) / 1000,
+            y: Math.round(((before.y + after.y) / 2) * 1000) / 1000
+          }
+          list.splice(index + 1, 0, spot)
+          const withCorner = { ...item, vertices: list }
+          setDoc({ ...doc, items: doc.items.map((entry) => (entry.id === id ? (withCorner as BoardItem) : entry)) })
+          liveRef.current += 1
+          const point = toWorld(event.clientX, event.clientY)
+          setDrag({
+            kind: 'adjust',
+            id,
+            handle: `v${index + 1}`,
+            startX: point.x,
+            startY: point.y,
+            base: withCorner,
+            moved: true
+          })
+          return
+        }
+      }
+      const point = toWorld(event.clientX, event.clientY)
+      setDrag({ kind: 'adjust', id, handle, startX: point.x, startY: point.y, base: item, moved: false })
+    },
+    [byId, doc, readOnly, toWorld]
+  )
+
   const startLinkDot = useCallback(
     (id: string, event: React.PointerEvent): void => {
       event.stopPropagation()
@@ -2574,9 +2920,55 @@ export function BoardView(props: { docId: string }): ReactNode {
       if (!item || item.locked) return
       const point = toWorld(event.clientX, event.clientY)
       event.currentTarget.setPointerCapture?.(event.pointerId)
-      setDrag({ kind: 'link', fromId: id, point })
+      setDrag({ kind: 'link', fromId: id, point, anchor: point })
     },
     [byId, doc, readOnly, toWorld]
+  )
+
+  const startBend = useCallback(
+    (id: string, grip: BendGrip, event: React.PointerEvent): void => {
+      event.stopPropagation()
+      event.preventDefault()
+      if (readOnly || !doc) return
+      const item = byId.get(id)
+      if (!item || item.kind !== 'connector' || item.locked) return
+      const ends = deriveConnectorPoints(item, byId)
+      if (ends.length < 2) return
+      const split = grip.role === 'apex' ? bendByGrip(item, grip, { x: grip.x, y: grip.y }, ends[0], ends[1]) : item.bends ?? []
+      const target: BendGrip =
+        grip.role === 'apex' ? { role: 'joint', index: grip.index, x: grip.x, y: grip.y } : grip
+      dragBaseRef.current = doc.items
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+      setDrag({ kind: 'bend', id, grip: target, base: split, connector: item, from: ends[0], to: ends[1], moved: false })
+    },
+    [byId, doc, readOnly, toWorld]
+  )
+
+  const clearBend = useCallback(
+    (id: string): void => {
+      if (!doc || readOnly) return
+      const item = byId.get(id)
+      if (!item || item.kind !== 'connector' || !item.bends?.length) return
+      commit(doc.items.map((entry) => (entry.id === id ? ({ ...entry, bends: undefined } as BoardItem) : entry)))
+    },
+    [byId, commit, doc, readOnly]
+  )
+
+  const straightenBend = useCallback(
+    (id: string, grip: BendGrip): void => {
+      if (!doc || readOnly) return
+      const item = byId.get(id)
+      if (!item || item.kind !== 'connector' || !item.bends?.length) return
+      const ends = deriveConnectorPoints(item, byId)
+      if (ends.length < 2) return
+      const bends = straightenConnector(item, grip, ends[0], ends[1])
+      commit(
+        doc.items.map((entry) =>
+          entry.id === id ? ({ ...entry, bends: bends.length ? bends : undefined } as BoardItem) : entry
+        )
+      )
+    },
+    [byId, commit, doc, readOnly]
   )
 
   const startRotate = useCallback(
@@ -2802,6 +3194,7 @@ export function BoardView(props: { docId: string }): ReactNode {
       if (!point) return
       setDrag((current) => {
         if (current.kind === 'rubber') return { ...current, currentX: point.x, currentY: point.y }
+        if (current.kind === 'textdraft') return { ...current, currentX: point.x, currentY: point.y }
         if (current.kind === 'create') return { ...current, currentX: point.x, currentY: point.y }
         if (current.kind === 'link') return { ...current, point }
         return current
@@ -2863,10 +3256,23 @@ export function BoardView(props: { docId: string }): ReactNode {
         setDrag({ kind: 'pen', points: [point] })
         return
       }
-      if (tool === 'text' || tool === 'sticky' || tool === 'image' || tool === 'solid' || tool === 'graph' || tool === 'table') {
+      if (tool === 'sticky' || tool === 'image' || tool === 'solid' || tool === 'graph' || tool === 'table') {
         if (event.button !== 0) return
-        if (tool === 'text' || tool === 'sticky') event.preventDefault()
+        if (tool === 'sticky') event.preventDefault()
         void createAt(point, tool)
+        return
+      }
+      if (tool === 'text') {
+        if (event.button !== 0 || !doc || readOnly) return
+        const under = itemAt(point)
+        const existing = under ? byId.get(under) : undefined
+        if (existing && (existing.kind === 'text' || existing.kind === 'sticky' || existing.kind === 'shape')) {
+          event.preventDefault()
+          startEditing(existing.id)
+          return
+        }
+        event.preventDefault()
+        setDrag({ kind: 'textdraft', startX: point.x, startY: point.y, currentX: point.x, currentY: point.y })
         return
       }
       if (tool === 'create') {
@@ -2879,22 +3285,56 @@ export function BoardView(props: { docId: string }): ReactNode {
         const under = itemAt(point)
         if (!under) {
           setLinkFrom(null)
+          setLinkFromPoint(null)
           return
         }
         if (linkFrom && linkFrom !== under) {
-          addConnector(linkFrom, under)
+          addConnector(linkFrom, under, linkFromPoint ?? undefined, point)
           setLinkFrom(null)
+          setLinkFromPoint(null)
           return
         }
         setLinkFrom(under)
-        setDrag({ kind: 'link', fromId: under, point })
+        setLinkFromPoint(point)
+        setDrag({ kind: 'link', fromId: under, point, anchor: point })
         return
+      }
+      if (tool === 'select' && !editing && event.button === 0) {
+        const hit = connectorAt(point)
+        if (hit) {
+          const next = new Set(event.shiftKey ? selection : [])
+          if (event.shiftKey && next.has(hit)) next.delete(hit)
+          else next.add(hit)
+          setSelection(next)
+          startMove(next, point)
+          return
+        }
       }
       setEraserCursor(null)
       if (event.button !== 0) return
       setDrag({ kind: 'rubber', startX: point.x, startY: point.y, currentX: point.x, currentY: point.y })
     },
-    [toWorld, toScreen, tool, doc, readOnly, eraseAt, createTool, createShape, createAt, itemAt, byId, linkFrom, addConnector, menu]
+    [
+      toWorld,
+      toScreen,
+      tool,
+      doc,
+      readOnly,
+      eraseAt,
+      createTool,
+      createShape,
+      createAt,
+      itemAt,
+      byId,
+      linkFrom,
+      linkFromPoint,
+      addConnector,
+      menu,
+      connectorAt,
+      startMove,
+      editing,
+      selection
+    ]
   )
 
   const faceAtLocal = useCallback((item: SolidItem, point: { x: number; y: number }) => {
@@ -3100,28 +3540,9 @@ export function BoardView(props: { docId: string }): ReactNode {
       setSelection(next)
       if (readOnly || tool !== 'select') return
       const point = toWorld(event.clientX, event.clientY)
-      const ids = [...next].filter((itemId) => !byId.get(itemId)?.locked)
-      const origins = new Map<string, { x: number; y: number }>()
-      for (const itemId of ids) {
-        const target = byId.get(itemId)
-        if (target && target.kind !== 'connector') origins.set(itemId, { x: target.x, y: target.y })
-      }
-      dragBaseRef.current = doc?.items ?? null
-      if (snapEnabled && doc) {
-        const movingIds = new Set(origins.keys())
-        const near: Placed[] = []
-        for (const item of doc.items) {
-          if (movingIds.has(item.id) || item.kind === 'connector') continue
-          const box = item.kind === 'solid' ? itemBounds(item) : rotatedBox(itemBounds(item), item.rotation)
-          near.push({ id: item.id, x: box.x, y: box.y, width: box.width, height: box.height })
-        }
-        snapTargetsRef.current = near
-      } else {
-        snapTargetsRef.current = []
-      }
-      setDrag({ kind: 'move', startX: point.x, startY: point.y, ids, origins, moved: false })
+      startMove(next, point)
     },
-    [selection, toWorld, byId, readOnly, tool, editing, doc, toast, solidMode, faceAtLocal, facePointOf, paintSolidFace, strokeColor, throughAnchor, commit, remember, strokeWidth]
+    [selection, toWorld, byId, readOnly, tool, editing, doc, toast, solidMode, faceAtLocal, facePointOf, paintSolidFace, strokeColor, throughAnchor, commit, remember, strokeWidth, startMove]
   )
 
   const onPointerMove = useCallback(
@@ -3168,7 +3589,7 @@ export function BoardView(props: { docId: string }): ReactNode {
         if (!collected.length) return
         penPointsRef.current = [...penPointsRef.current, ...collected]
         const marker = penMode === 'highlighter'
-        const base = marker ? 14 : Math.max(1, strokeWidth)
+        const base = Math.max(1, strokeWidth)
         const raw = penPointsRef.current
         const start = raw[0]
         const current = raw[raw.length - 1]
@@ -3183,7 +3604,7 @@ export function BoardView(props: { docId: string }): ReactNode {
           kind: 'stroke',
           points: geometry.points,
           color: strokeColor,
-          width: marker ? 14 : Math.max(1, strokeWidth),
+          width: Math.max(1, strokeWidth),
           opacity: penOpacity
         })
         return
@@ -3237,7 +3658,48 @@ export function BoardView(props: { docId: string }): ReactNode {
         if (!drag.moved) setDrag({ ...drag, moved: true })
         return
       }
-      if (drag.kind === 'rubber') {
+      if (drag.kind === 'adjust' && doc) {
+        const item = byId.get(drag.id)
+        if (!item || item.kind !== 'shape') return
+        const center = { x: drag.base.x + drag.base.w / 2, y: drag.base.y + drag.base.h / 2 }
+        const local = rotatePoint({ x: point.x - center.x, y: point.y - center.y }, -(drag.base.rotation || 0))
+        const raw = { x: local.x + drag.base.w / 2, y: local.y + drag.base.h / 2 }
+        const vertexIndex = /^v(\d+)$/.exec(drag.handle)
+        const spot =
+          vertexIndex && isVertexShape(drag.base.shape)
+            ? snapVertexPoint(
+                drag.base.shape,
+                Number(vertexIndex[1]),
+                raw,
+                drag.base.w,
+                drag.base.h,
+                drag.base,
+                7 / Math.max(0.05, viewRef.current.zoom)
+              )
+            : raw
+        const params = shapeHandleValue(drag.base.shape, drag.handle, spot, drag.base.w, drag.base.h, drag.base)
+        setDoc({
+          ...doc,
+          items: doc.items.map((entry) => (entry.id === drag.id ? ({ ...entry, ...params } as BoardItem) : entry))
+        })
+        liveRef.current += 1
+        if (!drag.moved) setDrag({ ...drag, moved: true })
+        return
+      }
+      if (drag.kind === 'bend' && doc) {
+        const item = doc.items.find((entry) => entry.id === drag.id)
+        if (item && item.kind === 'connector') {
+          const bends = bendByGrip({ ...item, bends: drag.base }, drag.grip, point, drag.from, drag.to)
+          setDoc({
+            ...doc,
+            items: doc.items.map((entry) => (entry.id === drag.id ? ({ ...entry, bends } as BoardItem) : entry))
+          })
+          liveRef.current += 1
+        }
+        if (!drag.moved) setDrag({ ...drag, moved: true })
+        return
+      }
+      if (drag.kind === 'rubber' || drag.kind === 'textdraft') {
         overlayPointRef.current = point
         scheduleOverlayRender()
         return
@@ -3303,16 +3765,24 @@ export function BoardView(props: { docId: string }): ReactNode {
         return
       }
       if (drag.kind === 'create') {
-        overlayPointRef.current = point
+        let tip = point
+        if (event.shiftKey && drag.tool === 'shape') {
+          const side = Math.max(Math.abs(point.x - drag.startX), Math.abs(point.y - drag.startY))
+          tip = {
+            x: drag.startX + (point.x < drag.startX ? -side : side),
+            y: drag.startY + (point.y < drag.startY ? -side : side)
+          }
+        }
+        overlayPointRef.current = tip
         scheduleOverlayRender()
-        const rawX = point.x - drag.startX
-        const rawY = point.y - drag.startY
+        const rawX = tip.x - drag.startX
+        const rawY = tip.y - drag.startY
         const dragged = Math.hypot(rawX, rawY) > 8 / viewRef.current.zoom
         const stroke = drag.tool === 'line' || drag.tool === 'arrow'
         const width = dragged ? Math.abs(rawX) : stroke ? 1 : 220
         const height = dragged ? Math.abs(rawY) : stroke ? 1 : 220
-        const left = dragged ? Math.min(drag.startX, point.x) : drag.startX - (stroke ? 0 : width / 2)
-        const top = dragged ? Math.min(drag.startY, point.y) : drag.startY - (stroke ? 0 : height / 2)
+        const left = dragged ? Math.min(drag.startX, tip.x) : drag.startX - (stroke ? 0 : width / 2)
+        const top = dragged ? Math.min(drag.startY, tip.y) : drag.startY - (stroke ? 0 : height / 2)
         pushPreview({
           t: 'preview',
           kind: 'shape',
@@ -3326,7 +3796,7 @@ export function BoardView(props: { docId: string }): ReactNode {
           points: stroke
             ? [
                 { x: drag.startX - left, y: drag.startY - top },
-                { x: point.x - left, y: point.y - top }
+                { x: tip.x - left, y: tip.y - top }
               ]
             : undefined
         })
@@ -3365,7 +3835,7 @@ export function BoardView(props: { docId: string }): ReactNode {
         const moving = unionBox(
           selectedItems
             .filter((item) => drag.origins.has(item.id))
-            .map((item) => (item.kind === 'solid' ? itemBounds(item) : rotatedBox(itemBounds(item), item.rotation)))
+            .map((item) => (item.kind === 'solid' ? itemBounds(item, byId) : rotatedBox(itemBounds(item, byId), item.rotation)))
         )
         const shifted = { ...moving, x: moving.x + dx, y: moving.y + dy }
         const snapped = snapBox(shifted, snapTargetsRef.current, 8 / Math.max(0.05, viewRef.current.zoom))
@@ -3466,6 +3936,7 @@ export function BoardView(props: { docId: string }): ReactNode {
         if (created) {
           commit([...doc.items, created])
           setSelection(new Set([created.id]))
+          setTool('select')
           if (created.kind === 'connector' && !created.startItemId) setLinkFrom(created.id)
           if (created.kind === 'shape') {
             setEditing({ id: created.id, html: '', plain: '' })
@@ -3578,8 +4049,9 @@ export function BoardView(props: { docId: string }): ReactNode {
       if (drag.kind === 'link') {
         const target = itemAt(drag.point)
         if (doc && target && target !== drag.fromId) {
-          addConnector(drag.fromId, target)
+          addConnector(drag.fromId, target, drag.anchor, drag.point)
           setLinkFrom(null)
+          setLinkFromPoint(null)
         }
         setDrag({ kind: 'idle' })
         return
@@ -3606,6 +4078,30 @@ export function BoardView(props: { docId: string }): ReactNode {
         setDrag({ kind: 'idle' })
         return
       }
+      if (drag.kind === 'adjust' && doc) {
+        if (drag.moved && dragBaseRef.current) commitAgainst(dragBaseRef.current, doc.items)
+        dragBaseRef.current = null
+        setDrag({ kind: 'idle' })
+        return
+      }
+      if (drag.kind === 'bend' && doc) {
+        if (drag.moved && dragBaseRef.current) commitAgainst(dragBaseRef.current, doc.items)
+        dragBaseRef.current = null
+        setDrag({ kind: 'idle' })
+        return
+      }
+      if (drag.kind === 'textdraft' && doc) {
+        setDrag({ kind: 'idle' })
+        const dx = drag.currentX - drag.startX
+        const dy = drag.currentY - drag.startY
+        const dragged = Math.hypot(dx, dy) > 8 / Math.max(0.05, viewRef.current.zoom)
+        if (dragged && Math.abs(dx) >= 60) {
+          void createAt({ x: Math.min(drag.startX, drag.currentX), y: drag.startY }, 'text', Math.abs(dx))
+          return
+        }
+        void createAt({ x: drag.startX, y: drag.startY }, 'text')
+        return
+      }
       if (drag.kind === 'rubber' && doc) {
       const rect: Rect = {
         x: Math.min(drag.startX, drag.currentX),
@@ -3617,7 +4113,8 @@ export function BoardView(props: { docId: string }): ReactNode {
         const picked = doc.items
           .filter((item) => {
             if (item.locked) return false
-            const box = item.kind === 'solid' ? itemBounds(item) : rotatedBox(itemBounds(item), item.rotation)
+            const box =
+              item.kind === 'solid' ? itemBounds(item, byId) : rotatedBox(itemBounds(item, byId), item.rotation)
             return box.x < rect.x + rect.width && box.x + box.width > rect.x && box.y < rect.y + rect.height && box.y + box.height > rect.y
           })
           .map((item) => item.id)
@@ -3634,12 +4131,14 @@ export function BoardView(props: { docId: string }): ReactNode {
       const next = doc.items.map((item) =>
         moved.has(item.id) ? ({ ...item, x: Math.round(item.x + dx), y: Math.round(item.y + dy) } as BoardItem) : item
       )
+      const index = new Map(next.map((entry) => [entry.id, entry]))
       for (const [id, node] of itemNodesRef.current) {
         if (!moved.has(id)) continue
-        const item = next.find((entry) => entry.id === id)
+        const item = index.get(id)
         if (!item || !node) continue
-        node.style.left = `${item.x}px`
-        node.style.top = `${item.y}px`
+        const box = item.kind === 'connector' ? itemBounds(item, index) : null
+        node.style.left = `${item.x + (box ? box.x - item.x : 0)}px`
+        node.style.top = `${item.y + (box ? box.y - item.y : 0)}px`
       }
       const base = dragBaseRef.current
       if (base) commitAgainst(base, next)
@@ -3847,6 +4346,18 @@ export function BoardView(props: { docId: string }): ReactNode {
       if (!doc || readOnly) return
       const base = itemsRef.current
       const next = base.map((item) => (item.id === id ? withPatch(item, patch) : item))
+      if (!changed(base, next)) return
+      if (silent) persist(next)
+      else commit(next)
+    },
+    [doc, commit, persist, readOnly]
+  )
+
+  const patchConnector = useCallback(
+    (id: string, patch: Partial<ConnectorItem>, silent?: boolean): void => {
+      if (!doc || readOnly) return
+      const base = itemsRef.current
+      const next = base.map((entry) => (entry.id === id && entry.kind === 'connector' ? ({ ...entry, ...patch } as BoardItem) : entry))
       if (!changed(base, next)) return
       if (silent) persist(next)
       else commit(next)
@@ -4174,7 +4685,7 @@ const navigateTo = useCallback(
     (id: string) => {
       const item = byId.get(id)
       if (!item) return
-      fitTo(itemBounds(item), 2)
+      fitTo(itemBounds(item, byId), 2)
       setSelection(new Set([id]))
       setShowInspector(true)
     },
@@ -4240,7 +4751,7 @@ const navigateTo = useCallback(
       }
       if (!item) return
       if (item.kind !== 'text' && item.kind !== 'sticky' && item.kind !== 'shape') return
-      if (!value && !item.sourceType && (item.kind === 'text' || item.kind === 'sticky')) {
+      if (!value && !item.sourceType && item.kind === 'text') {
         if (!close) return
         setSelection(new Set())
         editingBaseRef.current = null
@@ -4255,6 +4766,10 @@ const navigateTo = useCallback(
           const base = { ...entry, content: html, plain: value }
           if (entry.sourceType) return base as BoardItem
           if (entry.kind === 'text') {
+            if (entry.column) {
+              const inner = measured ? measured.height : measureTextBox(value, entry.fontSize, entry.w - 4).height + 4
+              return { ...base, h: Math.max(Math.round(entry.fontSize * 1.3), Math.round(inner)) } as BoardItem
+            }
             if (measured) {
               return {
                 ...base,
@@ -4269,8 +4784,7 @@ const navigateTo = useCallback(
             const fit = fitTextBox(value, { width: entry.w, minHeight: entry.h, fontSize: entry.fontSize, padX: 8, padY: 6 })
             return { ...base, h: fit.height, fontSize: fit.fontSize } as BoardItem
           }
-          const fit = fitTextBox(value, { width: entry.w, minHeight: entry.h, fontSize: entry.fontSize, padX: 6, padY: 5 })
-          return { ...base, fontSize: fit.fontSize } as BoardItem
+          return base as BoardItem
         }
         return entry
       })
@@ -4297,7 +4811,7 @@ const navigateTo = useCallback(
     }, 700)
   }, [writeEditing])
 
-  const editingBox = editingItem ? itemBounds(editingItem) : null
+  const editingBox = editingItem ? itemBounds(editingItem, byId) : null
   const faceLabelItem = faceLabel ? byId.get(faceLabel.itemId) : undefined
   const faceLabelSpot =
     faceLabel && faceLabelItem?.kind === 'solid' ? faceScreenPoint(faceLabelItem, faceLabel.face, faceLabel.point) : null
@@ -4352,14 +4866,20 @@ const navigateTo = useCallback(
     const zoom = Math.max(0.05, view.zoom)
     const half = size.width / 2
     const center = size.height / 2
+    const panelHeight = 70
+    const knobClear = 46
+    const gap = 10
     const screenMiddle = (textPanelBox.x + textPanelBox.width / 2 - view.x) * zoom + half
     const screenTop = (textPanelBox.y - view.y) * zoom + center
     const screenBottom = screenTop + textPanelBox.height * zoom
-    const below = screenBottom + 52 < size.height - 72
-    const targetScreenY = below ? screenBottom + 8 : screenTop - 52
+    const above = screenTop - knobClear - panelHeight
+    const below = screenBottom + gap
+    const fitsAbove = above >= 12
+    const fitsBelow = below + panelHeight <= size.height - 12
+    const targetScreenY = fitsAbove || !fitsBelow ? above : below
     const width = Math.min(392, size.width - 24)
     const screenX = clamp(screenMiddle - width / 2, 12, Math.max(12, size.width - width - 12))
-    const screenY = clamp(targetScreenY, 12, Math.max(12, size.height - 56))
+    const screenY = clamp(targetScreenY, 12, Math.max(12, size.height - panelHeight - 12))
     return {
       x: (screenX - half) / zoom + view.x,
       y: (screenY - center) / zoom + view.y
@@ -4367,7 +4887,8 @@ const navigateTo = useCallback(
   })()
 
   const panelItem = editing && editingItem ? editingItem : textSelection[0] || null
-  const panelHasFill = textSelection.some((item) => item.kind === 'sticky' || item.kind === 'shape')
+  const panelHasFill = textSelection.some((item) => item.kind === 'sticky')
+  const panelHasBorder = textSelection.some((item) => item.kind === 'shape')
   const textPanelShown =
     !!textPanelSpot && drag.kind !== 'move' && (!!editing || (textSelection.length > 0 && tool === 'select'))
 
@@ -4437,7 +4958,22 @@ const navigateTo = useCallback(
         doc.items.map((item) => {
           if (!targets.has(item.id)) return item
           if (item.kind === 'sticky') return { ...item, color }
-          if (item.kind === 'shape') return { ...item, fillColor: color }
+          return item
+        })
+      )
+    },
+    [doc, readOnly, commit, textSelection]
+  )
+
+  const paintBorder = useCallback(
+    (color: string) => {
+      if (!doc || readOnly) return
+      const targets = new Set(textSelection.map((item) => item.id))
+      if (!targets.size) return
+      commit(
+        doc.items.map((item) => {
+          if (!targets.has(item.id)) return item
+          if (item.kind === 'shape') return { ...item, borderColor: color }
           return item
         })
       )
@@ -4723,6 +5259,14 @@ const navigateTo = useCallback(
           return
         }
       }
+      if (
+        ['PageUp', 'PageDown', 'Home', 'End'].includes(event.key) &&
+        !target?.isContentEditable &&
+        !target?.closest('.modal, .overlay, .menu, .inspector')
+      ) {
+        event.preventDefault()
+        return
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a' && doc) {
         event.preventDefault()
         setSelection(new Set(doc.items.filter((item) => item.kind !== 'connector').map((item) => item.id)))
@@ -4750,8 +5294,14 @@ const navigateTo = useCallback(
       }
       const mapped = plain ? toolKeys[event.key.toLowerCase()] : undefined
       if (mapped && !readOnly) {
-        if (event.key.toLowerCase() === 'r') setCreateTool('rect')
-        if (event.key.toLowerCase() === 'o') setCreateTool('ellipse')
+        if (event.key.toLowerCase() === 'r') {
+          setCreateShape('rectangle')
+          setCreateTool('shape')
+        }
+        if (event.key.toLowerCase() === 'o') {
+          setCreateShape('circle')
+          setCreateTool('shape')
+        }
         setTool(mapped)
         return
       }
@@ -4781,6 +5331,10 @@ const navigateTo = useCallback(
         }
         if (menu) {
           setMenu(null)
+          return
+        }
+        if (shapePoints) {
+          setShapePoints(null)
           return
         }
         if (moreOpen) {
@@ -4902,7 +5456,7 @@ const navigateTo = useCallback(
       window.removeEventListener('keydown', listener)
       window.removeEventListener('keyup', listener)
     }
-  }, [doc, selection, zoomBy, fitAll, deleteItems, duplicateItems, copyItems, pasteObjects, commit, persist, undo, redo, readOnly, animateTo, pasteIntoBoard, fail, present, stopPresent, stepFrame, changeGrid, gridMode, railOrder, railExtras, menu, moreOpen, showExport, boardSettingsOpen, calculatorOpen, detailsOpen, showInspector, throughAnchor, editing, byId, startEditing, commitEditing, tool, imageSelection, replaceImagesFromClipboard])
+  }, [doc, selection, zoomBy, fitAll, deleteItems, duplicateItems, copyItems, pasteObjects, commit, persist, undo, redo, readOnly, animateTo, pasteIntoBoard, fail, present, stopPresent, stepFrame, changeGrid, gridMode, railOrder, railExtras, menu, shapePoints, moreOpen, showExport, boardSettingsOpen, calculatorOpen, detailsOpen, showInspector, throughAnchor, editing, byId, startEditing, commitEditing, tool, imageSelection, replaceImagesFromClipboard])
 
   const penBox = drag.kind === 'pen' ? inkGeometry(penPointsRef.current, penStraightRef.current, '') : null
 
@@ -5009,6 +5563,27 @@ const navigateTo = useCallback(
           height: Math.abs(drag.currentY - drag.startY)
         }
       : null
+
+  const textDraftRect =
+    drag.kind === 'textdraft'
+      ? {
+          x: Math.min(drag.startX, drag.currentX),
+          y: drag.startY,
+          width: Math.abs(drag.currentX - drag.startX),
+          height: Math.max(24, textSize * 1.34)
+        }
+      : null
+
+  const bendTarget = (() => {
+    if (!doc || readOnly || selection.size !== 1) return null
+    const id = [...selection][0]
+    const item = byId.get(id)
+    if (!item || item.kind !== 'connector' || item.locked) return null
+    if (item.shape === 'elbowed') return null
+    const ends = deriveConnectorPoints(item, byId)
+    if (ends.length !== 2) return null
+    return { id, bent: !!item.bends?.length, grips: connectorGrips(item, ends[0], ends[1]), ends }
+  })()
 
   if (loading) {
     return (
@@ -5188,6 +5763,15 @@ const navigateTo = useCallback(
           icon: <Ungroup size={14} />,
           section: items.some((item) => item.section === 'Группа') ? undefined : 'Группа',
           run: () => ungroupSelection()
+        })
+      const singleShape = selectedItems.length === 1 && selectedItems[0].kind === 'shape' ? (selectedItems[0] as ShapeItem) : null
+      if (singleShape && !readOnly && !singleShape.locked && isVertexShape(singleShape.shape))
+        items.push({
+          id: 'shape-points',
+          label: shapePoints === singleShape.id ? 'Закончить правку углов' : 'Изменить углы',
+          icon: <Spline size={14} />,
+          section: 'Фигура',
+          run: () => setShapePoints(shapePoints === singleShape.id ? null : singleShape.id)
         })
       if (imageSelection.length === 1) {
         const target = imageSelection[0]
@@ -5617,92 +6201,6 @@ const navigateTo = useCallback(
             cropId={cropEdit?.id ?? null}
             loading={assetProgress}
           />
-          {resizeTargets.map((target) => {
-            const box = itemBounds(target)
-            const zoom = Math.max(0.05, liveZoom)
-            const grip = 11 / zoom
-            const half = grip / 2
-            const dot = 10 / Math.max(0.05, liveZoom)
-            const dotGap = 13 / Math.max(0.05, liveZoom)
-            const knob = 20 / zoom
-            const stem = 15 / zoom
-            const handles =
-              target.kind === 'image'
-                ? RESIZE_HANDLES.filter((handle) => handle.id.length > 1)
-                : target.kind === 'text'
-                  ? RESIZE_HANDLES.filter((handle) => handle.id === 'e' || handle.id === 'w' || handle.id.length > 1)
-                  : RESIZE_HANDLES
-            const dots = resizeTargets.length === 1 ? LINK_DOTS : []
-            return (
-              <div
-                key={`rs${target.id}`}
-                className="resizeframe"
-                style={{
-                  left: box.x,
-                  top: box.y,
-                  width: box.width,
-                  height: box.height,
-                  transform: target.rotation ? `rotate(${target.rotation}deg)` : undefined
-                }}
-              >
-                {handles.map((handle) => (
-                  <span
-                    key={handle.id}
-                    className="resizehandle"
-                    style={{
-                      left: `calc(${handle.cx * 100}% - ${half}px)`,
-                      top: `calc(${handle.cy * 100}% - ${half}px)`,
-                      width: grip,
-                      height: grip,
-                      cursor: handle.cursor
-                    }}
-                    onPointerDown={(event) => startResize(target.id, handle.id, event)}
-                  />
-                ))}
-                {dots.map((link) => (
-                  <span
-                    key={link.id}
-                    className="linkdot"
-                    style={{
-                      left: `calc(${link.cx * 100}% + ${link.dx * dotGap - dot / 2}px)`,
-                      top: `calc(${link.cy * 100}% + ${link.dy * dotGap - dot / 2}px)`,
-                      width: dot,
-                      height: dot
-                    }}
-                    title="Стрелка"
-                    onPointerDown={(event) => startLinkDot(target.id, event)}
-                  />
-                ))}
-                {resizeTargets.length === 1 ? (
-                  <>
-                    <span
-                      className="rotatestem"
-                      style={{
-                        left: `calc(50% - ${0.7 / zoom}px)`,
-                        top: `${-(stem + knob / 2)}px`,
-                        width: 1.4 / zoom,
-                        height: stem + knob / 2
-                      }}
-                    />
-                    <span
-                      className="rotatehandle"
-                      style={{
-                        left: `calc(50% - ${knob / 2}px)`,
-                        top: `${-(stem + knob)}px`,
-                        width: knob,
-                        height: knob,
-                        borderWidth: 1.5 / zoom
-                      }}
-                      title="Повернуть"
-                      onPointerDown={(event) => startRotate(target.id, event)}
-                    >
-                      <RotateCw style={{ width: knob * 0.58, height: knob * 0.58 }} strokeWidth={2.6} />
-                    </span>
-                  </>
-                ) : null}
-              </div>
-            )
-          })}
           {cropEdit ? (
             <div
               className="cropframe"
@@ -5883,6 +6381,21 @@ const navigateTo = useCallback(
                     <AlignIcon align={align} />
                   </button>
                 ))}
+                {shapePanelTarget && isVertexShape(shapePanelTarget.shape) ? (
+                  <>
+                    <div className="textpanel__sep" />
+                    <button
+                      type="button"
+                      className="toolbtn"
+                      data-active={pointsTarget ? 'true' : undefined}
+                      disabled={readOnly}
+                      title="Перетащить углы фигуры и добавить новые"
+                      onClick={() => setShapePoints(pointsTarget ? null : shapePanelTarget.id)}
+                    >
+                      <Spline size={16} />
+                    </button>
+                  </>
+                ) : null}
               </div>
               <div className="textpanel__row textpanel__row--colors">
                 <span className="textpanel__group">
@@ -5909,6 +6422,19 @@ const navigateTo = useCallback(
                     />
                   </span>
                 ) : null}
+                {panelHasBorder ? (
+                  <span className="textpanel__group">
+                    <span className="textpanel__cap">Рамка</span>
+                    <PaletteSwatches
+                      colors={QUICK_COLORS}
+                      value={panelItem ? borderColorOf(panelItem) : NEW_SHAPE_BORDER}
+                      nameFor={colorName}
+                      customLabel="Свой цвет рамки"
+                      onPick={paintBorder}
+                      onCustom={paintBorder}
+                    />
+                  </span>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -5916,9 +6442,9 @@ const navigateTo = useCallback(
             <TextEditor
               itemId={editing.id}
               html={editing.html}
-              placeholder="Введите текст"
+              placeholder={editingItem.kind === 'text' ? '' : 'Введите текст'}
               selectAll={freshEditingRef.current === editing.id}
-              autoWidth={editingItem.kind === 'text'}
+              autoWidth={editingItem.kind !== 'text' ? false : editingItem.column !== true}
               box={{ x: editingBox.x, y: editingBox.y }}
               minWidth={120}
               onInput={(html, plain) => {
@@ -5931,11 +6457,26 @@ const navigateTo = useCallback(
                 editorSizeRef.current = { width, height }
               }}
               style={{
-                width: editingItem.kind === 'text' ? undefined : Math.max(120, editingBox.width),
-                minHeight: Math.max(36, editingBox.height),
+                width:
+                  editingItem.kind === 'text'
+                    ? editingItem.column
+                      ? editingBox.width
+                      : undefined
+                    : editingItem.kind === 'shape'
+                      ? editingBox.width
+                      : Math.max(120, editingBox.width),
+                height: editingItem.kind === 'shape' ? editingBox.height : undefined,
+                minHeight: editingItem.kind === 'shape' ? undefined : Math.max(36, editingBox.height),
+                display: editingItem.kind === 'shape' ? 'flex' : undefined,
+                flexDirection: editingItem.kind === 'shape' ? 'column' : undefined,
+                justifyContent: editingItem.kind === 'shape' ? 'center' : undefined,
+                overflow: editingItem.kind === 'shape' ? 'hidden' : undefined,
                 padding:
                   editingItem.kind === 'sticky' ? '6px 8px' : editingItem.kind === 'shape' ? '5px 6px' : '2px',
-                fontSize: fontSizeOf(editingItem),
+                fontSize:
+                  editingItem.kind === 'shape'
+                    ? shapeTextSize({ ...editingItem, plain: editing.plain })
+                    : fontSizeOf(editingItem),
                 fontFamily: editingItem.kind === 'text' ? editingItem.fontFamily : undefined,
                 lineHeight: editingItem.kind === 'text' ? 1.34 : 1.25,
                 textAlign: alignOf(editingItem),
@@ -5978,7 +6519,7 @@ const navigateTo = useCallback(
                   d={penBox.path}
                   fill="none"
                   stroke={penBox.color}
-                  strokeWidth={penMode === 'highlighter' ? 14 : Math.max(1, strokeWidth)}
+                  strokeWidth={Math.max(1, strokeWidth)}
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   strokeOpacity={penBox.opacity}
@@ -6018,8 +6559,8 @@ const navigateTo = useCallback(
                   <path
                     d={shapePath(createPreview.shape, createPreview.w, createPreview.h)}
                     fill="none"
-                    stroke={NEW_SHAPE_STROKE}
-                    strokeWidth={2}
+                    stroke={shapeBorder}
+                    strokeWidth={shapeStroke}
                     strokeDasharray="7 5"
                     strokeLinejoin="round"
                   />
@@ -6027,8 +6568,8 @@ const navigateTo = useCallback(
                   <path
                     d={curvePath(createPreview.points)}
                     fill="none"
-                    stroke={strokeColor}
-                    strokeWidth={Math.max(1, strokeWidth)}
+                    stroke={shapeBorder}
+                    strokeWidth={Math.max(1, shapeStroke)}
                     strokeDasharray="7 5"
                     strokeLinecap="round"
                   />
@@ -6094,6 +6635,45 @@ const navigateTo = useCallback(
               }}
             />
           ) : null}
+          {textDraftRect ? (
+            <div
+              className="rubber"
+              style={{
+                left: textDraftRect.x,
+                top: textDraftRect.y,
+                width: textDraftRect.width,
+                height: textDraftRect.height,
+                borderWidth: 1 / Math.max(0.02, liveZoom)
+              }}
+            />
+          ) : null}
+          {bendTarget
+            ? bendTarget.grips.map((grip) => {
+                const main = grip.role === 'joint' || bendTarget.grips.length === 1
+                const size = (main ? 14 : 11) / Math.max(0.05, liveZoom)
+                return (
+                  <span
+                    key={`${grip.role}${grip.index}`}
+                    className={`bendgrip bendgrip--${grip.role}${bendTarget.bent ? ' bendgrip--on' : ''}`}
+                    style={{
+                      left: grip.x - size / 2,
+                      top: grip.y - size / 2,
+                      width: size,
+                      height: size,
+                      borderWidth: 1.5 / Math.max(0.05, liveZoom)
+                    }}
+                    title={main ? 'Потянуть, чтобы вести изгиб. Правый клик — убрать' : 'Потянуть, чтобы добавить изгиб. Правый клик — убрать'}
+                    onPointerDown={(event) => startBend(bendTarget.id, grip, event)}
+                    onDoubleClick={() => clearBend(bendTarget.id)}
+                    onContextMenu={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      straightenBend(bendTarget.id, grip)
+                    }}
+                  />
+                )
+              })
+            : null}
           {strokeBox ? (
             <div className="inkpreview" style={{ left: strokeBox.x, top: strokeBox.y, width: strokeBox.width, height: strokeBox.height }}>
               <svg width="100%" height="100%" viewBox={`0 0 ${Math.max(1, strokeBox.width)} ${Math.max(1, strokeBox.height)}`}>
@@ -6142,6 +6722,148 @@ const navigateTo = useCallback(
             style={{ left: eraserCursor.x, top: eraserCursor.y, width: eraserCursor.size, height: eraserCursor.size }}
           />
         ) : null}
+      </div>
+
+      <div
+        ref={chromeRef}
+        className="boardview__chrome"
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      >
+        {drag.kind === 'link' ? (() => {
+          const hoverId = itemAt(drag.point)
+          return (
+            <LinkDraft
+              from={byId.get(drag.fromId) ?? null}
+              to={hoverId && hoverId !== drag.fromId ? byId.get(hoverId) ?? null : null}
+              anchor={drag.anchor}
+              point={drag.point}
+              style={linkStyle}
+              color={shapeBorder}
+              width={linkWidth}
+              zoom={Math.max(0.05, liveZoom)}
+              arrow={linkArrow}
+            />
+          )
+        })() : null}
+        {resizeTargets.map((target) => {
+          const box = itemBounds(target)
+          const zoom = Math.max(0.05, liveZoom)
+          const grip = 13 / zoom
+          const half = grip / 2
+          const dot = 10 / Math.max(0.05, liveZoom)
+          const dotGap = 13 / Math.max(0.05, liveZoom)
+          const knob = 20 / zoom
+          const stem = 15 / zoom
+          const pointsMode = shapePoints === target.id && resizeTargets.length === 1
+          const allShapeHandles =
+            target.kind === 'shape' && resizeTargets.length === 1 && !target.locked && !readOnly
+              ? shapeHandles(target.shape, box.width, box.height, target)
+              : []
+          const vertexHandles = allShapeHandles.filter((handle) => /^(v\d+|add\d+)$/.test(handle.id))
+          const paramHandles = allShapeHandles.filter((handle) => !/^(v\d+|add\d+)$/.test(handle.id))
+          const takenAt = (x: number, y: number): boolean =>
+            vertexHandles.some((handle) => Math.hypot(handle.x - x, handle.y - y) < grip * 1.2)
+          const handles = pointsMode
+            ? []
+            : (target.kind === 'image'
+                ? RESIZE_HANDLES.filter((handle) => handle.id.length > 1)
+                : target.kind === 'text'
+                  ? RESIZE_HANDLES.filter((handle) => handle.id === 'e' || handle.id === 'w' || handle.id.length > 1)
+                  : RESIZE_HANDLES
+              ).filter((handle) => !takenAt(handle.cx * box.width, handle.cy * box.height))
+          const dots = resizeTargets.length === 1 && !pointsMode && target.kind !== 'shape' ? LINK_DOTS : []
+          const adjustHandles = pointsMode ? vertexHandles : paramHandles
+          return (
+            <div
+              key={`rs${target.id}`}
+              className="resizeframe"
+              style={{
+                left: box.x,
+                top: box.y,
+                width: box.width,
+                height: box.height,
+                transform: target.rotation ? `rotate(${target.rotation}deg)` : undefined
+              }}
+            >
+              {handles.map((handle) => (
+                <span
+                  key={handle.id}
+                  className="resizehandle"
+                  style={{
+                    left: `calc(${handle.cx * 100}% - ${half}px)`,
+                    top: `calc(${handle.cy * 100}% - ${half}px)`,
+                    width: grip,
+                    height: grip,
+                    cursor: handle.cursor
+                  }}
+                  onPointerDown={(event) => startResize(target.id, handle.id, event)}
+                />
+              ))}
+              {dots.map((link) => (
+                <span
+                  key={link.id}
+                  className="linkdot"
+                  style={{
+                    left: `calc(${link.cx * 100}% + ${link.dx * dotGap - dot / 2}px)`,
+                    top: `calc(${link.cy * 100}% + ${link.dy * dotGap - dot / 2}px)`,
+                    width: dot,
+                    height: dot
+                  }}
+                  title="Стрелка"
+                  onPointerDown={(event) => startLinkDot(target.id, event)}
+                />
+              ))}
+              {adjustHandles.map((handle) => {
+                const vertex = /^v\d+$/.test(handle.id)
+                const corner = /^add\d+$/.test(handle.id)
+                const size = corner ? grip * 0.8 : grip
+                return (
+                  <span
+                    key={handle.id}
+                    className={`shapehandle${vertex ? ' shapehandle--vertex' : ''}${corner ? ' shapehandle--corner' : ''}`}
+                    style={{
+                      left: handle.x - size / 2,
+                      top: handle.y - size / 2,
+                      width: size,
+                      height: size
+                    }}
+                    title={corner ? 'Добавить угол' : vertex ? 'Переместить угол' : 'Изменить форму'}
+                    onPointerDown={(event) => startAdjust(target.id, handle.id, event)}
+                  />
+                )
+              })}
+              {resizeTargets.length === 1 && !pointsMode ? (
+                <>
+                  <span
+                    className="rotatestem"
+                    style={{
+                      left: `calc(50% - ${0.7 / zoom}px)`,
+                      top: `${-(stem + knob / 2)}px`,
+                      width: 1.4 / zoom,
+                      height: stem + knob / 2
+                    }}
+                  />
+                  <span
+                    className="rotatehandle"
+                    style={{
+                      left: `calc(50% - ${knob / 2}px)`,
+                      top: `${-(stem + knob)}px`,
+                      width: knob,
+                      height: knob,
+                      borderWidth: 1.5 / zoom
+                    }}
+                    title="Повернуть"
+                    onPointerDown={(event) => startRotate(target.id, event)}
+                  >
+                    <RotateCw style={{ width: knob * 0.58, height: knob * 0.58 }} strokeWidth={2.6} />
+                  </span>
+                </>
+              ) : null}
+            </div>
+          )
+        })}
       </div>
 
       {menu ? (
@@ -6202,6 +6924,18 @@ const navigateTo = useCallback(
                 </PaletteCell>
               </PaletteGrid>
             </PaletteGroup>
+            {shapePanelTarget && hasCornerRadius(shapePanelTarget.shape) ? (
+              <PaletteGroup title="Фигура">
+                <PaletteSlider
+                  label="Скругление углов"
+                  suffix="%"
+                  value={Math.round(cornerRadius(shapePanelTarget.shape, shapePanelTarget) * 100)}
+                  min={0}
+                  max={50}
+                  onChange={(value) => setShapeRadius(shapePanelTarget.id, value / 100)}
+                />
+              </PaletteGroup>
+            ) : null}
             {imageSelection.length === 1 ? (
               <PaletteGroup title="Заменить картинку">
                 <PaletteGrid columns={2}>
@@ -6224,6 +6958,106 @@ const navigateTo = useCallback(
               <PaletteGroup title={`Картинок выбрано: ${imageSelection.length}`}>
                 <PaletteAction label="Заменить файлами" icon={<ImagePlus size={15} />} disabled={readOnly} onClick={() => void replaceImagesFromFiles()} />
               </PaletteGroup>
+            ) : null}
+            {connectorTarget ? (
+              <>
+                <PaletteGroup title="Линия связи">
+                  <PaletteGrid columns={3}>
+                    <PaletteCell
+                      title="Прямая линия"
+                      icon={<LineGlyph shape="straight" />}
+                      active={connectorTarget.shape === 'straight'}
+                      disabled={readOnly}
+                      onClick={() => patchConnector(connectorTarget.id, { shape: 'straight', bends: undefined })}
+                    />
+                    <PaletteCell
+                      title="Кривая"
+                      icon={<LineGlyph shape="curved" />}
+                      active={connectorTarget.shape === 'curved'}
+                      disabled={readOnly}
+                      onClick={() => patchConnector(connectorTarget.id, { shape: 'curved' })}
+                    />
+                    <PaletteCell
+                      title="Ломаная"
+                      icon={<LineGlyph shape="elbowed" />}
+                      active={connectorTarget.shape === 'elbowed'}
+                      disabled={readOnly}
+                      onClick={() => patchConnector(connectorTarget.id, { shape: 'elbowed', bends: undefined })}
+                    />
+                  </PaletteGrid>
+                </PaletteGroup>
+                <PaletteGroup title="Начертание">
+                  <PaletteSlider
+                    label="Толщина"
+                    value={connectorTarget.lineWidth}
+                    min={1}
+                    max={24}
+                    onChange={(value) => patchConnector(connectorTarget.id, { lineWidth: value }, true)}
+                  />
+                </PaletteGroup>
+                <PaletteGroup title="Линия">
+                  <PaletteGrid columns={3}>
+                    <PaletteCell
+                      title="Сплошная"
+                      icon={dashIcon('normal')}
+                      active={connectorTarget.lineStyle === 'normal'}
+                      disabled={readOnly}
+                      onClick={() => patchConnector(connectorTarget.id, { lineStyle: 'normal' })}
+                    />
+                    <PaletteCell
+                      title="Пунктир"
+                      icon={dashIcon('dashed')}
+                      active={connectorTarget.lineStyle === 'dashed'}
+                      disabled={readOnly}
+                      onClick={() => patchConnector(connectorTarget.id, { lineStyle: 'dashed' })}
+                    />
+                    <PaletteCell
+                      title="Точки"
+                      icon={dashIcon('dotted')}
+                      active={connectorTarget.lineStyle === 'dotted'}
+                      disabled={readOnly}
+                      onClick={() => patchConnector(connectorTarget.id, { lineStyle: 'dotted' })}
+                    />
+                  </PaletteGrid>
+                </PaletteGroup>
+                <PaletteGroup title="Начало">
+                  <PaletteGrid columns={5}>
+                    {CONNECTOR_CAPS.map((cap) => (
+                      <PaletteCell
+                        key={`start-${cap}`}
+                        title={CONNECTOR_CAP_LABELS[cap]}
+                        icon={capIcon(cap)}
+                        active={connectorTarget.startStroke === cap}
+                        disabled={readOnly}
+                        onClick={() => patchConnector(connectorTarget.id, { startStroke: cap })}
+                      />
+                    ))}
+                  </PaletteGrid>
+                </PaletteGroup>
+                <PaletteGroup title="Конец">
+                  <PaletteGrid columns={5}>
+                    {CONNECTOR_CAPS.map((cap) => (
+                      <PaletteCell
+                        key={`end-${cap}`}
+                        title={CONNECTOR_CAP_LABELS[cap]}
+                        icon={capIcon(cap)}
+                        active={connectorTarget.endStroke === cap}
+                        disabled={readOnly}
+                        onClick={() => patchConnector(connectorTarget.id, { endStroke: cap })}
+                      />
+                    ))}
+                  </PaletteGrid>
+                </PaletteGroup>
+                <PaletteGroup title="Цвет">
+                  <PaletteSwatches
+                    colors={QUICK_COLORS}
+                    value={connectorTarget.color}
+                    nameFor={colorName}
+                    onPick={(color) => patchConnector(connectorTarget.id, { color })}
+                    onCustom={(color) => patchConnector(connectorTarget.id, { color }, true)}
+                  />
+                </PaletteGroup>
+              </>
             ) : null}
           </div>
         ) : null}
@@ -6329,13 +7163,13 @@ const navigateTo = useCallback(
                 </PaletteCell>
               </PaletteGrid>
             </PaletteGroup>
-            <PaletteGroup title={createIsLine ? 'Цвет линии' : 'Цвет фигуры'}>
+            <PaletteGroup title={createIsLine ? 'Цвет линии' : 'Цвет рамки'}>
               <PaletteSwatches
                 colors={QUICK_COLORS}
-                value={createIsLine ? strokeColor : shapeColor}
+                value={shapeBorder}
                 nameFor={colorName}
-                onPick={(color) => (createIsLine ? setStrokeColor(color) : setShapeColor(color))}
-                onCustom={(color) => (createIsLine ? setStrokeColor(color) : setShapeColor(color))}
+                onPick={setShapeBorder}
+                onCustom={setShapeBorder}
               />
             </PaletteGroup>
             {SHAPE_GROUPS.map((group) => (
@@ -6349,7 +7183,7 @@ const navigateTo = useCallback(
                       icon={shapeIcon(shape)}
                       onClick={() => {
                         setCreateShape(shape)
-                        setCreateTool(createToolForShape(shape))
+                        setCreateTool('shape')
                       }}
                     />
                   ))}
@@ -6358,11 +7192,11 @@ const navigateTo = useCallback(
             ))}
             <PaletteGroup title="Начертание">
               <PaletteSlider
-                label={createIsLine ? 'Толщина' : 'Рамка'}
-                value={createIsLine ? strokeWidth : shapeStroke}
+                label={createIsLine ? 'Толщина' : 'Толщина рамки'}
+                value={shapeStroke}
                 min={1}
                 max={24}
-                onChange={(value) => (createIsLine ? setStrokeWidth(value) : setShapeStroke(value))}
+                onChange={setShapeStroke}
               />
             </PaletteGroup>
           </div>
@@ -6516,15 +7350,21 @@ const navigateTo = useCallback(
         {panelKind === 'text' || panelKind === 'sticky' ? (
           <div className="toolgroup toolpalette">
             {paletteHead(panelKind)}
-            <PaletteGroup title="Цвет текста">
-              <PaletteSwatches colors={QUICK_COLORS} value={textColor} nameFor={colorName} onPick={setTextColor} onCustom={setTextColor} />
+            <PaletteGroup title={panelKind === 'sticky' ? 'Цвет стикера' : 'Цвет текста'}>
+              {panelKind === 'sticky' ? (
+                <PaletteSwatches colors={STICKY_COLORS} value={stickyColor} nameFor={colorName} onPick={setStickyColor} onCustom={setStickyColor} />
+              ) : (
+                <PaletteSwatches colors={QUICK_COLORS} value={textColor} nameFor={colorName} onPick={setTextColor} onCustom={setTextColor} />
+              )}
             </PaletteGroup>
             <PaletteGroup title="Начертание">
               <PaletteSlider label="Размер" value={textSize} min={8} max={72} onChange={setTextSize} />
             </PaletteGroup>
             <PaletteGroup>
               <PaletteNote>
-                {panelKind === 'text' ? 'Щёлкните по доске или по грани 3D-фигуры' : 'Щёлкните по доске, чтобы поставить стикер.'}
+                {panelKind === 'text'
+                  ? 'Щёлкните по доске или протяните ширину колонки.'
+                  : 'Щёлкните по доске, чтобы поставить стикер.'}
               </PaletteNote>
             </PaletteGroup>
           </div>

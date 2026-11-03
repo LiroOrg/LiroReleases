@@ -1,7 +1,8 @@
 import { memo, useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import type { BoardDoc, BoardItem, Rect } from '@shared/types'
-import { curveControl, deriveConnectorPoints } from '@shared/geometry'
+import { arrowHeadShape, capTrim, connectorAnchor, connectorSpine, deriveConnectorPoints, shortenToward } from '@shared/geometry'
+import type { HeadShape } from '@shared/geometry'
 import { strokeDash } from '@shared/shapes'
 
 export interface ConnectorLayerProps {
@@ -55,13 +56,15 @@ function drawArrow(
 ): void {
   if (cap === 'none') return
   const angle = Math.atan2(to.y - from.y, to.x - from.x)
-  const size = Math.max(6, lineWidth * 3.4)
+  const reach = Math.hypot(to.x - from.x, to.y - from.y)
+  const size = Math.max(8, Math.min(48, lineWidth * 7, reach * 0.7))
   ctx.save()
   ctx.translate(to.x, to.y)
   ctx.rotate(angle)
   ctx.fillStyle = color
   ctx.strokeStyle = color
   ctx.lineWidth = Math.max(1, lineWidth * 0.8)
+  ctx.lineJoin = 'round'
   const shape = cap.toLowerCase()
   ctx.beginPath()
   if (shape.includes('diamond')) {
@@ -74,23 +77,39 @@ function drawArrow(
     if (shape.includes('filled')) ctx.fill()
     else ctx.stroke()
   } else if (shape.includes('oval') || shape.includes('circle')) {
-    ctx.arc(0, 0, size * 0.5, 0, Math.PI * 2)
+    ctx.arc(0, 0, size * 0.42, 0, Math.PI * 2)
     if (shape.includes('filled')) ctx.fill()
     else ctx.stroke()
-  } else if (shape.includes('triangle')) {
+  } else if (shape.includes('open') || shape.includes('line')) {
     ctx.moveTo(0, 0)
-    ctx.lineTo(-size * 0.85, -size * 0.6)
-    ctx.lineTo(-size * 0.85, size * 0.6)
+    ctx.lineTo(-size, -size * 0.44)
+    ctx.moveTo(0, 0)
+    ctx.lineTo(-size, size * 0.44)
+    ctx.stroke()
+  } else if (shape.includes('stealth')) {
+    const spread = size * 0.55
+    const notch = -size * 0.45
+    ctx.moveTo(0, 0)
+    ctx.lineTo(-size * 0.9, -spread)
+    ctx.lineTo(notch, 0)
+    ctx.lineTo(-size * 0.9, spread)
     ctx.closePath()
     ctx.fill()
+    ctx.stroke()
   } else {
-    ctx.moveTo(0, 0)
-    ctx.lineTo(-size * 0.8, -size * 0.45)
-    ctx.lineTo(-size * 0.8, size * 0.45)
-    ctx.closePath()
+    headPath(ctx, arrowHeadShape(size))
     ctx.fill()
   }
   ctx.restore()
+}
+
+function headPath(ctx: CanvasRenderingContext2D, shape: HeadShape): void {
+  ctx.moveTo(shape.start.x, shape.start.y)
+  for (const segment of shape.segments) {
+    if (segment.ctrl) ctx.quadraticCurveTo(segment.ctrl.x, segment.ctrl.y, segment.end.x, segment.end.y)
+    else ctx.lineTo(segment.end.x, segment.end.y)
+  }
+  ctx.closePath()
 }
 
 export const ConnectorLayer = memo(function ConnectorLayer(props: ConnectorLayerProps): ReactNode {
@@ -172,9 +191,11 @@ function draw(
     const area = props.visible
     const margin = 200
 
-    for (const item of props.doc.items) {
-      if (item.kind !== 'connector') continue
-      const connector = item
+    for (const source of props.doc.items) {
+      if (source.kind !== 'connector') continue
+      const live = byId.get(source.id)
+      if (!live || live.kind !== 'connector') continue
+      const connector = live
       const points = deriveConnectorPoints(connector, byId)
       if (points.length < 2) continue
       let left = Infinity
@@ -196,8 +217,19 @@ function draw(
         continue
       }
       const screen = points.map(toScreen)
+      const spine = points.length === 2 ? connectorSpine(connector, points[0], points[1]) : null
       const lineWidth = Math.max(0.6, connector.lineWidth * zoom)
       const elbowRadius = Math.min(Math.max(4, 14 * zoom), 40)
+      const lastScreen = screen[screen.length - 1]
+      const startFrom = spine ? toScreen(spine[0].ctrl) : screen[1]
+      const endFrom = spine ? toScreen(spine[spine.length - 1].ctrl) : screen[screen.length - 2]
+      const trimmed = screen.slice()
+      trimmed[0] = shortenToward(screen[0], startFrom, capTrim(connector.startStroke, screen[0], startFrom, lineWidth))
+      trimmed[trimmed.length - 1] = shortenToward(
+        lastScreen,
+        endFrom,
+        capTrim(connector.endStroke, lastScreen, endFrom, lineWidth)
+      )
       ctx.strokeStyle = connector.color
       ctx.fillStyle = connector.color
       ctx.lineWidth = lineWidth
@@ -206,34 +238,31 @@ function draw(
       const dash = strokeDash(connector.lineStyle as 'normal' | 'dotted' | 'dashed')
       ctx.setLineDash(dash ? dash.split(' ').map((v) => Number(v) * zoom) : [])
       ctx.beginPath()
-      let ctrl: { x: number; y: number } | null = null
-      if (connector.shape === 'curved' && screen.length === 2) {
-        const [a, b] = screen
-        ctrl = curveControl(a, b)
-        ctx.moveTo(a.x, a.y)
-        ctx.quadraticCurveTo(ctrl.x, ctrl.y, b.x, b.y)
+      if (spine) {
+        ctx.moveTo(trimmed[0].x, trimmed[0].y)
+        spine.forEach((segment, index) => {
+          const ctrl = toScreen(segment.ctrl)
+          const to = index === spine.length - 1 ? trimmed[trimmed.length - 1] : toScreen(segment.to)
+          ctx.quadraticCurveTo(ctrl.x, ctrl.y, to.x, to.y)
+        })
       } else if (connector.shape === 'elbowed' && screen.length === 2) {
-        const [a, b] = screen
+        const a = trimmed[0]
+        const b = trimmed[trimmed.length - 1]
         const path =
           Math.abs(b.x - a.x) >= Math.abs(b.y - a.y)
-            ? [a, { x: (a.x + b.x) / 2, y: a.y }, { x: (a.x + b.x) / 2, y: b.y }, b]
-            : [a, { x: a.x, y: (a.y + b.y) / 2 }, { x: b.x, y: (a.y + b.y) / 2 }, b]
+            ? [a, { x: (screen[0].x + lastScreen.x) / 2, y: screen[0].y }, { x: (screen[0].x + lastScreen.x) / 2, y: lastScreen.y }, b]
+            : [a, { x: screen[0].x, y: (screen[0].y + lastScreen.y) / 2 }, { x: lastScreen.x, y: (screen[0].y + lastScreen.y) / 2 }, b]
         roundedElbow(ctx, path, elbowRadius)
       } else if (screen.length > 2) {
-        roundedElbow(ctx, screen, elbowRadius)
+        roundedElbow(ctx, trimmed, elbowRadius)
       } else {
-        ctx.moveTo(screen[0].x, screen[0].y)
-        ctx.lineTo(screen[1].x, screen[1].y)
+        ctx.moveTo(trimmed[0].x, trimmed[0].y)
+        ctx.lineTo(trimmed[trimmed.length - 1].x, trimmed[trimmed.length - 1].y)
       }
       ctx.stroke()
       ctx.setLineDash([])
       if (connector.captions?.length) {
-        const mid = ctrl
-          ? {
-              x: (screen[0].x + 2 * ctrl.x + screen[1].x) / 4,
-              y: (screen[0].y + 2 * ctrl.y + screen[1].y) / 4
-            }
-          : screen[Math.floor(screen.length / 2)]
+        const mid = spine ? toScreen(connectorAnchor(connector, points[0], points[1])) : screen[Math.floor(screen.length / 2)]
         ctx.font = `${Math.max(8, 12 * zoom)}px Inter, 'Segoe UI', sans-serif`
         ctx.fillStyle = connector.textColor ?? '#1a1a1a'
         ctx.textAlign = 'center'
@@ -241,11 +270,8 @@ function draw(
         const plain = connector.captions[0].replace(/<[^>]*>/g, '')
         ctx.fillText(plain, mid.x, mid.y - lineWidth * 2)
       }
-      const startFrom = ctrl ?? screen[1]
       drawArrow(ctx, startFrom, screen[0], connector.startStroke, connector.color, lineWidth)
-      const last = screen[screen.length - 1]
-      const endFrom = ctrl ?? screen[screen.length - 2]
-      drawArrow(ctx, endFrom, last, connector.endStroke, connector.color, lineWidth)
+      drawArrow(ctx, endFrom, lastScreen, connector.endStroke, connector.color, lineWidth)
     }
   }
 }

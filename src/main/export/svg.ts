@@ -2,7 +2,16 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { BoardDoc, BoardItem, SolidItem } from '@shared/types'
 import { curvePath } from '@shared/curve'
-import { curveControl, deriveConnectorPoints, pathForPoints } from '@shared/geometry'
+import {
+  arrowHeadPath,
+  capTrim,
+  connectorAnchor,
+  connectorSpine,
+  deriveConnectorPoints,
+  pathForPoints,
+  shortenToward,
+  spinePath
+} from '@shared/geometry'
 import { compileFormula, curveSegments } from '@shared/graph'
 import { shapePath } from '@shared/shapes'
 import { solidProjection, faceLocalToWorld, projectPoint } from '@shared/three'
@@ -37,20 +46,26 @@ function arrowCap(
 ): string {
   if (cap === 'none' || cap === 'unknown') return ''
   const angle = (Math.atan2(tip.y - from.y, tip.x - from.x) * 180) / Math.PI
-  const size = Math.max(6, lineWidth * 3.4)
+  const reach = Math.hypot(tip.x - from.x, tip.y - from.y)
+  const size = Math.max(8, Math.min(48, lineWidth * 7, reach * 0.7))
   const shape = cap.toLowerCase()
   const points = shape.includes('diamond')
     ? `0,${-size * 0.72} ${size * 0.62},0 0,${size * 0.72} ${-size * 0.62},0`
     : shape.includes('stealth')
       ? `0,0 ${-size * 0.9},${-size * 0.55} ${-size * 0.45},0 ${-size * 0.9},${size * 0.55}`
-      : `0,0 ${-size * 0.85},${-size * 0.6} ${-size * 0.85},${size * 0.6}`
+      : `0,0 ${-size},${-size * 0.56} ${-size},${size * 0.56}`
   const isOval = shape.includes('oval')
-  const fill = shape.includes('filled') ? color : 'none'
-  const stroke = shape.includes('filled') ? 'none' : color
+  const isDiamond = shape.includes('diamond')
+  const hollow = (isOval || isDiamond || shape.includes('open') || shape.includes('line')) && !shape.includes('filled')
+  const fill = hollow ? 'none' : color
+  const stroke = color
   const strokeWidth = Math.max(1, lineWidth * 0.8)
+  const sharp = hollow || isDiamond || shape.includes('stealth')
   const body = isOval
     ? `<ellipse cx="${-size * 0.5}" cy="0" rx="${size * 0.5}" ry="${size * 0.36}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`
-    : `<polygon points="${points}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round"/>`
+    : sharp
+      ? `<polygon points="${points}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round"/>`
+      : `<path d="${arrowHeadPath(size)}" fill="${color}"/>`
   return `<g transform="translate(${tip.x} ${tip.y}) rotate(${angle})">${body}</g>`
 }
 
@@ -132,7 +147,7 @@ function itemSvg(item: BoardItem, docId: string, index: number, byId: Map<string
     }
     case 'shape': {
       const dash = item.borderStyle === 'dashed' ? ' stroke-dasharray="8 6"' : item.borderStyle === 'dotted' ? ' stroke-dasharray="2 5"' : ''
-      return `<g${rotate}><path d="${shapePath(item.shape, w, h)}" fill="${item.fillColor}" stroke="${item.borderColor}" stroke-width="${item.borderWidth}"${dash} opacity="${item.opacity}"/>${textLines(
+      return `<g${rotate}><path d="${shapePath(item.shape, w, h, item)}" fill="none" stroke="${item.borderColor}" stroke-width="${item.borderWidth}"${dash} opacity="${item.opacity}"/>${textLines(
         item.plain,
         4
       )
@@ -154,16 +169,21 @@ function itemSvg(item: BoardItem, docId: string, index: number, byId: Map<string
       if (points.length < 2) return ''
       const dash = item.lineStyle === 'dashed' ? ' stroke-dasharray="8 6"' : item.lineStyle === 'dotted' ? ' stroke-dasharray="2 5"' : ''
       const attributes = `fill="none" stroke="${item.color}" stroke-width="${item.lineWidth}"${dash} stroke-linecap="round" stroke-linejoin="round"`
-      const ctrl =
-        item.shape === 'curved' && points.length === 2 ? curveControl(points[0], points[1]) : null
-      const body = ctrl
-        ? `<path d="M ${points[0].x} ${points[0].y} Q ${ctrl.x} ${ctrl.y} ${points[1].x} ${points[1].y}" ${attributes}/>`
-        : `<path d="${pathForPoints(points, item.shape)}" ${attributes}/>`
-      const start = arrowCap(item.startStroke, ctrl ?? points[1], points[0], item.lineWidth, item.color)
-      const end = arrowCap(item.endStroke, ctrl ?? points[points.length - 2], points[points.length - 1], item.lineWidth, item.color)
-      const captionAnchor = ctrl
-        ? { x: (points[0].x + 2 * ctrl.x + points[1].x) / 4, y: (points[0].y + 2 * ctrl.y + points[1].y) / 4 }
-        : points[Math.floor(points.length / 2)]
+      const spine = points.length === 2 ? connectorSpine(item, points[0], points[1]) : null
+      const startFrom = spine ? spine[0].ctrl : points[1]
+      const endFrom = spine ? spine[spine.length - 1].ctrl : points[points.length - 2]
+      const trimmed = points.slice()
+      const first = points[0]
+      const tip = points[points.length - 1]
+      trimmed[0] = shortenToward(first, startFrom, capTrim(item.startStroke, first, startFrom, item.lineWidth))
+      trimmed[trimmed.length - 1] = shortenToward(tip, endFrom, capTrim(item.endStroke, tip, endFrom, item.lineWidth))
+      const curved = spine ? spinePath(spine, trimmed[0], trimmed[trimmed.length - 1]) : ''
+      const body = curved
+        ? `<path d="${curved}" ${attributes}/>`
+        : `<path d="${pathForPoints(trimmed, item.shape)}" ${attributes}/>`
+      const start = arrowCap(item.startStroke, startFrom, first, item.lineWidth, item.color)
+      const end = arrowCap(item.endStroke, endFrom, tip, item.lineWidth, item.color)
+      const captionAnchor = spine ? connectorAnchor(item, points[0], points[1]) : points[Math.floor(points.length / 2)]
       return `<g>${body}${start}${end}${
         item.captions?.length
           ? `<text x="${captionAnchor.x.toFixed(0)}" y="${(captionAnchor.y - item.lineWidth * 2).toFixed(0)}" text-anchor="middle" font-size="12" font-family="Inter, sans-serif" fill="${item.textColor || '#1a1a1a'}">${esc(

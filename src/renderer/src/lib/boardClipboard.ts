@@ -186,6 +186,7 @@ export interface SourceBoardItem {
   captions?: string[]
   urls?: string[]
   unsupported?: boolean
+  bends?: unknown
 }
 
 export type BoardItem = SourceBoardItem
@@ -1045,6 +1046,7 @@ function buildRawItem(info: WidgetInfo, byObjectId: Map<number, WidgetInfo>): Ra
       item.data.startStroke = startStroke
       item.data.endStroke = endStroke
       item.data.points = info.points.map((point) => ({ x: point.x, y: point.y }))
+      if (info.json.bends) item.data.bends = info.json.bends
       const captions = readCaptions(info.json)
       if (captions.length > 0) item.data.captions = captions.map((caption) => ({ content: caption }))
       return item
@@ -1355,6 +1357,7 @@ function exportWidgetObject(
     json.position = origin
     json.size = { width: box.width, height: box.height }
     json.points = points.map((point) => ({ x: point.x - origin.x, y: point.y - origin.y }))
+    if (item.bends) json.bends = item.bends
     json.primary = anchorForExport(source ? source.id : item.startItemId, item.startOffset, start, localIds)
     json.secondary = anchorForExport(target ? target.id : item.endItemId, item.endOffset, end, localIds)
     style.lc = intFromColor(str(item.color, '#1a1a1a'))

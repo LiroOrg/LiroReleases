@@ -3,6 +3,7 @@ import { extractUrls, toPlainText } from '@shared/richtext'
 import { boundsOfItems, isImageMime, measureTextBox, mimeToExtension } from '@shared/util'
 import type {
   BoardItem,
+  ConnectorBend,
   ConnectorItem,
   ConnectorShape,
   ItemKind,
@@ -65,10 +66,14 @@ const KIND_BY_TYPE: Record<string, ItemKind> = {
 const SHAPE_BY_NAME: Record<string, ShapeName> = {
   rectangle: 'rectangle',
   round_rectangle: 'round_rectangle',
-  wedge_round_rectangle_callout: 'round_rectangle',
+  wedge_round_rectangle_callout: 'speech_round',
+  wedge_rectangle_callout: 'speech_rect',
+  rect_callout: 'speech_rect',
+  oval_callout: 'speech_oval',
+  cloud_callout: 'speech_cloud',
   square: 'square',
   circle: 'circle',
-  can: 'circle',
+  can: 'flowchart_stored',
   triangle: 'triangle',
   right_triangle: 'right_triangle',
   diamond: 'diamond',
@@ -79,17 +84,36 @@ const SHAPE_BY_NAME: Record<string, ShapeName> = {
   hexagon: 'hexagon',
   octagon: 'octagon',
   star: 'star',
+  heart: 'heart',
+  moon: 'moon',
+  ring: 'ring',
   pie: 'pie',
   cross: 'cross',
   right_arrow: 'arrow_right',
   left_arrow: 'arrow_left',
   up_arrow: 'arrow_up',
   down_arrow: 'arrow_down',
-  left_right_arrow: 'arrow_right',
+  left_right_arrow: 'arrow_double',
+  quad_arrow: 'arrow_four_way',
+  bent_arrow: 'arrow_bend',
+  circular_arrow: 'arrow_circular',
   left_brace: 'cross',
   right_brace: 'cross',
   cloud: 'cloud' as ShapeName,
-  flow_chart_predefined_process: 'flowchart_process',
+  flow_chart_predefined_process: 'flowchart_predefined',
+  flow_chart_preparation: 'flowchart_preparation',
+  flow_chart_stored_data: 'flowchart_stored',
+  flow_chart_or: 'flowchart_or',
+  flow_chart_summing_junction: 'flowchart_sum',
+  flow_chart_merge: 'flowchart_merge',
+  flow_chart_extract: 'flowchart_extract',
+  flow_chart_display: 'flowchart_display',
+  flow_chart_connector: 'flowchart_connector',
+  flow_chart_offpage_storage: 'flowchart_offpage',
+  flow_chart_delay: 'flowchart_delay',
+  flow_chart_manual_input: 'flowchart_manual_input',
+  flow_chart_manual_operation: 'flowchart_manual_op',
+  flow_chart_internal_storage: 'flowchart_internal',
   flowchart_start: 'flowchart_start',
   flow_chart_start: 'flowchart_start',
   flowchart_end: 'flowchart_end',
@@ -212,6 +236,21 @@ function relativeOffsetOf(value: unknown): RelativeOffset | undefined {
   const px = x > 1 ? x / 100 : x
   const py = y > 1 ? y / 100 : y
   return { x: Math.max(0, Math.min(1, px)), y: Math.max(0, Math.min(1, py)) }
+}
+
+function bendOf(value: unknown): ConnectorBend[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const bends: ConnectorBend[] = []
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue
+    const source = entry as Record<string, unknown>
+    const at = num(source.at, NaN)
+    const x = num(source.x, NaN)
+    const y = num(source.y, NaN)
+    if (!Number.isFinite(at) || !Number.isFinite(x) || !Number.isFinite(y)) continue
+    bends.push({ at, x, y })
+  }
+  return bends.length ? bends : undefined
 }
 
 export function normalizeItems(raws: RawItem[]): NormalizeResult {
@@ -499,6 +538,8 @@ function normalizeOne(raw: RawItem, index: number): BoardItem | null {
       const shapeRaw = str(pick(raw.shape, data.shape, raw.connectorShape), 'curved').toLowerCase()
       const shape: ConnectorShape = shapeRaw === 'straight' ? 'straight' : shapeRaw === 'elbowed' ? 'elbowed' : 'curved'
       const strokeColor = color(pick(style.strokeColor, style.lineColor, style.color, data.color), '#1a1a1a')
+      const startCapRaw = pick(style.startStrokeCap, style.startStroke, data.startStroke)
+      const endCapRaw = pick(style.endStrokeCap, style.endStroke, data.endStroke)
       return {
         ...base,
         kind: 'connector',
@@ -511,8 +552,8 @@ function normalizeOne(raw: RawItem, index: number): BoardItem | null {
         color: strokeColor,
         lineWidth: Math.max(0.5, num(pick(style.strokeWidth, style.lineWidth, data.lineWidth), 2)),
         lineStyle: borderStyleOf(pick(style.strokeStyle, style.lineStyle)),
-        startStroke: strokeEndOf(pick(style.startStrokeCap, style.startStroke, data.startStroke)),
-        endStroke: strokeEndOf(pick(style.endStrokeCap, style.endStroke, data.endStroke)),
+        startStroke: startCapRaw === undefined ? 'none' : strokeEndOf(startCapRaw),
+        endStroke: endCapRaw === undefined ? 'arrow' : strokeEndOf(endCapRaw),
         startItemId: startItemId || undefined,
         endItemId: endItemId || undefined,
         startOffset: relativeOffsetOf(startRef),
@@ -520,6 +561,7 @@ function normalizeOne(raw: RawItem, index: number): BoardItem | null {
         captions: Array.isArray(data.captions)
           ? data.captions.map((c: any) => str(c?.content)).filter(Boolean)
           : undefined,
+        bends: bendOf(pick(data.bends, raw.bends)),
         unsupported: raw.isSupported === false,
         textColor: color(pick(style.color), contrastOf('#ffffff'))
       } as ConnectorItem
