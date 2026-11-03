@@ -378,6 +378,7 @@ export function PaletteAction(props: { label: string; icon: ReactNode; onClick: 
       onClick={props.onClick}
       disabled={props.disabled}
       title={props.title ?? props.label}
+      aria-label={props.title ?? props.label}
     >
       {props.icon}
       {props.label}

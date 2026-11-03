@@ -389,6 +389,7 @@ ${viewer}
       <div
         className="rendermode"
         data-background={query.background}
+        data-scope="thumb"
         style={{ position: 'fixed', inset: 0, overflow: 'hidden' }}
       >
         {stage(offsetX, offsetY, fit, frameWidth / fit, frameHeight / fit, 'main')}

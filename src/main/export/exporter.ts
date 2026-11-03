@@ -38,7 +38,7 @@ export async function exportBoard(
     const doc = store.readDoc(options.docId)
     const target = thumbnailPath(options.docId)
     if (!doc.items.length) {
-      writeFileSync(target, whitePng())
+      writeFileSync(target, boardPng())
       return target
     }
     const box = boundsOfItems(doc.items, 60)
@@ -178,9 +178,9 @@ function readme(title: string): string {
   ].join('\n')
 }
 
-function whitePng(): Buffer {
+function boardPng(): Buffer {
   return Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAD0lEQVR4nGP4jwMwDC0JALoev0Ewkwr8AAAAAElFTkSuQmCC',
+    'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAD0lEQVR4nGP4hAMwDC0JAOritYEF6iKUAAAAAElFTkSuQmCC',
     'base64'
   )
 }

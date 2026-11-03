@@ -41,12 +41,14 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
 
   const pixels = measured.width * measured.height
   const tooBig = format === 'png' && (pixels > 36_000_000 || measured.width > 12000 || measured.height > 12000)
+  const effectiveScope = WHOLE_FILE.includes(format) ? 'board' : scope
+  const frameMissing = effectiveScope === 'frame' && !frameId
 
   const buildOptions = (): ExportOptions => ({
     docId: props.doc.id,
     format,
-    scope: WHOLE_FILE.includes(format) ? 'board' : scope,
-    targetId: scope === 'frame' ? frameId : undefined,
+    scope: effectiveScope,
+    targetId: effectiveScope === 'frame' ? frameId : undefined,
     scale,
     background,
     pdfMode,
@@ -86,10 +88,10 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
       onClose={props.onClose}
       footer={
         <>
-          <button type="button" className="btn" onClick={() => void run(true)} disabled={busy}>
+          <button type="button" className="btn" onClick={() => void run(true)} disabled={busy || frameMissing}>
             Выбрать место…
           </button>
-          <button type="button" className="btn btn--primary" onClick={() => void run(false)} disabled={busy}>
+          <button type="button" className="btn btn--primary" onClick={() => void run(false)} disabled={busy || frameMissing}>
             {busy ? 'Готовим…' : 'Экспортировать в папку Liro'}
           </button>
         </>
@@ -104,6 +106,7 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
               type="button"
               className="exportoption"
               data-active={format === item.id}
+              aria-pressed={format === item.id}
               onClick={() => setFormat(item.id)}
             >
               <div className="exportoption__title">{item.title}</div>
@@ -116,35 +119,45 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
       {WHOLE_FILE.includes(format) ? null : (
         <div className="field">
           <span className="field__label">Что экспортировать</span>
-          <div className="field__row" style={{ flexWrap: 'wrap' }}>
+          <div className="field__row field__row--wrap">
             <button
               type="button"
-              className={scope === 'board' ? 'chip chip--active' : 'chip'}
+              className="chip"
+              data-active={scope === 'board'}
+              aria-pressed={scope === 'board'}
               onClick={() => setScope('board')}
             >
               Вся доска
             </button>
             <button
               type="button"
-              className={scope === 'frame' ? 'chip chip--active' : 'chip'}
+              className="chip"
+              data-active={scope === 'frame'}
+              aria-pressed={scope === 'frame'}
               onClick={() => setScope('frame')}
+              disabled={!frames.length}
+              title={frames.length ? 'Одну рамку' : 'На доске нет рамок'}
             >
               Одну рамку
             </button>
-            <span className="dim" style={{ fontSize: 12 }}>
-              {props.doc.title}
-            </span>
+            <span className="note">{props.doc.title}</span>
           </div>
           {scope === 'frame' ? (
-            <select className="select" value={frameId} onChange={(event) => setFrameId(event.target.value)}>
+            <select
+              className="select"
+              aria-label="Рамка для экспорта"
+              value={frameId}
+              onChange={(event) => setFrameId(event.target.value)}
+            >
               <option value="">Выберите рамку</option>
               {frames.map((frame) => (
                 <option key={frame.id} value={frame.id}>
-                  {frame.kind === 'frame' ? frame.title || 'Без названия' : 'Рамка'}
+                  {frame.title || 'Без названия'}
                 </option>
               ))}
             </select>
           ) : null}
+          {frameMissing ? <div className="field__hint">Выберите рамку, чтобы экспортировать её одну.</div> : null}
         </div>
       )}
 
@@ -157,13 +170,15 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
                 <button
                   key={value}
                   type="button"
-                  className={scale === value ? 'chip chip--active' : 'chip'}
+                  className="chip"
+                  data-active={scale === value}
+                  aria-pressed={scale === value}
                   onClick={() => setScale(value)}
                 >
                   {value}×
                 </button>
               ))}
-              <span className="dim" style={{ fontSize: 12 }}>
+              <span className="note">
                 {measured.width.toLocaleString('ru-RU')} × {measured.height.toLocaleString('ru-RU')} px
               </span>
             </div>
@@ -173,14 +188,18 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
             <div className="field__row">
               <button
                 type="button"
-                className={background === 'white' ? 'chip chip--active' : 'chip'}
+                className="chip"
+                data-active={background === 'white'}
+                aria-pressed={background === 'white'}
                 onClick={() => setBackground('white')}
               >
                 Белый
               </button>
               <button
                 type="button"
-                className={background === 'transparent' ? 'chip chip--active' : 'chip'}
+                className="chip"
+                data-active={background === 'transparent'}
+                aria-pressed={background === 'transparent'}
                 onClick={() => setBackground('transparent')}
               >
                 Прозрачный
@@ -204,14 +223,18 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
             <div className="field__row">
               <button
                 type="button"
-                className={pdfMode === 'single' ? 'chip chip--active' : 'chip'}
+                className="chip"
+                data-active={pdfMode === 'single'}
+                aria-pressed={pdfMode === 'single'}
                 onClick={() => setPdfMode('single')}
               >
                 Одна страница
               </button>
               <button
                 type="button"
-                className={pdfMode === 'tiles' ? 'chip chip--active' : 'chip'}
+                className="chip"
+                data-active={pdfMode === 'tiles'}
+                aria-pressed={pdfMode === 'tiles'}
                 onClick={() => setPdfMode('tiles')}
               >
                 Несколько страниц
@@ -219,8 +242,8 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
             </div>
           </div>
           {pdfMode === 'tiles' ? (
-            <div className="field__row" style={{ gap: 10, marginBottom: 14 }}>
-              <label className="field" style={{ marginBottom: 0 }}>
+            <div className="field__row field__row--tiles">
+              <label className="field field--tight">
                 <span className="field__label">Столбцов</span>
                 <input
                   className="input"
@@ -231,7 +254,7 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
                   onChange={(event) => setCols(Math.max(1, Math.min(6, Number(event.target.value) || 1)))}
                 />
               </label>
-              <label className="field" style={{ marginBottom: 0 }}>
+              <label className="field field--tight">
                 <span className="field__label">Строк</span>
                 <input
                   className="input"
@@ -242,7 +265,7 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
                   onChange={(event) => setRows(Math.max(1, Math.min(6, Number(event.target.value) || 1)))}
                 />
               </label>
-              <label className="field" style={{ marginBottom: 0 }}>
+              <label className="field field--tight">
                 <span className="field__label">Формат листа</span>
                 <select className="select" value={paper} onChange={(event) => setPaper(event.target.value as 'a4' | 'a3')}>
                   <option value="a4">A4</option>

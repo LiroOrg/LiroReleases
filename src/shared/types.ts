@@ -561,7 +561,6 @@ export interface BrushPreset {
 }
 
 export interface Settings {
-  theme: 'light' | 'dark' | 'system'
   gridSize: number
   gridMode: GridMode
   snapGrid: boolean

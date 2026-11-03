@@ -222,27 +222,6 @@ export function SettingsScreen(): ReactNode {
         <div className="section">
           <div className="section__title">Внешний вид</div>
           <div className="card">
-            <Row label="Тема" hint="Системная тема следует за настройками Windows.">
-              <div className="field__row">
-                {(
-                  [
-                    ['light', 'Светлая'],
-                    ['dark', 'Тёмная'],
-                    ['system', 'Системная']
-                  ] as Array<[AppSettings['theme'], string]>
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className={settings.theme === value ? 'chip chip--active' : 'chip'}
-                    onClick={() => void update({ theme: value }, `Тема: ${label}`)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </Row>
-
             <Row label="Масштаб интерфейса" hint="Увеличивает или уменьшает размеры элементов приложения.">
               <select
                 className="select"

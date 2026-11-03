@@ -73,6 +73,7 @@ import { api } from '../lib/api'
 import { useApp } from '../lib/store'
 import { navigate } from '../router'
 import { ItemLayer, itemBounds, shapeTextSize, visibleItems } from './scene'
+import { kindLabel } from './itemKinds'
 import { sheetSize } from './tableView'
 import { SHAPE_GROUPS, SHAPE_LABELS, cornerRadius, hasCornerRadius, isVertexShape, shapeHandleValue, shapeHandles, shapeParams, shapePath, shapeVertices, snapVertexPoint } from '@shared/shapes'
 import { ConnectorLayer } from './connectors'
@@ -972,6 +973,8 @@ export function BoardView(props: { docId: string }): ReactNode {
   const moveFrameRef = useRef(0)
   const pendingFitRef = useRef(false)
   const moveDeltaRef = useRef({ x: 0, y: 0 })
+  const pointerClientRef = useRef<{ x: number; y: number } | null>(null)
+  const applyMoveDragRef = useRef<(point: { x: number; y: number }) => void>(() => {})
   const [snapEnabled, setSnapEnabled] = useState(settings?.alignSnap ?? true)
   const [dropActive, setDropActive] = useState(false)
   const [guides, setGuides] = useState<Guide[]>([])
@@ -1706,6 +1709,13 @@ export function BoardView(props: { docId: string }): ReactNode {
   }, [items.length, shownItems])
   const byId = useMemo(() => new Map((doc?.items ?? []).map((item) => [item.id, item])), [doc])
   const selectedItems = useMemo(() => (doc ? doc.items.filter((item) => selection.has(item.id)) : []), [doc, selection])
+  const selectionSpeech = useMemo(() => {
+    if (selectedItems.length === 0) return ''
+    if (selectedItems.length > 1) return `Выбрано объектов: ${selectedItems.length}`
+    const item = selectedItems[0]
+    const text = ('plain' in item ? item.plain : '').trim().replace(/\s+/g, ' ').slice(0, 80)
+    return text ? `${kindLabel(item.kind)}: ${text}` : kindLabel(item.kind)
+  }, [selectedItems])
   const solidSelection = useMemo(() => selectedItems.filter((item): item is SolidItem => item.kind === 'solid'), [selectedItems])
   const imageSelection = useMemo(() => selectedItems.filter((item) => item.kind === 'image'), [selectedItems])
   const graphSelection = useMemo(() => selectedItems.filter((item): item is GraphItem => item.kind === 'graph'), [selectedItems])
@@ -3376,6 +3386,15 @@ export function BoardView(props: { docId: string }): ReactNode {
     [commit]
   )
 
+  const holdBoardPointer = useCallback((event: React.PointerEvent): void => {
+    pointerClientRef.current = { x: event.clientX, y: event.clientY }
+    try {
+      wrapRef.current?.setPointerCapture(event.pointerId)
+    } catch {
+      void 0
+    }
+  }, [])
+
   const onItemPointerDown = useCallback(
     (id: string, event: React.PointerEvent) => {
       if (event.button !== 0) return
@@ -3393,6 +3412,7 @@ export function BoardView(props: { docId: string }): ReactNode {
           const local = facePointOf(itemNow, hit.id, point)
           if (!local) return
           event.stopPropagation()
+          holdBoardPointer(event)
           strokePointsRef.current = [local]
           dragBaseRef.current = doc?.items ?? null
           setSelection(new Set([id]))
@@ -3401,6 +3421,7 @@ export function BoardView(props: { docId: string }): ReactNode {
         }
         if (!doc || readOnly) return
         event.stopPropagation()
+        holdBoardPointer(event)
         const point = toWorld(event.clientX, event.clientY)
         window.clearTimeout(inkClearRef.current)
         penPointsRef.current = [{ ...point, t: performance.now() }]
@@ -3439,6 +3460,7 @@ export function BoardView(props: { docId: string }): ReactNode {
       }
       if (tool !== 'select' && tool !== 'pen') return
       event.stopPropagation()
+      holdBoardPointer(event)
       const item = byId.get(id)
       if (item?.locked) {
         toast('Объект заблокирован', 'lock')
@@ -3542,8 +3564,116 @@ export function BoardView(props: { docId: string }): ReactNode {
       const point = toWorld(event.clientX, event.clientY)
       startMove(next, point)
     },
-    [selection, toWorld, byId, readOnly, tool, editing, doc, toast, solidMode, faceAtLocal, facePointOf, paintSolidFace, strokeColor, throughAnchor, commit, remember, strokeWidth, startMove]
+    [selection, toWorld, byId, readOnly, tool, editing, doc, toast, solidMode, faceAtLocal, facePointOf, paintSolidFace, strokeColor, throughAnchor, commit, remember, strokeWidth, startMove, holdBoardPointer]
   )
+
+  const applyMoveDrag = useCallback(
+    (point: { x: number; y: number }): void => {
+      if (drag.kind !== 'move' || !doc) return
+      if (!drag.moved) solidMoveRef.current = { x: 0, y: 0 }
+      let dx = point.x - drag.startX
+      let dy = point.y - drag.startY
+      if (snapEnabled && drag.origins.size) {
+        const moving = unionBox(
+          selectedItems
+            .filter((item) => drag.origins.has(item.id))
+            .map((item) => (item.kind === 'solid' ? itemBounds(item, byId) : rotatedBox(itemBounds(item, byId), item.rotation)))
+        )
+        const shifted = { ...moving, x: moving.x + dx, y: moving.y + dy }
+        const snapped = snapBox(shifted, snapTargetsRef.current, 8 / Math.max(0.05, viewRef.current.zoom))
+        dx += snapped.dx
+        dy += snapped.dy
+        showGuides(snapped.guides)
+      }
+      if (snapGrid) {
+        const step = gridSize
+        const origin = drag.origins.values().next().value as { x: number; y: number } | undefined
+        if (origin) {
+          dx = Math.round((origin.x + dx) / step) * step - origin.x
+          dy = Math.round((origin.y + dy) / step) * step - origin.y
+        }
+      }
+      const movingSolids: SolidItem[] = []
+      for (const id of drag.origins.keys()) {
+        const item = byId.get(id)
+        if (item?.kind === 'solid') movingSolids.push(item)
+      }
+      if (movingSolids.length) {
+        const stationary = doc.items.filter((item) => item.kind === 'solid' && !drag.origins.has(item.id))
+        const tries = (ax: number, ay: number): boolean => {
+          for (const solid of movingSolids) {
+            const origin = drag.origins.get(solid.id)
+            if (!origin) continue
+            const candidate = { ...solid, x: Math.round(origin.x + ax), y: Math.round(origin.y + ay) } as SolidItem
+            if (solidsCollide(candidate, stationary)) return false
+          }
+          return true
+        }
+        if (!tries(dx, dy)) {
+          if (tries(dx, 0)) dy = 0
+          else if (tries(0, dy)) dx = 0
+          else {
+            dx = solidMoveRef.current.x
+            dy = solidMoveRef.current.y
+          }
+        }
+      }
+      solidMoveRef.current = { x: dx, y: dy }
+      moveDeltaRef.current = { x: dx, y: dy }
+      const moved: Array<{ id: string; x: number; y: number }> = []
+      for (const [id, origin] of drag.origins) {
+        const x = origin.x + dx
+        const y = origin.y + dy
+        livePosRef.current.set(id, { x, y })
+        moved.push({ id, x, y })
+      }
+      if (!moveFrameRef.current) moveFrameRef.current = requestAnimationFrame(flushMovePositions)
+      pushPreview({ t: 'preview', kind: 'move', items: moved })
+      liveRef.current += 1
+      if (!drag.moved) setDrag({ ...drag, moved: true })
+    },
+    [drag, doc, snapEnabled, snapGrid, gridSize, selectedItems, showGuides, pushPreview, byId, solidsCollide, flushMovePositions]
+  )
+
+  useEffect(() => {
+    applyMoveDragRef.current = applyMoveDrag
+  }, [applyMoveDrag])
+
+  useEffect(() => {
+    if (drag.kind !== 'move') return
+    const edge = 30
+    const limit = 900
+    let last = performance.now()
+    let frame = 0
+    const glide = (now: number): void => {
+      const dt = Math.min(64, now - last)
+      last = now
+      const client = pointerClientRef.current
+      const rect = canvasRectRef.current
+      const current = viewRef.current
+      if (client && size.width && size.height) {
+        const insetX = Math.min(client.x - rect.left, rect.left + size.width - client.x)
+        const insetY = Math.min(client.y - rect.top, rect.top + size.height - client.y)
+        const centerX = rect.left + size.width / 2
+        const centerY = rect.top + size.height / 2
+        const push = (inset: number, side: number): number => {
+          if (inset >= edge) return 0
+          const ratio = Math.min(1, (edge - inset) / edge)
+          return ratio * ratio * side
+        }
+        const pushX = push(insetX, Math.sign(client.x - centerX))
+        const pushY = push(insetY, Math.sign(client.y - centerY))
+        if (pushX || pushY) {
+          const step = (limit * dt) / 1000 / current.zoom
+          applyView({ ...current, x: current.x + step * pushX, y: current.y + step * pushY })
+          applyMoveDragRef.current(toWorld(client.x, client.y))
+        }
+      }
+      frame = requestAnimationFrame(glide)
+    }
+    frame = requestAnimationFrame(glide)
+    return () => cancelAnimationFrame(frame)
+  }, [drag.kind, size, applyView, toWorld])
 
   const onPointerMove = useCallback(
     (event: React.PointerEvent) => {
@@ -3558,6 +3688,7 @@ export function BoardView(props: { docId: string }): ReactNode {
         }
         return
       }
+      pointerClientRef.current = { x: event.clientX, y: event.clientY }
       if (drag.kind === 'pan') {
         const current = viewRef.current
         const dx = (event.clientX - drag.startX) / current.zoom
@@ -3827,70 +3958,10 @@ export function BoardView(props: { docId: string }): ReactNode {
         return
       }
       if (tool === 'erase') setEraserCursor(null)
-      if (drag.kind !== 'move' || !doc) return
-      if (!drag.moved) solidMoveRef.current = { x: 0, y: 0 }
-      let dx = point.x - drag.startX
-      let dy = point.y - drag.startY
-      if (snapEnabled && drag.origins.size) {
-        const moving = unionBox(
-          selectedItems
-            .filter((item) => drag.origins.has(item.id))
-            .map((item) => (item.kind === 'solid' ? itemBounds(item, byId) : rotatedBox(itemBounds(item, byId), item.rotation)))
-        )
-        const shifted = { ...moving, x: moving.x + dx, y: moving.y + dy }
-        const snapped = snapBox(shifted, snapTargetsRef.current, 8 / Math.max(0.05, viewRef.current.zoom))
-        dx += snapped.dx
-        dy += snapped.dy
-        showGuides(snapped.guides)
-      }
-      if (snapGrid) {
-        const step = gridSize
-        const origin = drag.origins.values().next().value as { x: number; y: number } | undefined
-        if (origin) {
-          dx = Math.round((origin.x + dx) / step) * step - origin.x
-          dy = Math.round((origin.y + dy) / step) * step - origin.y
-        }
-      }
-      const movingSolids: SolidItem[] = []
-      for (const id of drag.origins.keys()) {
-        const item = byId.get(id)
-        if (item?.kind === 'solid') movingSolids.push(item)
-      }
-      if (movingSolids.length) {
-        const stationary = doc.items.filter((item) => item.kind === 'solid' && !drag.origins.has(item.id))
-        const tries = (ax: number, ay: number): boolean => {
-          for (const solid of movingSolids) {
-            const origin = drag.origins.get(solid.id)
-            if (!origin) continue
-            const candidate = { ...solid, x: Math.round(origin.x + ax), y: Math.round(origin.y + ay) } as SolidItem
-            if (solidsCollide(candidate, stationary)) return false
-          }
-          return true
-        }
-        if (!tries(dx, dy)) {
-          if (tries(dx, 0)) dy = 0
-          else if (tries(0, dy)) dx = 0
-          else {
-            dx = solidMoveRef.current.x
-            dy = solidMoveRef.current.y
-          }
-        }
-      }
-      solidMoveRef.current = { x: dx, y: dy }
-      moveDeltaRef.current = { x: dx, y: dy }
-      const moved: Array<{ id: string; x: number; y: number }> = []
-      for (const [id, origin] of drag.origins) {
-        const x = origin.x + dx
-        const y = origin.y + dy
-        livePosRef.current.set(id, { x, y })
-        moved.push({ id, x, y })
-      }
-      if (!moveFrameRef.current) moveFrameRef.current = requestAnimationFrame(flushMovePositions)
-      pushPreview({ t: 'preview', kind: 'move', items: moved })
-      liveRef.current += 1
-      if (!drag.moved) setDrag({ ...drag, moved: true })
+      if (drag.kind !== 'move') return
+      applyMoveDrag(point)
     },
-    [drag, toWorld, toScreen, applyView, doc, eraseAt, snapEnabled, snapGrid, gridSize, selectedItems, showGuides, pushPreview, byId, faceAtLocal, facePointOf, scheduleThroughRender, throughAnchor, solidsCollide, flushMovePositions]
+    [drag, toWorld, toScreen, applyView, doc, eraseAt, faceAtLocal, facePointOf, scheduleThroughRender, throughAnchor, byId, applyMoveDrag]
   )
 
   const startInertia = useCallback(
@@ -5431,6 +5502,59 @@ const navigateTo = useCallback(
       }
       if (plain && (event.key === '=' || event.key === '+')) zoomBy(1.2)
       if (plain && (event.key === '-' || event.key === '_')) zoomBy(1 / 1.2)
+      if (event.key === 'Tab' && tool === 'select' && !editing && doc && target === wrapRef.current && doc.items.length) {
+        event.preventDefault()
+        const order = doc.items
+        const at = selection.size === 1 ? order.findIndex((item) => selection.has(item.id)) : -1
+        const index = at < 0 ? (event.shiftKey ? order.length - 1 : 0) : (at + (event.shiftKey ? -1 : 1) + order.length) % order.length
+        const item = order[index]
+        setSelection(new Set([item.id]))
+        const box = itemBounds(item, byId)
+        const view = viewRef.current
+        const rect = wrapRef.current?.getBoundingClientRect()
+        if (rect) {
+          const halfWidth = rect.width / 2 / view.zoom
+          const halfHeight = rect.height / 2 / view.zoom
+          const outside =
+            box.x + box.width < view.x - halfWidth ||
+            box.x > view.x + halfWidth ||
+            box.y + box.height < view.y - halfHeight ||
+            box.y > view.y + halfHeight
+          if (outside) animateTo({ x: box.x + box.width / 2, y: box.y + box.height / 2, zoom: view.zoom }, 180)
+        }
+        return
+      }
+      if (event.altKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+        if (!selection.size || readOnly || !doc) return
+        event.preventDefault()
+        const step = event.shiftKey ? 40 : 10
+        const dw = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0
+        const dh = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0
+        const next = doc.items.map((item) =>
+          selection.has(item.id) && !item.locked && item.kind !== 'connector'
+            ? ({ ...item, w: Math.max(8, item.w + dw), h: Math.max(8, item.h + dh) } as BoardItem)
+            : item
+        )
+        const now = Date.now()
+        const batched = now - nudgeAtRef.current < 700
+        nudgeAtRef.current = now
+        if (batched) persist(next)
+        else commit(next)
+        return
+      }
+      if ((event.key === '[' || event.key === ']') && !event.ctrlKey && !event.metaKey) {
+        if (!selection.size || readOnly || !doc) return
+        event.preventDefault()
+        const delta = (event.shiftKey ? 1 : 15) * (event.key === ']' ? 1 : -1)
+        const next = doc.items.map((item) =>
+          selection.has(item.id) && !item.locked
+            ? ({ ...item, rotation: (((item.rotation ?? 0) + delta) % 360 + 360) % 360 } as BoardItem)
+            : item
+        )
+        nudgeAtRef.current = Date.now()
+        commit(next)
+        return
+      }
       if (plain && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
         if (!selection.size || readOnly || !doc) return
         event.preventDefault()
@@ -5942,6 +6066,7 @@ const navigateTo = useCallback(
               <input
                 className="input"
                 autoFocus
+                aria-label="Название доски"
                 value={titleDraft}
                 style={{ width: 260, height: 30 }}
                 onChange={(event) => setTitleDraft(event.target.value)}
@@ -5970,11 +6095,19 @@ const navigateTo = useCallback(
             className="seg"
             data-active={!readOnly}
             onClick={() => setReadOnlyLocal(false)}
-            title="Редактирование"
+            disabled={hostLocked}
+            title={hostLocked ? 'Правка доступна только ведущему' : 'Редактирование'}
           >
             <Pencil size={14} /> Правка
           </button>
-          <button type="button" className="seg" data-active={readOnly} onClick={() => setReadOnlyLocal(true)} title="Только просмотр">
+          <button
+            type="button"
+            className="seg"
+            data-active={readOnly}
+            onClick={() => setReadOnlyLocal(true)}
+            disabled={hostLocked}
+            title={hostLocked ? 'Только просмотр: разрешает правку ведущий' : 'Только просмотр'}
+          >
             Просмотр
           </button>
           </div>
@@ -6129,9 +6262,16 @@ const navigateTo = useCallback(
         </div>
       </div>
 
+      <div className="sr-only" role="status" aria-live="polite">
+        {selectionSpeech}
+      </div>
+
       <div
         ref={setCanvasNode}
         className="boardview__canvas"
+        tabIndex={0}
+        role="application"
+        aria-label="Доска"
         data-grid={gridMode !== 'none'}
         data-gridmode={gridMode}
         data-tool={tool}
@@ -6293,6 +6433,7 @@ const navigateTo = useCallback(
                   className="toolbtn"
                   onClick={() => (editing ? commitEditing() : startEditing(editTargetId ?? [...selection][0]))}
                   title={editing ? 'Сохранить текст' : 'Изменить текст'}
+                  aria-label={editing ? 'Сохранить текст' : 'Изменить текст'}
                 >
                   {editing ? <Check size={16} /> : <Type size={16} />}
                 </button>
@@ -6304,6 +6445,7 @@ const navigateTo = useCallback(
                   data-active={textFormat.b ? 'true' : undefined}
                   onClick={() => runFormat('bold')}
                   title="Полужирный"
+                  aria-label="Полужирный"
                 >
                   <Bold size={16} />
                 </button>
@@ -6314,6 +6456,7 @@ const navigateTo = useCallback(
                   data-active={textFormat.i ? 'true' : undefined}
                   onClick={() => runFormat('italic')}
                   title="Курсив"
+                  aria-label="Курсив"
                 >
                   <Italic size={16} />
                 </button>
@@ -6324,6 +6467,7 @@ const navigateTo = useCallback(
                   data-active={textFormat.u ? 'true' : undefined}
                   onClick={() => runFormat('underline')}
                   title="Подчёркнутый"
+                  aria-label="Подчёркнутый"
                 >
                   <Underline size={16} />
                 </button>
@@ -6334,6 +6478,7 @@ const navigateTo = useCallback(
                   data-active={textFormat.s ? 'true' : undefined}
                   onClick={() => runFormat('strike')}
                   title="Зачёркнутый"
+                  aria-label="Зачёркнутый"
                 >
                   <Strikethrough size={16} />
                 </button>
@@ -6345,6 +6490,7 @@ const navigateTo = useCallback(
                   data-active={textFormat.list ? 'true' : undefined}
                   onClick={() => runFormat('list')}
                   title="Маркированный список"
+                  aria-label="Маркированный список"
                 >
                   <List size={16} />
                 </button>
@@ -6355,17 +6501,20 @@ const navigateTo = useCallback(
                   data-active={textFormat.ordered ? 'true' : undefined}
                   onClick={() => runFormat('ordered')}
                   title="Нумерованный список"
+                  aria-label="Нумерованный список"
                 >
                   <ListOrdered size={16} />
                 </button>
                 <div className="textpanel__sep" />
-                <button type="button" className="toolbtn" onClick={() => adjustFontSize(-1)} title="Уменьшить шрифт">
+                <button type="button" className="toolbtn" onClick={() => adjustFontSize(-1)} title="Уменьшить шрифт"
+aria-label="Уменьшить шрифт">
                   <Minus size={16} />
                 </button>
                 <span className="textpanel__size">
                   {panelItem ? fontSizeOf(panelItem) : 16}
                 </span>
-                <button type="button" className="toolbtn" onClick={() => adjustFontSize(1)} title="Увеличить шрифт">
+                <button type="button" className="toolbtn" onClick={() => adjustFontSize(1)} title="Увеличить шрифт"
+aria-label="Увеличить шрифт">
                   <Plus size={16} />
                 </button>
                 <div className="textpanel__sep" />
@@ -6377,6 +6526,7 @@ const navigateTo = useCallback(
                     data-active={textSelection.every((item) => alignOf(item) === align)}
                     onClick={() => setTextAlign(align)}
                     title={align === 'left' ? 'Влево' : align === 'center' ? 'По центру' : 'Вправо'}
+                    aria-label={align === 'left' ? 'Влево' : align === 'center' ? 'По центру' : 'Вправо'}
                   >
                     <AlignIcon align={align} />
                   </button>
@@ -6390,6 +6540,7 @@ const navigateTo = useCallback(
                       data-active={pointsTarget ? 'true' : undefined}
                       disabled={readOnly}
                       title="Перетащить углы фигуры и добавить новые"
+                      aria-label="Перетащить углы фигуры и добавить новые"
                       onClick={() => setShapePoints(pointsTarget ? null : shapePanelTarget.id)}
                     >
                       <Spline size={16} />
@@ -7415,6 +7566,7 @@ const navigateTo = useCallback(
                     />
                     <input
                       className="graphrow__input"
+                      aria-label="Формула графика"
                       value={graphDraft[expression.id] ?? expression.formula}
                       onChange={(event) => {
                         const value = event.target.value
@@ -7434,6 +7586,7 @@ const navigateTo = useCallback(
                         patchExpression(expression.id, { lineWidth: GRAPH_STROKES[(at + 1) % GRAPH_STROKES.length] })
                       }}
                       title="Толщина линии графика"
+                      aria-label="Толщина линии графика"
                     >
                       <span>{expression.lineWidth}</span>
                     </button>
@@ -7443,6 +7596,7 @@ const navigateTo = useCallback(
                       data-active={expression.visible}
                       onClick={() => patchExpression(expression.id, { visible: !expression.visible })}
                       title="Показать или скрыть"
+                      aria-label="Показать или скрыть"
                     >
                       {expression.visible ? <Eye size={14} /> : <EyeOff size={14} />}
                     </button>
@@ -7451,6 +7605,7 @@ const navigateTo = useCallback(
                       className="toolbtn toolbtn--compact"
                       onClick={() => patchGraph({ expressions: graphPanel.expressions.filter((entry) => entry.id !== expression.id) })}
                       title="Удалить график"
+                      aria-label="Удалить график"
                     >
                       <Trash2 size={14} />
                     </button>

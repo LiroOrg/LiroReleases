@@ -10,9 +10,6 @@ import './styles/board.css'
 import './styles/board-extra.css'
 import './styles/panel.css'
 import { App } from './App'
-import { applyTheme } from './lib/store'
-
-applyTheme(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
 
 const container = document.getElementById('root')
 if (container) {

@@ -255,6 +255,7 @@ export function CalculatorPanel(props: {
                 className="calculator__historyitem"
                 onClick={() => setSource(item.expression)}
                 title={item.expression}
+                aria-label={item.expression}
               >
                 <span className="calculator__historyexpr">{item.expression}</span>
                 <span className="calculator__historyvalue">{item.result}</span>

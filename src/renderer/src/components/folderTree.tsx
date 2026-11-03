@@ -539,8 +539,7 @@ export function FolderTree(props: TreeProps): ReactNode {
               {shiftHeld ? (
                 <span
                   className="tree__kill"
-                  role="button"
-                  tabIndex={-1}
+                  aria-hidden="true"
                   title="Удалить доску и её файлы"
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
@@ -599,6 +598,7 @@ export function FolderTree(props: TreeProps): ReactNode {
             onClick={() => navigate(group === NONE ? { name: 'home' } : { name: 'project', projectId: group })}
             onPointerDown={(event) => begin('folder', group, group, name, event)}
             title={name}
+            aria-label={name}
           >
             <FolderIcon project={project ?? undefined} size={16} />
             <span className="truncate">{name}</span>
@@ -606,7 +606,8 @@ export function FolderTree(props: TreeProps): ReactNode {
           </button>
           {project ? (
             <div className="tree__tools">
-              <button type="button" title="Новая доска в папке" onClick={() => void newBoard(project.id)}>
+              <button type="button" title="Новая доска в папке"
+aria-label="Новая доска в папке" onClick={() => void newBoard(project.id)}>
                 <Plus size={13} />
               </button>
               <Menu label="Папка" align="left" items={folderMenu(project)}>
@@ -688,7 +689,7 @@ export function FolderTree(props: TreeProps): ReactNode {
           }
         >
           <div className="field">
-            <input className="input" value={draft} onChange={(event) => setDraft(event.target.value)} autoFocus />
+            <input className="input" aria-label="Название папки" value={draft} onChange={(event) => setDraft(event.target.value)} autoFocus />
           </div>
         </Modal>
       ) : null}

@@ -1,7 +1,7 @@
 .graphrow {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-2);
   flex-wrap: wrap;
 }
 
@@ -10,13 +10,13 @@
   order: -1;
   min-width: 0;
   height: 28px;
-  padding: 0 8px;
+  padding: 0 var(--sp-4);
   border-radius: var(--radius-s);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: calc(12px * var(--ui-scale));
+  font-size: var(--fs-ui);
   outline: none;
   user-select: text;
 }
@@ -39,7 +39,7 @@
 
 .graphrow__input:focus {
   border-color: var(--border-strong);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 8%, transparent);
+  box-shadow: var(--ring-soft);
 }
 
 .graphrow[data-broken] .graphrow__input {
@@ -52,19 +52,19 @@
   flex: none;
   width: 30px;
   height: 28px;
-  font-size: calc(11px * var(--ui-scale));
+  font-size: var(--fs-caption);
 }
 
 .toolpalette__dims {
-  font-size: calc(10px * var(--ui-scale));
+  font-size: var(--fs-micro);
   font-variant-numeric: tabular-nums;
 }
 
 .graphpanel__row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: calc(12px * var(--ui-scale));
+  gap: var(--sp-4);
+  font-size: var(--fs-ui);
   color: var(--text-2);
 }
 
@@ -78,12 +78,12 @@
   flex: 1;
   min-width: 0;
   height: 28px;
-  padding: 0 8px;
+  padding: 0 var(--sp-4);
   border-radius: var(--radius-s);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
-  font-size: calc(12px * var(--ui-scale));
+  font-size: var(--fs-ui);
   outline: none;
   user-select: text;
 }
@@ -91,5 +91,5 @@
 .graphpanel__select:focus,
 .graphpanel__num:focus {
   border-color: var(--border-strong);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 8%, transparent);
+  box-shadow: var(--ring-soft);
 }

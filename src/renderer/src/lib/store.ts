@@ -115,7 +115,7 @@ export const useApp = create<AppState>((set, get) => ({
         api.app.info().catch(() => null)
       ])
       set({ library, settings, appInfo, ready: true })
-      applyTheme(settings.theme)
+      applyScale(settings.uiScale)
     } catch (error) {
       set({ ready: true })
       get().fail(error instanceof Error ? error.message : String(error))
@@ -125,10 +125,7 @@ export const useApp = create<AppState>((set, get) => ({
   setLibrary: (library) => set({ library }),
   setSettings: (settings) => {
     set({ settings })
-    applyTheme(settings.theme)
-    if (settings.uiScale !== get().settings?.uiScale) {
-      document.documentElement.style.setProperty('--ui-scale', String(settings.uiScale))
-    }
+    applyScale(settings.uiScale)
   },
   setCapture: (capture) => set({ capture }),
   setProgress: (progress) => set({ progress }),
@@ -165,13 +162,6 @@ export const useApp = create<AppState>((set, get) => ({
     })
 }))
 
-export function applyTheme(theme: Settings['theme']): void {
-  const root = document.documentElement
-  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-  const dark = theme === 'dark' || (theme === 'system' && prefersDark)
-  root.dataset.theme = dark ? 'dark' : 'light'
-}
-
-export function themeName(): 'light' | 'dark' {
-  return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
+export function applyScale(scale: number): void {
+  document.documentElement.style.setProperty('--ui-scale', String(scale || 1))
 }

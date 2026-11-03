@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Archive,
@@ -97,11 +97,12 @@ export function Toasts(): ReactNode {
   const dismiss = useApp((state) => state.dismiss)
   const visible = [...toasts.filter((toast) => toast.sticky), ...toasts.filter((toast) => !toast.sticky).slice(-2)]
   return (
-    <div className="toasts">
+    <div className="toasts" role="status" aria-live="polite">
       {visible.map((toast) => (
         <div
           key={toast.id}
           className="toast"
+          role={toast.kind === 'error' ? 'alert' : undefined}
           data-kind={toast.kind}
           data-sticky={toast.sticky ? 'true' : undefined}
           data-progress={typeof toast.progress === 'number' ? 'true' : undefined}
@@ -149,21 +150,68 @@ export function Modal(props: {
   footer?: ReactNode
   wide?: boolean
 }): ReactNode {
+  const titleId = useId()
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const closeRef = useRef(props.onClose)
+
+  useEffect(() => {
+    closeRef.current = props.onClose
+  })
+
   useEffect(() => {
     if (!props.open) return
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusables = (): HTMLElement[] =>
+      boxRef.current
+        ? Array.from(
+            boxRef.current.querySelectorAll<HTMLElement>(
+              'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+            )
+          ).filter((node) => node.offsetParent !== null)
+        : []
+    const frame = requestAnimationFrame(() => (focusables()[0] ?? boxRef.current)?.focus())
     const listener = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') props.onClose()
+      if (event.key === 'Escape') {
+        closeRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const list = focusables()
+      if (!list.length) return
+      const first = list[0]
+      const last = list[list.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || active === boxRef.current)) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', listener)
-    return () => window.removeEventListener('keydown', listener)
-  }, [props.open, props.onClose])
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener('keydown', listener)
+      previous?.focus()
+    }
+  }, [props.open])
 
   if (!props.open) return null
   return createPortal(
     <div className="modal__backdrop" onMouseDown={(event) => event.target === event.currentTarget && props.onClose()}>
-      <div className={props.wide ? 'modal modal--wide' : 'modal'} role="dialog" aria-modal="true">
+      <div
+        className={props.wide ? 'modal modal--wide' : 'modal'}
+        ref={boxRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+      >
         <div className="modal__head">
-          <h2 className="modal__title">{props.title}</h2>
+          <h2 className="modal__title" id={titleId}>
+            {props.title}
+          </h2>
         </div>
         <div className="modal__body">{props.children}</div>
         {props.footer ? <div className="modal__foot">{props.footer}</div> : null}
@@ -248,6 +296,8 @@ export function Switch(props: { value: boolean; onChange: (value: boolean) => vo
     <button
       type="button"
       className="switch"
+      role="switch"
+      aria-checked={props.value}
       data-on={props.value}
       aria-label={props.label ?? 'переключатель'}
       onClick={() => props.onChange(!props.value)}

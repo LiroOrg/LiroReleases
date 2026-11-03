@@ -8,7 +8,6 @@ import { assetsDir, boardsDir, docDir, docFile, indexFile, readJson, settingsFil
 const SCHEMA = 1
 
 const DEFAULT_SETTINGS: Settings = {
-  theme: 'system',
   gridSize: 40,
   gridMode: 'dots',
   snapGrid: false,

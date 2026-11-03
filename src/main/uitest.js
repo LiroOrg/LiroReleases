@@ -114,8 +114,8 @@ const run = async () => {
 
   const canvas = document.querySelector('.boardview__canvas')
   check('холст на месте', !!canvas)
-  const white = canvas ? getComputedStyle(canvas).backgroundColor : ''
-  check('холст белый', white === 'rgb(255, 255, 255)', white)
+  const boardColor = canvas ? getComputedStyle(canvas).backgroundColor : ''
+  check('фон доски #f2f2f2', boardColor === 'rgb(242, 242, 242)', boardColor)
 
   const undoButton = Array.from(document.querySelectorAll('.topbar .toolbtn')).find((node) => node.getAttribute('aria-label') === 'Отменить')
   const redoButton = Array.from(document.querySelectorAll('.topbar .toolbtn')).find((node) => node.getAttribute('aria-label') === 'Вернуть')
@@ -394,19 +394,20 @@ const run = async () => {
   await press('t')
   await wait(200)
   const canvasText = document.querySelector('.boardview__canvas')
-  if (canvasText) {
-    const box = canvasText.getBoundingClientRect()
+  const textSpot = findEmptySpot()
+  if (canvasText && textSpot) {
     const base = { bubbles: true, cancelable: true, button: 0, buttons: 1, pointerId: 1, isPrimary: true }
-    const downEvent = new PointerEvent('pointerdown', { ...base, clientX: box.left + 520, clientY: box.top + 200 })
+    const downEvent = new PointerEvent('pointerdown', { ...base, clientX: textSpot.x, clientY: textSpot.y })
     canvasText.dispatchEvent(downEvent)
-    canvasText.dispatchEvent(new PointerEvent('pointerup', { ...base, clientX: box.left + 520, clientY: box.top + 200 }))
+    await wait(140)
+    canvasText.dispatchEvent(new PointerEvent('pointerup', { ...base, clientX: textSpot.x, clientY: textSpot.y }))
     await wait(360)
     check('текст создаётся', itemCount() === textCount + 1, `${textCount} → ${itemCount()}`)
     const editor = document.querySelector('.texteditor')
     check('открылось поле ввода текста', !!editor)
     check('создание текста не отдаёт фокус доске', downEvent.defaultPrevented)
     check('курсор в поле ввода сразу', !!editor && document.activeElement === editor, `${document.activeElement?.className || document.activeElement?.tagName}`)
-    check('шаблон выделен для перезаписи', !!editor && window.getSelection()?.toString() === 'Текст', `${editor?.textContent}`)
+    check('новое поле ввода пустое', !!editor && !(editor.textContent || '').trim(), editor ? JSON.stringify(editor.textContent) : 'поля нет')
     const freshNode = Array.from(document.querySelectorAll(".boarditem[data-kind='text']")).pop()
     check('под полем ввода объект не рисует свой текст', !!freshNode && !(freshNode.textContent || '').trim(), freshNode ? JSON.stringify(freshNode.textContent) : 'узла нет')
     if (editor) {
@@ -450,7 +451,7 @@ const run = async () => {
     check('стикер открылся на ввод', !!stickyEditor)
     check('курсор в поле стикера сразу', !!stickyEditor && document.activeElement === stickyEditor, `${document.activeElement?.className || document.activeElement?.tagName}`)
     if (stickyEditor) {
-      check('текст стикера выделен целиком', window.getSelection()?.toString() === 'Заметка', `${stickyEditor.textContent}`)
+      check('стикер открылся пустым', !(stickyEditor.textContent || '').trim(), JSON.stringify(stickyEditor.textContent))
       stickyEditor.innerHTML = '<p>Заметка</p>'
       stickyEditor.dispatchEvent(new Event('input', { bubbles: true }))
       await wait(120)
@@ -459,6 +460,8 @@ const run = async () => {
       const stickyTexts = Array.from(document.querySelectorAll(".boarditem[data-kind='sticky']")).map((node) => node.textContent || '')
       check('текст стикера сохранён', stickyTexts.some((value) => value.includes('Заметка')), stickyTexts.join('|').slice(0, 60))
     }
+    await press('z', { ctrlKey: true })
+    await wait(320)
     await press('z', { ctrlKey: true })
     await wait(320)
     check('Ctrl+Z убирает стикер', itemCount() === stickyCount, `${itemCount()} против ${stickyCount}`)
@@ -480,10 +483,10 @@ const run = async () => {
     await wait(320)
     check('фигура создаётся протяжкой', itemCount() === countBeforeShape + 1, `${countBeforeShape} → ${itemCount()}`)
     check('инструмент остаётся после создания', !!document.querySelector('.toolpalette'))
-    check('новая фигура без рамки выделения', document.querySelectorAll('.boarditem--selected').length === 0)
+    check('новая фигура сразу выделена', document.querySelectorAll('.boarditem--selected').length === 1)
     await press('v')
     await wait(180)
-    check('созданная фигура выделена', document.querySelectorAll('.boarditem--selected').length === 1)
+    check('выбор фигуры переживает смену инструмента', document.querySelectorAll('.boarditem--selected').length === 1)
     await press('z', { ctrlKey: true })
     await wait(300)
     check('Ctrl+Z убирает фигуру', itemCount() === countBeforeShape, `${itemCount()}`)
@@ -889,33 +892,50 @@ const run = async () => {
     close?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await wait(200)
 
-    await press('v')
-    await wait(240)
-    const firstId = document.querySelector('.boarditem--selected')?.getAttribute('data-item-id') || ''
-    await press('s')
-    await wait(260)
-    const shapeButton = Array.from(document.querySelectorAll('.toolpalette .toolbtn')).find((node) =>
-      /Прямоугольник/.test(node.getAttribute('title') || '')
+    const railShapes = Array.from(document.querySelectorAll('.toolrail .toolbtn')).find((node) =>
+      /Фигуры/.test(node.getAttribute('title') || '')
     )
-    shapeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await wait(220)
-    let secondSpot = null
-    for (let step = 0; step < 40 && !secondSpot; step += 1) {
-      const x = canvasBox.left + 140 + ((step * 83) % Math.max(200, canvasBox.width - 280))
-      const y = canvasBox.top + 140 + ((step * 47) % Math.max(200, canvasBox.height - 280))
-      if (document.elementFromPoint(x, y) === canvas) secondSpot = { x, y }
+    const dragOptions = { bubbles: true, cancelable: true, button: 0, buttons: 1, pointerId: 21, isPrimary: true }
+    const freeSpots = []
+    for (let step = 0; step < 90 && freeSpots.length < 2; step += 1) {
+      const x = canvasBox.left + 150 + ((step * 97) % Math.max(200, Math.round(canvasBox.width) - 340))
+      const y = canvasBox.top + 150 + ((step * 61) % Math.max(200, Math.round(canvasBox.height) - 340))
+      if (document.elementFromPoint(x, y) !== canvas) continue
+      if (freeSpots.some((spot) => Math.abs(spot.x - x) < 300 && Math.abs(spot.y - y) < 220)) continue
+      freeSpots.push({ x, y })
     }
-    if (secondSpot) {
-      canvas.dispatchEvent(new PointerEvent('pointerdown', { ...options, clientX: secondSpot.x, clientY: secondSpot.y }))
+    const groupIds = []
+    for (const spot of freeSpots) {
+      await press('v')
+      await wait(200)
+      railShapes?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await wait(300)
+      const shapeCell = Array.from(document.querySelectorAll('.toolpalette .toolbtn')).find(
+        (node) => node.getAttribute('title') === 'Квадрат'
+      )
+      shapeCell?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await wait(220)
+      const beforeIds = Array.from(document.querySelectorAll(".boarditem[data-kind='shape']")).map((node) => node.getAttribute('data-item-id'))
+      canvas.dispatchEvent(new PointerEvent('pointerdown', { ...dragOptions, clientX: spot.x, clientY: spot.y }))
       await wait(120)
-      canvas.dispatchEvent(new PointerEvent('pointerup', { ...options, clientX: secondSpot.x, clientY: secondSpot.y }))
+      for (let step = 1; step <= 6; step += 1) {
+        canvas.dispatchEvent(new PointerEvent('pointermove', { ...dragOptions, clientX: spot.x + step * 25, clientY: spot.y + step * 18 }))
+        await wait(30)
+      }
+      canvas.dispatchEvent(new PointerEvent('pointerup', { ...dragOptions, clientX: spot.x + 150, clientY: spot.y + 108 }))
       await wait(520)
+      await press('Escape')
+      await wait(260)
+      const created = Array.from(document.querySelectorAll(".boarditem[data-kind='shape']")).find(
+        (node) => !beforeIds.includes(node.getAttribute('data-item-id'))
+      )
+      if (created) groupIds.push(created.getAttribute('data-item-id'))
     }
+    check('две фигуры созданы для группы', groupIds.length === 2, `${freeSpots.length} пятен · ${groupIds.join(',')}`)
     await press('v')
-    await wait(240)
-    const secondId = document.querySelector('.boarditem--selected')?.getAttribute('data-item-id') || ''
-    const firstNode = document.querySelector(`[data-item-id="${firstId}"]`)
-    const secondNode = document.querySelector(`[data-item-id="${secondId}"]`)
+    await wait(260)
+    const firstNode = document.querySelector(`[data-item-id="${groupIds[0]}"]`)
+    const secondNode = document.querySelector(`[data-item-id="${groupIds[1]}"]`)
     if (firstNode && secondNode) {
       const firstBox = firstNode.getBoundingClientRect()
       const firstPick = { ...options, clientX: firstBox.left + firstBox.width / 2, clientY: firstBox.top + firstBox.height / 2 }
@@ -939,27 +959,24 @@ const run = async () => {
       `${document.querySelectorAll('.boarditem--selected').length}`
     )
     await openInspector(firstNode)
-    await wait(360)
-    const fillRow = Array.from(document.querySelectorAll('.inspector .inspector__block')).find(
-      (block) => block.querySelector('.inspector__label')?.textContent === 'Заливка'
+    const strokeRow = Array.from(document.querySelectorAll('.inspector .inspector__block')).find(
+      (block) => block.querySelector('.inspector__label')?.textContent === 'Цвет линии'
     )
-    const fillSwatch = fillRow?.querySelector('[title="#0f766e"]')
-    if (fillSwatch) {
-      fillSwatch.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    const strokeSwatch = strokeRow?.querySelector('[title="#1d4ed8"]')
+    if (strokeSwatch) {
+      strokeSwatch.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await wait(420)
     }
     const painted = Array.from(document.querySelectorAll('.boarditem--selected')).filter((node) =>
-      node.querySelector('[fill="#0f766e"]') ||
-      (node.querySelector('.boarditem__text') && getComputedStyle(node.querySelector('.boarditem__text')).backgroundColor === 'rgb(15, 118, 110)')
+      node.querySelector('path[stroke="#1d4ed8"]')
     )
-    check('заливка меняется у всех выбранных объектов', painted.length === 2, `${painted.length} из 2`)
+    check('цвет линии меняется у всех выбранных объектов', painted.length === 2, `${painted.length} из 2`)
     await press('z', { ctrlKey: true })
     await wait(420)
     const reverted = Array.from(document.querySelectorAll('.boarditem--selected')).filter((node) =>
-      node.querySelector('[fill="#0f766e"]') ||
-      (node.querySelector('.boarditem__text') && getComputedStyle(node.querySelector('.boarditem__text')).backgroundColor === 'rgb(15, 118, 110)')
+      node.querySelector('path[stroke="#1d4ed8"]')
     )
-    check('один шаг отмены снимает заливку у обоих', reverted.length === 0, `${reverted.length}`)
+    check('один шаг отмены снимает цвет у обоих', reverted.length === 0, `${reverted.length}`)
     const pairClose = document.querySelector('.inspector .btn--icon')
     pairClose?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await wait(220)

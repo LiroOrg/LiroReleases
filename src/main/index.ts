@@ -54,7 +54,7 @@ function createWindow(): void {
     minWidth: 1020,
     minHeight: 640,
     show: false,
-    backgroundColor: '#fbfbfb',
+    backgroundColor: '#101013',
     icon: existsSync(windowIcon) ? windowIcon : undefined,
     autoHideMenuBar: true,
     frame: false,

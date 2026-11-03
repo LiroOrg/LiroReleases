@@ -347,7 +347,7 @@ export function Inspector(props: InspectorProps): ReactNode {
       </div>
 
       {single ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div className="stack">
           <div className="inspector__grid">
             <NumberField label="X" value={single.x} onCommit={(value) => props.onPatch(single.id, { x: Math.round(value) } as Partial<BoardItem>)} />
             <NumberField label="Y" value={single.y} onCommit={(value) => props.onPatch(single.id, { y: Math.round(value) } as Partial<BoardItem>)} />
@@ -370,11 +370,10 @@ export function Inspector(props: InspectorProps): ReactNode {
           </div>
 
           {single.kind === 'sticky' || single.kind === 'text' || single.kind === 'shape' ? (
-            <label className="field" style={{ marginBottom: 0 }}>
+            <label className="field field--tight">
               <span className="field__label">Текст</span>
               <textarea
-                className="textarea"
-                style={{ minHeight: 70, fontSize: 12.5 }}
+                className="textarea textarea--compact"
                 value={'plain' in single ? single.plain : ''}
                 onChange={(event) => {
                   const html = event.target.value
@@ -482,7 +481,7 @@ export function Inspector(props: InspectorProps): ReactNode {
           ) : null}
 
           {single.kind === 'frame' ? (
-            <label className="field" style={{ marginBottom: 0 }}>
+            <label className="field field--tight">
               <span className="field__label">Название рамки</span>
               <input
                 className="input"
@@ -524,7 +523,7 @@ export function Inspector(props: InspectorProps): ReactNode {
           </div>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div className="stack">
           <div className="inspector__grid">
             {field('Объектов', String(items.length))}
             {field('Габариты', `${Math.round(bounds.w)} × ${Math.round(bounds.h)}`)}
@@ -607,8 +606,7 @@ export function Inspector(props: InspectorProps): ReactNode {
       {single?.parentId ? (
         <button
           type="button"
-          className="btn btn--sm btn--block"
-          style={{ marginTop: 10 }}
+          className="btn btn--sm btn--block btn--gap"
           onClick={() => props.onNavigateTo(single.parentId!)}
         >
           К рамке
@@ -620,8 +618,8 @@ export function Inspector(props: InspectorProps): ReactNode {
 
 export function ReadOnlyHint(props: { on: boolean; onChange: (value: boolean) => void }): ReactNode {
   return (
-    <div className="toolgroup" style={{ paddingLeft: 10, paddingRight: 10, gap: 8 }}>
-      <span style={{ fontSize: 12 }}>Только просмотр</span>
+    <div className="toolgroup toolgroup--labeled">
+      <span className="note">Только просмотр</span>
       <Switch value={props.on} onChange={props.onChange} label="Режим просмотра" />
     </div>
   )

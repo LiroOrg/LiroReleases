@@ -211,7 +211,8 @@ export function LivePanel(props: LivePanelProps): ReactNode {
         <div className="livepanel__box" style={{ top: anchor.top, right: anchor.right }} onPointerMove={bump} onPointerDown={bump}>
           <div className="livepanel__head">
             <span className="livepanel__title">Участники</span>
-            <button type="button" className="livepanel__close" onClick={() => setOpen(false)} title="Закрыть">
+            <button type="button" className="livepanel__close" onClick={() => setOpen(false)} title="Закрыть"
+aria-label="Закрыть">
               <X size={14} />
             </button>
           </div>
@@ -241,6 +242,7 @@ export function LivePanel(props: LivePanelProps): ReactNode {
                       }}
                       onContextMenu={openMenu}
                       title={`Перейти к ${partner.name}`}
+                      aria-label={`Перейти к ${partner.name}`}
                     >
                       {partner.name}
                     </button>
@@ -261,6 +263,7 @@ export function LivePanel(props: LivePanelProps): ReactNode {
                     data-active={props.canEdit}
                     onClick={() => props.onTogglePermission(!props.canEdit)}
                     title={props.canEdit ? 'Разрешить только просмотр' : 'Разрешить редактирование'}
+                    aria-label={props.canEdit ? 'Разрешить только просмотр' : 'Разрешить редактирование'}
                   >
                     {editTag}
                   </button>
@@ -289,7 +292,8 @@ export function LivePanel(props: LivePanelProps): ReactNode {
             <span className="livepanel__label">Ссылка-приглашение</span>
             <div className="livepanel__linkrow">
               <code className="livepanel__code selectable">{link}</code>
-              <button type="button" className="livepanel__copy" onClick={() => void copyLink()} title="Скопировать ссылку">
+              <button type="button" className="livepanel__copy" onClick={() => void copyLink()} title="Скопировать ссылку"
+aria-label="Скопировать ссылку">
                 {copied ? <Check size={13} /> : <Copy size={13} />}
               </button>
             </div>
