@@ -5,11 +5,11 @@
 </div>
 
 <p align="center">
-  <a href="https://github.com/LiroOrg/LiroReleases/releases/download/v1.14.21/Liro-1.14.21-x64-setup.exe"><img src="https://img.shields.io/badge/Скачать_Liro_1.14.21-for_Windows-black?style=for-the-badge" alt="Скачать Liro" /></a>
+  <a href="https://github.com/LiroOrg/LiroReleases/releases/download/v1.14.22/Liro-1.14.22-x64-setup.exe"><img src="https://img.shields.io/badge/Скачать_Liro_1.14.22-for_Windows-black?style=for-the-badge" alt="Скачать Liro" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/LiroOrg/LiroReleases/releases/download/v1.14.21/Liro-1.14.21-x64-setup.exe">Liro-1.14.21-x64-setup.exe</a> · 118 МБ · Windows 10 и 11, 64 бита
+  <a href="https://github.com/LiroOrg/LiroReleases/releases/download/v1.14.22/Liro-1.14.22-x64-setup.exe">Liro-1.14.22-x64-setup.exe</a> · 118 МБ · Windows 10 и 11, 64 бита
 </p>
 
 <p align="center">
@@ -26,10 +26,10 @@ Liro — приложение для Windows: бесконечная белая 
 
 - Стикеры, текст, фигуры, трёхмерные фигуры с надписями на гранях, связи между объектами
 - Картинки, таблицы, рамки, рисование от руки
-- Файл, перетащенный на доску, остаётся на ней: карточка с началом текста, предпросмотр по двойному щелчку, картинки из документа — прямо на доске
+- Файл, перетащенный на доску, остаётся на ней: карточка с первой страницей, предпросмотр по двойному щелчку, картинки из документа — прямо на доске
 - Группы объектов, слои, поворот, запертые объекты
 - Белая доска и сетка, которая вписывается в любое приближение
-- Экспорт в PNG, PDF, HTML, SVG, ZIP и JSON — целиком или по рамке, до 4×
+- Экспорт в LIRO, PNG, HTML и SVG — целиком или по рамке, до 4×
 
 <p align="center">
   <img src="assets/stickers.png" alt="Стикеры" width="900" />
@@ -50,7 +50,7 @@ Liro — приложение для Windows: бесконечная белая 
 
 ## Установка
 
-Скачайте [`Liro-1.14.21-x64-setup.exe`](https://github.com/LiroOrg/LiroReleases/releases/download/v1.14.21/Liro-1.14.21-x64-setup.exe) и запустите — установщик сам найдёт прежнюю версию и поставит новую поверх, доски останутся на месте.
+Скачайте [`Liro-1.14.22-x64-setup.exe`](https://github.com/LiroOrg/LiroReleases/releases/download/v1.14.22/Liro-1.14.22-x64-setup.exe) и запустите — установщик сам найдёт прежнюю версию и поставит новую поверх, доски останутся на месте.
 Нужна Windows 10 или 11, 64 бита.
 
 ## Обновления
