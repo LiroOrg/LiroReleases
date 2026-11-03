@@ -353,6 +353,7 @@ export interface DocumentItem extends ItemBase {
   title: string
   asset?: AssetRef
   pages?: number
+  excerpt?: string
 }
 
 export interface AppCardItem extends ItemBase {

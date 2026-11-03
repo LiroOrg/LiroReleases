@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { linkHtml, parseRichText, toPlainText } from '@shared/richtext'
 import { normalizeItems } from './import/normalize'
 import { guessKind, previewSrc } from './preview'
-import { csvToHtml, documentFromZip, markdownToHtml, readDocumentHtml, wordDocumentToHtml } from './documentText'
+import { csvToHtml, documentFromZip, markdownToHtml, readDocumentHtml, readDocumentImages, wordDocumentToHtml } from './documentText'
+import { assetPathOf } from './boardFile'
 import { createZip, readZip } from './util/zip'
 import { buildStats } from './import/commit'
 import { normalizeColor, luminance } from '@shared/color'
@@ -127,6 +128,29 @@ export function runSelfTest(): SelfTestResult {
     check(results, 'документ: определение типа', guessKind(`file:///${docxFile.replace(/\\/g, '/')}`, 'file') === 'text')
   } finally {
     rmSync(docxDir, { recursive: true, force: true })
+  }
+
+  const mediaDir = mkdtempSync(join(tmpdir(), 'liro-media-'))
+  try {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+    const mediaDocx = join(mediaDir, 'с-картинками.docx')
+    writeFileSync(
+      mediaDocx,
+      createZip([
+        { name: 'word/document.xml', data: Buffer.from(wordXml, 'utf8') },
+        { name: 'word/media/image1.png', data: png },
+        { name: 'word/media/image2.emf', data: Buffer.from([1, 2, 3, 4]) }
+      ])
+    )
+    const images = readDocumentImages(mediaDocx)
+    check(results, 'картинки docx: только изображения', images.length === 1, `${images.length}`)
+    check(results, 'картинки docx: dataUrl', images[0]?.dataUrl.startsWith('data:image/png;base64,') === true, images[0]?.name ?? '')
+    check(results, 'картинки docx: пустой файл', readDocumentImages(join(mediaDir, 'нет-такого.docx')).length === 0)
+    const contained = assetPathOf('doc_a', '../../evil.png')
+    check(results, 'файл на доске: имя остаётся в папке ассетов', contained.endsWith('evil.png') && !contained.includes('..'), contained)
+    check(results, 'файл на доске: голых точек не принимается', (() => { try { assetPathOf('doc_a', '..'); return false } catch { return true } })())
+  } finally {
+    rmSync(mediaDir, { recursive: true, force: true })
   }
 
   const mdHtml = markdownToHtml(

@@ -2,7 +2,7 @@ import { app, BrowserWindow, ClipboardItem, clipboard, dialog, ipcMain, nativeIm
 import type { NativeImage } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { IpcResult } from '@shared/api'
+import type { BoardAssetRequest, BoardFileRequest, IpcResult } from '@shared/api'
 import type {
   ApiImportOptions,
   BoardItem,
@@ -22,6 +22,7 @@ import { buildExtensionFiles } from './import/extension'
 import { importFromFile } from './import/file'
 import { importFromApi, listBoards, type SourceBoardSummary } from './import/api'
 import { buildDoc, buildStats, assetsBytesOf, commitDoc, persistInlineAssets } from './import/commit'
+import { addBoardFile, hasBoardAsset, readBoardFileImages, saveBoardAsset } from './boardFile'
 import { exportBoard, exportToPath } from './export/exporter'
 import { exportFolder } from './export/render'
 import { openPreview, previewFor, readPreviewText, type PreviewPayload } from './preview'
@@ -322,7 +323,7 @@ export function registerIpc(): void {
       const next = [...doc.items]
       for (const item of incoming) {
         const clone: BoardItem = { ...item }
-        if (clone.kind === 'image' && clone.asset?.local && clone.asset.file) {
+        if ((clone.kind === 'image' || clone.kind === 'document') && clone.asset?.local && clone.asset.file) {
           const file = clone.asset.file
           const target = join(assetsDir(payload.docId), file)
           const origin = join(assetsDir(payload.sourceDocId), file)
@@ -407,6 +408,24 @@ export function registerIpc(): void {
       return fail(error)
     }
   })
+  ipcMain.handle('board:add-file', (_e, request: BoardFileRequest) => {
+    try {
+      const result = addBoardFile(request)
+      sendLibraryChanged()
+      return ok(result)
+    } catch (error) {
+      return fail(error)
+    }
+  })
+  ipcMain.handle('board:save-asset', (_e, request: BoardAssetRequest) => {
+    try {
+      return ok(saveBoardAsset(request))
+    } catch (error) {
+      return fail(error)
+    }
+  })
+  ipcMain.handle('board:has-asset', (_e, docId: string, file: string) => ok(hasBoardAsset(docId, file)))
+  ipcMain.handle('board:file-images', (_e, docId: string, file: string) => ok(readBoardFileImages(docId, file)))
   ipcMain.handle('project:create', (_e, name: string) => {
     const project = store.createProject(name)
     sendLibraryChanged()

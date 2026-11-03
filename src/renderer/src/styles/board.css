@@ -651,6 +651,64 @@
   color: var(--text-4);
 }
 
+.boarddoc {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--panel);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  overflow: hidden;
+}
+
+.boarddoc__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex: none;
+}
+
+.boarddoc__kind {
+  flex: none;
+  font-size: var(--fs-caption);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0 var(--sp-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+}
+
+.boarddoc__name {
+  min-width: 0;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.boarddoc__text {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+  color: var(--text-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-top: 1px solid var(--border-mid);
+  padding-top: var(--sp-3);
+}
+
 .boarditem__loading {
   width: 100%;
   height: 100%;

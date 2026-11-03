@@ -484,3 +484,45 @@ function linkHtml(label: string, href: string): string {
   if (!/^(https?:|mailto:)/i.test(url) || /["'<>\\\s]/.test(url)) return text
   return `<a href="${escapeMarkup(url)}">${text}</a>`
 }
+
+export interface DocumentImage {
+  name: string
+  mime: string
+  dataUrl: string
+}
+
+const MEDIA_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  jfif: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml'
+}
+
+const MEDIA_LIMIT = 60
+const MEDIA_BYTES = 24 * 1024 * 1024
+
+export function readDocumentImages(file: string): DocumentImage[] {
+  const kind = OFFICE_KIND[extname(file).toLowerCase()]
+  if (!kind) return []
+  let zip: Map<string, Buffer> | null = null
+  try {
+    zip = readZip(readFileSync(file))
+  } catch {
+    return []
+  }
+  if (!zip) return []
+  const folder = kind === 'slides' ? 'ppt/media/' : 'word/media/'
+  const out: DocumentImage[] = []
+  for (const [name, data] of zip) {
+    if (!name.startsWith(folder)) continue
+    const mime = MEDIA_MIME[extname(name).slice(1).toLowerCase()]
+    if (!mime || !data.byteLength || data.byteLength > MEDIA_BYTES) continue
+    out.push({ name: name.slice(folder.length), mime, dataUrl: `data:${mime};base64,${data.toString('base64')}` })
+    if (out.length >= MEDIA_LIMIT) break
+  }
+  return out
+}

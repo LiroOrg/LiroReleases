@@ -64,6 +64,13 @@ export function visibleItems(doc: BoardDoc, visible: Rect): BoardItem[] {
   return out
 }
 
+function fileExtension(value: string): string {
+  const dot = value.lastIndexOf('.')
+  if (dot <= 0 || dot === value.length - 1) return ''
+  const ext = value.slice(dot + 1)
+  return /^[a-z0-9]{1,5}$/i.test(ext) ? ext.toUpperCase() : ''
+}
+
 const RichText = memo(function RichText(props: {
   html: string
   style: CSSProperties
@@ -693,22 +700,14 @@ function ItemBody(props: {
       )
     }
     case 'document': {
+      const kindTag = fileExtension(item.asset?.file ?? item.title)
       return (
-        <div
-          style={{
-            width: '100%',
-            height: '100%',
-            background: '#fff',
-            border: '1px solid var(--border)',
-            borderRadius: 6,
-            boxShadow: 'var(--shadow-1)',
-            padding: 14,
-            fontSize: 12,
-            color: 'var(--text-3)'
-          }}
-        >
-          <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>{item.title}</div>
-          <div>Документ{item.pages ? ` · ${item.pages} стр.` : ''}</div>
+        <div className="boarddoc">
+          <div className="boarddoc__head">
+            {kindTag ? <span className="boarddoc__kind">{kindTag}</span> : null}
+            <span className="boarddoc__name">{item.title}</span>
+          </div>
+          {item.excerpt ? <div className="boarddoc__text">{item.excerpt}</div> : null}
         </div>
       )
     }

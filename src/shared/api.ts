@@ -64,6 +64,36 @@ export interface FileRef {
   size: number
 }
 
+export interface BoardFileRequest {
+  docId: string
+  name: string
+  mime: string
+  dataUrl: string
+  x: number
+  y: number
+}
+
+export interface BoardFileResult {
+  id: string
+  file: string
+  name: string
+  mime: string
+  excerpt: string
+}
+
+export interface BoardAssetRequest {
+  docId: string
+  file: string
+  mime: string
+  dataUrl: string
+}
+
+export interface BoardImageRef {
+  name: string
+  mime: string
+  dataUrl: string
+}
+
 export interface SourceBoardSummary {
   id: string
   name: string
@@ -131,6 +161,10 @@ export interface ApiLiro {
     offsetY?: number
   }) => Promise<IpcResult<{ added: number; images: number }>>
   boardPasteItems: (payload: { docId: string; sourceDocId: string; items: BoardItem[] }) => Promise<IpcResult<{ added: number }>>
+  boardAddFile: (payload: BoardFileRequest) => Promise<IpcResult<BoardFileResult>>
+  boardSaveAsset: (payload: BoardAssetRequest) => Promise<IpcResult<boolean>>
+  boardHasAsset: (docId: string, file: string) => Promise<IpcResult<boolean>>
+  boardFileImages: (docId: string, file: string) => Promise<IpcResult<BoardImageRef[]>>
   boardLinkToSource: (docId: string) => Promise<IpcResult<string>>
   boardWorkspaceGet: (docId: string) => Promise<IpcResult<BoardWorkspace>>
   boardWorkspaceSet: (docId: string, patch: BoardWorkspace) => Promise<IpcResult<boolean>>

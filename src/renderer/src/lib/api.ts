@@ -1,4 +1,14 @@
-import type { CaptureSnapshot, FileRef, SourceBoardSummary, PreviewPayload, PreviewText } from '@shared/api'
+import type {
+  BoardAssetRequest,
+  BoardFileRequest,
+  BoardFileResult,
+  BoardImageRef,
+  CaptureSnapshot,
+  FileRef,
+  SourceBoardSummary,
+  PreviewPayload,
+  PreviewText
+} from '@shared/api'
 import type { IpcResult } from '@shared/api'
 import type { ChangeEntry } from '@shared/changes'
 import type { ApiImportOptions, CaptureOptions } from '@shared/types'
@@ -71,6 +81,10 @@ export const api = {
     ),
     pasteItems: (payload: { docId: string; sourceDocId: string; items: BoardItem[] }) =>
       unwrap<{ added: number }>(window.liro.api.boardPasteItems(payload)),
+    addFile: (payload: BoardFileRequest) => unwrap<BoardFileResult>(window.liro.api.boardAddFile(payload)),
+    saveAsset: (payload: BoardAssetRequest) => unwrap<boolean>(window.liro.api.boardSaveAsset(payload)),
+    hasAsset: (docId: string, file: string) => unwrap<boolean>(window.liro.api.boardHasAsset(docId, file)),
+    fileImages: (docId: string, file: string) => unwrap<BoardImageRef[]>(window.liro.api.boardFileImages(docId, file)),
     openSource: (docId: string) => unwrap(window.liro.api.boardLinkToSource(docId)),
     assetUrl: (docId: string, file: string) => unwrap<string>(window.liro.api.assetUrl(docId, file)),
     assetData: (docId: string, file: string) => unwrap<string | null>(window.liro.api.assetData(docId, file)),
