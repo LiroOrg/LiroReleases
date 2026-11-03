@@ -1,15 +1,16 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { parseRichText, type Block, type Run } from '@shared/richtext'
 import { contrastColor } from '@shared/color'
 import type { BoardDoc, BoardItem, Rect, SolidItem, TextItem } from '@shared/types'
 import { curvePath } from '@shared/curve'
 import { connectorBounds } from '@shared/geometry'
-import { rotatedBox } from '@shared/util'
+import { formatBytes, rotatedBox } from '@shared/util'
 import { solidBounds } from '@shared/three'
 import { youtubeId } from '../lib/youtube'
 import type { MediaBridge } from '../live/mediaSync'
 import { TableView } from './tableView'
+import { fileHtml, loadFileHtml, subscribeFileHtml } from './filePeek'
 import { shapePath, strokeDash } from '@shared/shapes'
 import { SolidView } from './solidView'
 import { GraphView } from './graphView'
@@ -62,13 +63,6 @@ export function visibleItems(doc: BoardDoc, visible: Rect): BoardItem[] {
     out.push(item)
   }
   return out
-}
-
-function fileExtension(value: string): string {
-  const dot = value.lastIndexOf('.')
-  if (dot <= 0 || dot === value.length - 1) return ''
-  const ext = value.slice(dot + 1)
-  return /^[a-z0-9]{1,5}$/i.test(ext) ? ext.toUpperCase() : ''
 }
 
 const RichText = memo(function RichText(props: {
@@ -248,6 +242,29 @@ function clampFont(value: number): number {
 
 export function shapeTextSize(item: { plain: string; w: number; h: number; fontSize: number }): number {
   return fitFontSize(item.plain, item.w - 12, item.h - 10, Math.max(10, item.fontSize * 1.4), 7)
+}
+
+const PEEK_PAGE_WIDTH = 794
+
+function DocumentPeek(props: { file: string; url: string; width: number; fallback: ReactNode }): ReactNode {
+  const [ready, setReady] = useState('')
+  useEffect(() => {
+    setReady(fileHtml(props.file))
+    return subscribeFileHtml(props.file, () => setReady(fileHtml(props.file)))
+  }, [props.file])
+  useEffect(() => {
+    loadFileHtml(props.file, props.url)
+  }, [props.file, props.url, ready])
+  if (!ready) return props.fallback
+  return (
+    <div className="boarddoc__page">
+      <div
+        className="boarddoc__sheet"
+        style={{ width: PEEK_PAGE_WIDTH, transform: `scale(${props.width / PEEK_PAGE_WIDTH})` }}
+        dangerouslySetInnerHTML={{ __html: ready }}
+      />
+    </div>
+  )
 }
 
 export const ItemLayer = memo(function ItemLayer(props: {
@@ -700,14 +717,36 @@ function ItemBody(props: {
       )
     }
     case 'document': {
-      const kindTag = fileExtension(item.asset?.file ?? item.title)
+      const name = item.title || 'Файл'
+      const dot = name.lastIndexOf('.')
+      const title = dot > 0 ? name.slice(0, dot) : name
+      const ext = dot > 0 ? name.slice(dot + 1) : ''
       return (
         <div className="boarddoc">
           <div className="boarddoc__head">
-            {kindTag ? <span className="boarddoc__kind">{kindTag}</span> : null}
-            <span className="boarddoc__name">{item.title}</span>
+            <svg className="boarddoc__mark" viewBox="0 0 20 26" aria-hidden="true">
+              <path d="M1.5 1.5h11L18.5 8v16.5h-17z" />
+              <path d="M12.5 1.5V8H18.5" />
+              <path d="M5.5 14h9M5.5 18h9" />
+            </svg>
+            <div className="boarddoc__ident">
+              <div className="boarddoc__name">{title}</div>
+              <div className="boarddoc__meta">
+                {ext ? `.${ext.toLowerCase()}` : 'файл'}
+                {item.asset ? ` · ${formatBytes(item.asset.bytes)}` : ''}
+              </div>
+            </div>
           </div>
-          {item.excerpt ? <div className="boarddoc__text">{item.excerpt}</div> : null}
+          {item.asset?.file ? (
+            <DocumentPeek
+              file={item.asset.file}
+              url={assetUrl(item.asset.file)}
+              width={Math.max(80, item.w - 32)}
+              fallback={item.excerpt ? <div className="boarddoc__body">{item.excerpt}</div> : null}
+            />
+          ) : item.excerpt ? (
+            <div className="boarddoc__body">{item.excerpt}</div>
+          ) : null}
         </div>
       )
     }

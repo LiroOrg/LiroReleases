@@ -14,7 +14,7 @@ const KIND_LABELS: Partial<Record<ItemKind, string>> = {
   vote: 'Голосование',
   group: 'Группа',
   tag: 'Метка',
-  document: 'Документ',
+  document: 'Файл',
   app_card: 'Приложение',
   code: 'Код',
   path: 'Рисунок',

@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Rect } from '@shared/types'
@@ -21,11 +21,7 @@ export interface RenderParams {
   bbox?: Rect
   scale: number
   background: 'white' | 'transparent'
-  print?: boolean
-  paper?: 'a4' | 'a3'
-  tileCols?: number
-  tileRows?: number
-  mode?: 'png' | 'html' | 'print'
+  mode?: 'png' | 'html'
   viewportWidth?: number
   viewportHeight?: number
 }
@@ -174,8 +170,6 @@ async function loadInto(win: BrowserWindow, entry: string, query: string): Promi
 interface RenderInfo {
   width: number
   height: number
-  printWidth?: string
-  printHeight?: string
   ready: boolean
 }
 
@@ -261,35 +255,6 @@ export async function renderHtml(params: RenderParams): Promise<string> {
     await new Promise((resolve) => setTimeout(resolve, 400))
     const html = await win.webContents.executeJavaScript('window.__liroAppRender ? window.__liroAppRender.html() : ""')
     return typeof html === 'string' ? html : ''
-  } finally {
-    if (!win.isDestroyed()) win.destroy()
-  }
-}
-
-export async function renderPdf(params: RenderParams, target: string): Promise<{ bytes: number; width: number; height: number }> {
-  const win = await openWindow(
-    params,
-    {
-      mode: 'print',
-      scale: '1',
-      print: '1',
-      paper: params.paper ?? 'a3',
-      tileCols: String(params.tileCols ?? 1),
-      tileRows: String(params.tileRows ?? 1)
-    },
-    { width: 1600, height: 1200 }
-  )
-  try {
-    const info = await waitForRender(win, 30000)
-    await new Promise((resolve) => setTimeout(resolve, 600))
-    const data = await win.webContents.printToPDF({
-      printBackground: true,
-      landscape: true,
-      margins: { top: 0, bottom: 0, left: 0, right: 0 },
-      preferCSSPageSize: true
-    })
-    writeFileSync(target, data)
-    return { bytes: data.byteLength, width: info?.width ?? 0, height: info?.height ?? 0 }
   } finally {
     if (!win.isDestroyed()) win.destroy()
   }

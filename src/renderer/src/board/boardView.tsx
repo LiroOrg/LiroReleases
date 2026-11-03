@@ -15,6 +15,7 @@ import {
   Eye,
   EyeOff,
   ExternalLink,
+  FileImage,
   Grid3x3,
   Group,
   Ungroup,
@@ -73,6 +74,7 @@ import { api } from '../lib/api'
 import { useApp } from '../lib/store'
 import { navigate } from '../router'
 import { ItemLayer, itemBounds, shapeTextSize, visibleItems } from './scene'
+import { reloadFileHtml } from './filePeek'
 import { kindLabel } from './itemKinds'
 import { sheetSize } from './tableView'
 import { SHAPE_GROUPS, SHAPE_LABELS, cornerRadius, hasCornerRadius, isVertexShape, shapeHandleValue, shapeHandles, shapeParams, shapePath, shapeVertices, snapVertexPoint } from '@shared/shapes'
@@ -524,12 +526,12 @@ function imageSizeOf(dataUrl: string): Promise<{ width: number; height: number }
   })
 }
 
-const IMAGE_NAME = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif|apng|jfif|heic|heif|tiff?)$/i
-
-const FILE_ITEM_WIDTH = 300
+const IMAGE_FILE_NAME = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif|apng|jfif|heic|heif|tiff?)$/i
+const FILE_WIDTH = 300
+const FILE_HEIGHT = 424
 
 function isImageFile(file: File): boolean {
-  return file.type.startsWith('image/') || IMAGE_NAME.test(file.name)
+  return file.type.startsWith('image/') || IMAGE_FILE_NAME.test(file.name)
 }
 
 function readDataUrl(file: File): Promise<string> {
@@ -1597,25 +1599,19 @@ export function BoardView(props: { docId: string }): ReactNode {
     (itemId: string): void => {
       if (pushedAssetsRef.current.has(itemId)) return
       const source = itemsRef.current.find((item) => item.id === itemId)
-      const asset = source?.kind === 'image' || source?.kind === 'document' ? source.asset : undefined
+      const owned = source?.kind === 'image' || source?.kind === 'document' ? source : undefined
+      const file = owned?.asset?.file ?? ''
+      const mime = owned?.asset?.mime ?? ''
       const held = remoteAssetsRef.current.get(itemId)
       if (held) {
-        live.sendChunked(
-          `asset/${itemId}`,
-          JSON.stringify({ dataUrl: held, file: asset?.file ?? '', mime: asset?.mime ?? '' })
-        )
+        live.sendChunked(`asset/${itemId}`, JSON.stringify({ dataUrl: held, file, mime }))
         return
       }
-      const file = asset?.file
       if (!file) return
       void api.board
         .assetData(props.docId, file)
         .then((dataUrl) => {
-          if (dataUrl)
-            live.sendChunked(
-              `asset/${itemId}`,
-              JSON.stringify({ dataUrl, file, mime: asset?.mime ?? '' })
-            )
+          if (dataUrl) live.sendChunked(`asset/${itemId}`, JSON.stringify({ dataUrl, file, mime }))
         })
         .catch(() => undefined)
     },
@@ -1638,23 +1634,23 @@ export function BoardView(props: { docId: string }): ReactNode {
     [props.docId, withRemoteAssets]
   )
   useEffect(() => {
-    live.onRemoteChunk(async (id, payload) => {
+    live.onRemoteChunk((id, payload) => {
       if (id.startsWith('asset/')) {
         try {
           const parsed = JSON.parse(payload) as { dataUrl?: string; file?: string; mime?: string }
           const itemId = id.slice('asset/'.length)
-          if (!parsed.dataUrl || remoteAssetsRef.current.has(itemId)) return
+          if (!parsed.dataUrl || remoteAssetsRef.current.has(itemId) || pushedAssetsRef.current.has(itemId)) return
           const target = itemsRef.current.find((item) => item.id === itemId)
-          if (target?.kind === 'document') {
-            if (!parsed.file) return
-            await api.board.saveAsset({
-              docId: props.docId,
-              file: parsed.file,
-              mime: parsed.mime ?? '',
-              dataUrl: parsed.dataUrl
-            })
-            pushedAssetsRef.current.add(itemId)
+          if (target?.kind === 'document' && parsed.file) {
             pushAssetProgress(itemId, null)
+            void api.board
+              .saveAsset({ docId: props.docId, file: parsed.file, mime: parsed.mime ?? '', dataUrl: parsed.dataUrl })
+              .then(() => {
+                pushedAssetsRef.current.add(itemId)
+                if (parsed.file) reloadFileHtml(parsed.file)
+                toast('Файл получен', 'file')
+              })
+              .catch(() => fail('Файл не сохранился'))
             return
           }
           remoteAssetsRef.current.set(itemId, parsed.dataUrl)
@@ -1760,6 +1756,10 @@ export function BoardView(props: { docId: string }): ReactNode {
   }, [selectedItems])
   const solidSelection = useMemo(() => selectedItems.filter((item): item is SolidItem => item.kind === 'solid'), [selectedItems])
   const imageSelection = useMemo(() => selectedItems.filter((item) => item.kind === 'image'), [selectedItems])
+  const documentSelection = useMemo(
+    () => selectedItems.filter((item): item is DocumentItem => item.kind === 'document'),
+    [selectedItems]
+  )
   const graphSelection = useMemo(() => selectedItems.filter((item): item is GraphItem => item.kind === 'graph'), [selectedItems])
   const connectorTarget = selectedItems.length === 1 && selectedItems[0].kind === 'connector' ? (selectedItems[0] as ConnectorItem) : null
   const selectionLocked = selectedItems.length > 0 && selectedItems.every((item) => item.locked)
@@ -4694,52 +4694,60 @@ const assetOf = (dataUrl: string, size: { width: number; height: number } | null
       if (!doc || readOnly) return
       const dataUrl = await readDataUrl(file)
       if (!dataUrl) {
-        toast('Файл не прочитан', 'error')
+        toast('Файл не прочитан', 'file')
         return
       }
       try {
         await flushPending()
-        const added = await api.board.addFile({
-          docId: props.docId,
-          name: file.name,
-          mime: file.type,
-          dataUrl,
-          x: point.x,
-          y: point.y
-        })
-        const loaded = await api.board.open(props.docId)
-        if (live.connected) {
-          commitAgainst(doc.items, loaded.items)
-          shareAssets([{ itemId: added.id, dataUrl, file: added.file, mime: added.mime }])
-        } else {
-          remember(doc.items)
+        const saved = await api.board.saveFile({ docId: props.docId, name: file.name, mime: file.type, dataUrl })
+        const item: DocumentItem = {
+          id: uid('doc_'),
+          kind: 'document',
+          x: Math.round(point.x - FILE_WIDTH / 2),
+          y: Math.round(point.y - FILE_HEIGHT / 2),
+          w: FILE_WIDTH,
+          h: FILE_HEIGHT,
+          rotation: 0,
+          z: doc.items.length,
+          title: saved.name,
+          asset: { file: saved.file, mime: saved.mime, bytes: saved.bytes, local: true },
+          excerpt: saved.excerpt
         }
-        setDoc(loaded)
-        setSelection(new Set([added.id]))
+        commit([...doc.items, item])
+        if (live.connected) shareAssets([{ itemId: item.id, dataUrl, file: saved.file, mime: saved.mime }])
+        setSelection(new Set([item.id]))
         toast('Файл на доске', 'file')
       } catch (error) {
         fail(error instanceof Error ? error.message : String(error))
       }
     },
-    [doc, readOnly, props.docId, remember, toast, fail, flushPending, live, shareAssets, commitAgainst]
+    [doc, readOnly, props.docId, flushPending, commit, live, shareAssets, setSelection, toast, fail]
   )
 
   const placeFileImages = useCallback(
     async (item: DocumentItem): Promise<void> => {
-      if (!doc || readOnly || !item.asset?.file) return
-      const images = await api.board.fileImages(props.docId, item.asset.file)
-      if (images.length === 0) {
-        toast('В файле нет картинок', 'file')
+      if (!doc || readOnly) return
+      const file = item.asset?.file
+      if (!file) {
+        toast('Файл ещё не получен', 'file')
         return
       }
-      await applyImageFiles(
-        images.map((image) => image.dataUrl),
-        { x: item.x + item.w + 260, y: item.y + 140 },
-        []
-      )
-      toast(images.length === 1 ? 'Картинка на доске' : `Картинки на доске: ${images.length}`, 'image')
+      try {
+        const images = await api.board.fileImages(props.docId, file)
+        if (images.length === 0) {
+          toast('В файле нет картинок', 'file')
+          return
+        }
+        await applyImageFiles(
+          images.map((image) => image.dataUrl),
+          { x: item.x + item.w + 260, y: item.y + 140 },
+          []
+        )
+      } catch (error) {
+        fail(error instanceof Error ? error.message : String(error))
+      }
     },
-    [doc, readOnly, props.docId, applyImageFiles, toast]
+    [doc, readOnly, props.docId, applyImageFiles, fail, toast]
   )
 
   const onDrop = useCallback(
@@ -4754,7 +4762,7 @@ const assetOf = (dataUrl: string, size: { width: number; height: number } | null
       if (images.length > 0) await applyImageFiles(await Promise.all(images.map(readDataUrl)), point)
       const files = entries.filter((file) => !isImageFile(file))
       for (const [index, file] of files.entries())
-        await addDroppedFile(file, { x: point.x + index * (FILE_ITEM_WIDTH + 60), y: point.y })
+        await addDroppedFile(file, { x: point.x + index * (FILE_WIDTH + 60), y: point.y })
     },
     [applyImageFiles, addDroppedFile, toWorld]
   )
@@ -4872,17 +4880,17 @@ const navigateTo = useCallback(
     (id: string) => {
       const item = byId.get(id)
       if (!item || readOnly || item.locked) return
-      if (item.kind === 'document') {
-        setSelection(new Set([id]))
-        openItemPreview(item)
-        return
-      }
       if (item.kind === 'image') {
         setSelection(new Set([id]))
         const asset = item.asset
         const src = asset?.file ? assetUrl(asset.file) : asset?.dataUrl ?? asset?.sourceUrl ?? ''
         if (src) void startCrop(id)
         else void replaceImage(id, 'clipboard')
+        return
+      }
+      if (item.kind === 'document') {
+        setSelection(new Set([id]))
+        void openItemPreview(item)
         return
       }
       if (item.kind !== 'text' && item.kind !== 'sticky' && item.kind !== 'shape') return
@@ -6032,25 +6040,27 @@ const navigateTo = useCallback(
           run: () => void replaceImagesFromFiles()
         })
       }
-      const singleFile = selectedItems.length === 1 && selectedItems[0].kind === 'document' ? (selectedItems[0] as DocumentItem) : null
-      if (singleFile)
+      if (documentSelection.length === 1) {
+        const target = documentSelection[0]
         items.push(
           {
-            id: 'file-preview',
+            id: 'doc-preview',
             label: 'Открыть предпросмотр',
             icon: <Search size={14} />,
             section: 'Файл',
-            run: () => void openItemPreview(singleFile)
+            disabled: !target.asset,
+            run: () => void openItemPreview(target)
           },
           {
-            id: 'file-images',
+            id: 'doc-images',
             label: 'Картинки на доску',
-            icon: <ImagePlus size={14} />,
+            icon: <FileImage size={14} />,
             section: 'Файл',
-            disabled: readOnly || !singleFile.asset?.file,
-            run: () => void placeFileImages(singleFile)
+            disabled: readOnly || !target.asset,
+            run: () => void placeFileImages(target)
           }
         )
+      }
       items.push(
         {
           id: 'fit-selection',

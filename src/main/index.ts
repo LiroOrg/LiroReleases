@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, session, shell } from 'electron'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { getCapture, openBoardFile, registerIpc, setMainWindow } from './ipc'
 import { buildExtensionFiles } from './import/extension'
@@ -305,11 +306,20 @@ if (!app.requestSingleInstanceLock()) {
 
   void app.whenReady().then(async () => {
     if (process.argv.includes('--selftest')) {
+      const library = mkdtempSync(join(tmpdir(), 'liro-selftest-'))
+      process.env.LIRO_LIBRARY = library
       const { runSelfTest } = await import('./selftest')
       const result = runSelfTest()
       for (const failure of result.failures) console.error(`FAIL  ${failure}`)
       console.log(`Проверок пройдено: ${result.passed}, провалено: ${result.failed}`)
+      rmSync(library, { recursive: true, force: true })
       app.exit(result.failed === 0 ? 0 : 1)
+      return
+    }
+    if (argValue('--selftest-file')) {
+      const { runFileTest } = await import('./selftest')
+      for (const line of runFileTest(argValue('--selftest-file'))) console.log(line)
+      app.exit(0)
       return
     }
     if (process.argv.includes('--demo')) {

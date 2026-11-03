@@ -1,7 +1,7 @@
 {
   "name": "liro",
   "productName": "Liro",
-  "version": "1.14.21",
+  "version": "1.14.22",
   "description": "Настольное приложение для досок. Работает офлайн",
   "main": "./out/main/index.js",
   "author": "Liro",
@@ -20,6 +20,7 @@
     "demo": "electron-vite build && electron . --demo",
     "pair": "electron-vite build && electron . --dev-pair",
     "icon": "electron scripts/make-icon.cjs",
+    "file-icon": "electron scripts/make-file-icon.cjs",
     "dist": "npm run build && npm run updater && electron-builder --win"
   },
   "build": {

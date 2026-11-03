@@ -522,10 +522,6 @@ body:has(.app--wide) {
   flex-wrap: wrap;
 }
 
-.field__row--tiles {
-  margin-bottom: var(--sp-7);
-}
-
 .switch {
   position: relative;
   width: calc(38px * var(--ui-scale));

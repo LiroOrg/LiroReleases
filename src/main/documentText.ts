@@ -44,12 +44,85 @@ export function readDocumentHtml(file: string): string | null {
 
 export function documentFromZip(kind: OfficeKind, zip: Map<string, Buffer>): string {
   const text = (name: string): string => zip.get(name)?.toString('utf8') ?? ''
-  if (kind === 'word') return wordDocumentToHtml(text('word/document.xml'))
+  if (kind === 'word') return wordDocumentToHtml(text('word/document.xml'), wordImages(zip))
   if (kind === 'slides') return slidesToHtml(zip)
   return workbookToHtml(zip)
 }
 
-export function wordDocumentToHtml(xml: string): string {
+export interface DocumentImage {
+  name: string
+  mime: string
+  bytes: number
+  dataUrl: string
+}
+
+const IMAGE_MIME: Record<string, string> = {
+  png: 'image/png',
+  apng: 'image/apng',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  jfif: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp'
+}
+
+const IMAGE_BYTES_LIMIT = 6 * 1024 * 1024
+const IMAGE_COUNT_LIMIT = 80
+
+function imageOf(name: string, data: Buffer): DocumentImage | null {
+  const mime = IMAGE_MIME[extname(name).slice(1).toLowerCase()]
+  if (!mime || !data.byteLength || data.byteLength > IMAGE_BYTES_LIMIT) return null
+  return { name: name.split('/').pop() ?? name, mime, bytes: data.byteLength, dataUrl: `data:${mime};base64,${data.toString('base64')}` }
+}
+
+function mediaFolder(kind: OfficeKind): string {
+  return kind === 'slides' ? 'ppt/media/' : 'word/media/'
+}
+
+export function documentZipImages(kind: OfficeKind, zip: Map<string, Buffer>): DocumentImage[] {
+  const folder = mediaFolder(kind)
+  const out: DocumentImage[] = []
+  for (const [name, data] of zip) {
+    if (!name.startsWith(folder)) continue
+    const image = imageOf(name, data)
+    if (image) out.push(image)
+    if (out.length >= IMAGE_COUNT_LIMIT) break
+  }
+  return out
+}
+
+function wordImages(zip: Map<string, Buffer>): Map<string, DocumentImage> {
+  const out = new Map<string, DocumentImage>()
+  const media = new Map<string, DocumentImage>()
+  for (const image of documentZipImages('word', zip)) media.set(image.name.toLowerCase(), image)
+  for (const tag of zip.get('word/_rels/document.xml.rels')?.toString('utf8').matchAll(/<Relationship\b[^>]*>/g) ?? []) {
+    const entry = tag[0]
+    if (!/Type="[^"]*\/image"/.test(entry)) continue
+    const id = /Id="([^"]*)"/.exec(entry)?.[1] ?? ''
+    const target = /Target="([^"]*)"/.exec(entry)?.[1] ?? ''
+    if (!id) continue
+    const name = target.replace(/^\.?\/?(word\/)?/, '').split('/').pop()?.toLowerCase() ?? ''
+    const image = media.get(name)
+    if (image) out.set(id, image)
+  }
+  return out
+}
+
+export function readDocumentImages(file: string): DocumentImage[] {
+  const kind = OFFICE_KIND[extname(file).toLowerCase()]
+  if (!kind) return []
+  let zip: Map<string, Buffer> | null = null
+  try {
+    zip = readZip(readFileSync(file))
+  } catch {
+    return []
+  }
+  if (!zip) return []
+  return documentZipImages(kind, zip)
+}
+
+export function wordDocumentToHtml(xml: string, media: Map<string, DocumentImage> = new Map()): string {
   const body = /<w:body[^>]*>([\s\S]*)<\/w:body>/.exec(xml)?.[1] ?? xml
   const blocks = body.match(/<w:tbl(?:\s[^>]*)?>[\s\S]*?<\/w:tbl>|<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) ?? []
   const out: string[] = []
@@ -63,11 +136,11 @@ export function wordDocumentToHtml(xml: string): string {
   for (const block of blocks) {
     if (block.startsWith('<w:tbl')) {
       flush()
-      const table = tableHtml(block)
+      const table = tableHtml(block, media)
       if (table) out.push(table)
       continue
     }
-    const part = paragraphPart(block)
+    const part = paragraphPart(block, media)
     if (part.list) list.push(part.html)
     else {
       flush()
@@ -78,8 +151,8 @@ export function wordDocumentToHtml(xml: string): string {
   return out.join('')
 }
 
-function paragraphPart(p: string): { list: boolean; html: string } {
-  const text = runsHtml(p)
+function paragraphPart(p: string, media: Map<string, DocumentImage>): { list: boolean; html: string } {
+  const text = runsHtml(p, media)
   const style = (/<w:pStyle[^>]*w:val="([^"]*)"/i.exec(p)?.[1] ?? '').toLowerCase().replace(/[\s_-]/g, '')
   const align = /<w:jc[^>]*w:val="(center|right|both)"/i.exec(p)?.[1]?.toLowerCase()
   const extra = align ? ` class="doc-align-${align === 'both' ? 'justify' : align}"` : ''
@@ -95,7 +168,7 @@ function paragraphPart(p: string): { list: boolean; html: string } {
   return { list: false, html: `<p${extra}>${text}</p>` }
 }
 
-function runsHtml(p: string): string {
+function runsHtml(p: string, media: Map<string, DocumentImage>): string {
   let out = ''
   const runRe = /<w:r(?:\s[^>]*)?>([\s\S]*?)<\/w:r>/g
   let run = runRe.exec(p)
@@ -110,9 +183,37 @@ function runsHtml(p: string): string {
       if (flagOn(props, 'b')) piece = `<strong>${piece}</strong>`
       out += piece
     }
+    out += pictureHtml(inner, media)
     run = runRe.exec(p)
   }
   return out
+}
+
+const EMU_PER_PIXEL = 9525
+
+function pictureHtml(run: string, media: Map<string, DocumentImage>): string {
+  const id = /<a:blip\b[^>]*r:embed="([^"]*)"/.exec(run)?.[1] ?? /<v:imagedata\b[^>]*r:id="([^"]*)"/.exec(run)?.[1] ?? ''
+  const image = id ? media.get(id) : undefined
+  if (!image) return ''
+  const extent = /<wp:extent\b[^>]*cx="(\d+)"[^>]*cy="(\d+)"/.exec(run)
+  const width = extent ? Math.round(Number(extent[1]) / EMU_PER_PIXEL) : 0
+  const height = extent ? Math.round(Number(extent[2]) / EMU_PER_PIXEL) : 0
+  const size = width > 4 && height > 4 ? ` width="${width}" height="${height}"` : ''
+  return `<img class="doc-img" src="${image.dataUrl}" alt="${escapeMarkup(image.name)}"${size}>`
+}
+
+function tableHtml(tbl: string, media: Map<string, DocumentImage>): string {
+  const rows = tbl.match(/<w:tr(?:\s[^>]*)?>[\s\S]*?<\/w:tr>/g) ?? []
+  if (!rows.length) return ''
+  const body = rows
+    .map((row) => {
+      const cells = (row.match(/<w:tc(?:\s[^>]*)?>[\s\S]*?<\/w:tc>/g) ?? []).map(
+        (cell) => `<td>${(cell.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) ?? []).map((part) => runsHtml(part, media)).join('<br>')}</td>`
+      )
+      return `<tr>${cells.join('')}</tr>`
+    })
+    .join('')
+  return `<table class="doc-table"><tbody>${body}</tbody></table>`
 }
 
 function runText(inner: string): string {
@@ -128,20 +229,6 @@ function runText(inner: string): string {
     token = tokenRe.exec(inner)
   }
   return text
-}
-
-function tableHtml(tbl: string): string {
-  const rows = tbl.match(/<w:tr(?:\s[^>]*)?>[\s\S]*?<\/w:tr>/g) ?? []
-  if (!rows.length) return ''
-  const body = rows
-    .map((row) => {
-      const cells = (row.match(/<w:tc(?:\s[^>]*)?>[\s\S]*?<\/w:tc>/g) ?? []).map(
-        (cell) => `<td>${(cell.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) ?? []).map(runsHtml).join('<br>')}</td>`
-      )
-      return `<tr>${cells.join('')}</tr>`
-    })
-    .join('')
-  return `<table class="doc-table"><tbody>${body}</tbody></table>`
 }
 
 function flagOn(props: string, tag: string): boolean {
@@ -483,46 +570,4 @@ function linkHtml(label: string, href: string): string {
   const text = label || escapeMarkup(url)
   if (!/^(https?:|mailto:)/i.test(url) || /["'<>\\\s]/.test(url)) return text
   return `<a href="${escapeMarkup(url)}">${text}</a>`
-}
-
-export interface DocumentImage {
-  name: string
-  mime: string
-  dataUrl: string
-}
-
-const MEDIA_MIME: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  jfif: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  bmp: 'image/bmp',
-  svg: 'image/svg+xml'
-}
-
-const MEDIA_LIMIT = 60
-const MEDIA_BYTES = 24 * 1024 * 1024
-
-export function readDocumentImages(file: string): DocumentImage[] {
-  const kind = OFFICE_KIND[extname(file).toLowerCase()]
-  if (!kind) return []
-  let zip: Map<string, Buffer> | null = null
-  try {
-    zip = readZip(readFileSync(file))
-  } catch {
-    return []
-  }
-  if (!zip) return []
-  const folder = kind === 'slides' ? 'ppt/media/' : 'word/media/'
-  const out: DocumentImage[] = []
-  for (const [name, data] of zip) {
-    if (!name.startsWith(folder)) continue
-    const mime = MEDIA_MIME[extname(name).slice(1).toLowerCase()]
-    if (!mime || !data.byteLength || data.byteLength > MEDIA_BYTES) continue
-    out.push({ name: name.slice(folder.length), mime, dataUrl: `data:${mime};base64,${data.toString('base64')}` })
-    if (out.length >= MEDIA_LIMIT) break
-  }
-  return out
 }

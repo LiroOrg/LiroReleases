@@ -8,14 +8,11 @@ import type { BoardDoc, ExportOptions } from '@shared/types'
 const FORMATS: Array<{ id: ExportOptions['format']; title: string; text: string }> = [
   { id: 'liro', title: 'LIRO', text: 'Наш формат: доска целиком со всеми картинками в одном файле.' },
   { id: 'png', title: 'PNG', text: 'Растровое изображение доски. Выберите масштаб 1×–4×.' },
-  { id: 'pdf', title: 'PDF', text: 'Векторный документ с текстом. Можно разбить на несколько страниц.' },
   { id: 'html', title: 'HTML', text: 'Автономный файл: открывается без приложения, работает офлайн.' },
-  { id: 'zip', title: 'ZIP', text: 'Архив: описание доски плюс все изображения.' },
-  { id: 'json', title: 'JSON', text: 'Полное описание доски для последующего импорта.' },
   { id: 'svg', title: 'SVG', text: 'Векторная картинка: открывается в браузере, Иллюстраторе и Inkscape.' }
 ]
 
-const WHOLE_FILE: Array<ExportOptions['format']> = ['liro', 'json', 'zip']
+const WHOLE_FILE: Array<ExportOptions['format']> = ['liro']
 
 export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?: () => Promise<void> }): ReactNode {
   const toast = useApp((state) => state.toast)
@@ -24,10 +21,6 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
   const [scope, setScope] = useState<ExportOptions['scope']>('board')
   const [scale, setScale] = useState(2)
   const [background, setBackground] = useState<ExportOptions['background']>('white')
-  const [pdfMode, setPdfMode] = useState<ExportOptions['pdfMode']>('single')
-  const [paper, setPaper] = useState<ExportOptions['pdfPaper']>('a3')
-  const [cols, setCols] = useState(2)
-  const [rows, setRows] = useState(2)
   const [frameId, setFrameId] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -51,10 +44,6 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
     targetId: effectiveScope === 'frame' ? frameId : undefined,
     scale,
     background,
-    pdfMode,
-    pdfPaper: paper,
-    pdfTileCols: cols,
-    pdfTileRows: rows,
     openFolder: false,
     overwrite: true
   })
@@ -209,79 +198,9 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
           {tooBig ? (
             <div className="field__hint">
               Размер слишком большой для одного кадра — приложение автоматически уменьшит масштаб, качество текста при
-              этом снизится. Для очень больших досок удобнее экспортировать отдельные рамки или использовать PDF с
-              разбивкой на страницы.
+              этом снизится. Для очень больших досок удобнее экспортировать отдельные рамки.
             </div>
           ) : null}
-        </>
-      ) : null}
-
-      {format === 'pdf' ? (
-        <>
-          <div className="field">
-            <span className="field__label">Разбивка на страницы</span>
-            <div className="field__row">
-              <button
-                type="button"
-                className="chip"
-                data-active={pdfMode === 'single'}
-                aria-pressed={pdfMode === 'single'}
-                onClick={() => setPdfMode('single')}
-              >
-                Одна страница
-              </button>
-              <button
-                type="button"
-                className="chip"
-                data-active={pdfMode === 'tiles'}
-                aria-pressed={pdfMode === 'tiles'}
-                onClick={() => setPdfMode('tiles')}
-              >
-                Несколько страниц
-              </button>
-            </div>
-          </div>
-          {pdfMode === 'tiles' ? (
-            <div className="field__row field__row--tiles">
-              <label className="field field--tight">
-                <span className="field__label">Столбцов</span>
-                <input
-                  className="input"
-                  type="number"
-                  min={1}
-                  max={6}
-                  value={cols}
-                  onChange={(event) => setCols(Math.max(1, Math.min(6, Number(event.target.value) || 1)))}
-                />
-              </label>
-              <label className="field field--tight">
-                <span className="field__label">Строк</span>
-                <input
-                  className="input"
-                  type="number"
-                  min={1}
-                  max={6}
-                  value={rows}
-                  onChange={(event) => setRows(Math.max(1, Math.min(6, Number(event.target.value) || 1)))}
-                />
-              </label>
-              <label className="field field--tight">
-                <span className="field__label">Формат листа</span>
-                <select className="select" value={paper} onChange={(event) => setPaper(event.target.value as 'a4' | 'a3')}>
-                  <option value="a4">A4</option>
-                  <option value="a3">A3</option>
-                </select>
-              </label>
-            </div>
-          ) : (
-            <div className="field">
-              <span className="field__label">Формат листа</span>
-              <select className="select" value={paper} onChange={(event) => setPaper(event.target.value as 'a4' | 'a3')}>
-                <option value="a4">A4</option>
-                <option value="a3">A3</option>
-              </select>
-            </div>
-          )}
         </>
       ) : null}
 

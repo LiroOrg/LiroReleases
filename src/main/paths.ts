@@ -58,6 +58,12 @@ export function migrateLegacyData(): void {
 }
 
 export function getRoot(): string {
+  const forced = process.env.LIRO_LIBRARY
+  if (forced) {
+    const dir = resolve(forced)
+    mkdirSync(dir, { recursive: true })
+    return dir
+  }
   if (cachedRoot && existsSync(cachedRoot)) return cachedRoot
   const pointer = join(app.getPath('userData'), 'storage.json')
   let custom: string | null = null

@@ -626,16 +626,12 @@ export interface CaptureOptions {
 
 export interface ExportOptions {
   docId: string
-  format: 'liro' | 'png' | 'pdf' | 'html' | 'json' | 'zip' | 'svg'
+  format: 'liro' | 'png' | 'html' | 'svg'
   scope: 'board' | 'frame' | 'selection'
   targetId?: string
   scale: number
   background: 'white' | 'transparent'
   selectionIds?: string[]
-  pdfMode: 'single' | 'tiles'
-  pdfTileCols: number
-  pdfTileRows: number
-  pdfPaper: 'a4' | 'a3'
   openFolder: boolean
   overwrite: boolean
 }

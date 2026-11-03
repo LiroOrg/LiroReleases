@@ -53,7 +53,7 @@ const FEATURES: Array<{ icon: ReactNode; title: string; text: string }> = [
   },
   {
     icon: <Download size={16} />,
-    title: 'Экспорт LIRO, PNG, PDF, HTML, ZIP и JSON',
+    title: 'Экспорт LIRO, PNG, HTML и SVG',
     text: 'Выгрузка целиком или по фрейму, в масштабе до 4×, с белым или прозрачным фоном.'
   },
   {
@@ -368,7 +368,7 @@ export function About(): ReactNode {
                   </span>
                   <span className="rowitem__grow">
                     <span className="setrow__label">Форматы экспорта</span>
-                    <div className="setrow__hint">LIRO, PNG, PDF, HTML, ZIP и JSON</div>
+                    <div className="setrow__hint">LIRO, PNG, HTML и SVG</div>
                   </span>
                 </div>
                 <div className="rowitem">

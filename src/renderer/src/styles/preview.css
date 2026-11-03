@@ -152,6 +152,14 @@
   min-height: 1.2em;
 }
 
+.preview__doc .doc-img {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  margin: var(--sp-3) 0;
+  border: 1px solid var(--border);
+}
+
 .preview__doc h1,
 .preview__doc h2,
 .preview__doc h3,

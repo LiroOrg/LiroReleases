@@ -4,7 +4,7 @@ import type { ExportOptions, ExportResult } from '@shared/types'
 import { store } from '../store'
 import { docDir, thumbFile } from '../paths'
 import { createZip } from '../util/zip'
-import { exportFolder, renderHtml, renderPdf, renderPng, thumbnailPath, type RenderParams } from './render'
+import { exportFolder, renderHtml, renderPng, thumbnailPath, type RenderParams } from './render'
 import { buildSvg } from './svg'
 import { boundsOfItems, sanitizeFileName } from '@shared/util'
 
@@ -19,10 +19,7 @@ function renderParams(options: Partial<ExportOptions> & { docId: string }): Rend
     targetId: options.targetId,
     selectionIds: options.selectionIds,
     scale: options.scale ?? 2,
-    background: options.background ?? 'white',
-    paper: options.pdfPaper ?? 'a3',
-    tileCols: options.pdfMode === 'tiles' ? options.pdfTileCols : 1,
-    tileRows: options.pdfMode === 'tiles' ? options.pdfTileRows : 1
+    background: options.background ?? 'white'
   }
 }
 
@@ -56,29 +53,14 @@ export async function exportBoard(
   const dir = exportFolder()
   const name = `${baseName(doc.title)}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}`
   switch (options.format) {
-    case 'pdf': {
-      const target = join(dir, `${name}.pdf`)
-      await renderPdf(renderParams(options), target)
-      return target
-    }
     case 'html': {
       const target = join(dir, `${name}.html`)
       const html = await renderHtml(renderParams(options))
       writeFileSync(target, html, 'utf8')
       return target
     }
-    case 'json': {
-      const target = join(dir, `${name}.json`)
-      writeFileSync(target, JSON.stringify(doc, null, 2), 'utf8')
-      return target
-    }
     case 'liro': {
       const target = join(dir, `${name}.liro`)
-      writeFileSync(target, await archiveBytes(options.docId))
-      return target
-    }
-    case 'zip': {
-      const target = join(dir, `${name}.zip`)
       writeFileSync(target, await archiveBytes(options.docId))
       return target
     }
@@ -104,26 +86,12 @@ export async function exportToPath(options: ExportOptions, target: string): Prom
       writeFileSync(target, result.buffer)
       return { ok: true, path: target, bytes: result.buffer.byteLength, width: result.width, height: result.height }
     }
-    case 'pdf': {
-      const info = await renderPdf(renderParams(options), target)
-      return { ok: true, path: target, bytes: info.bytes, width: info.width, height: info.height }
-    }
     case 'html': {
       const html = await renderHtml(renderParams(options))
       writeFileSync(target, html, 'utf8')
       return { ok: true, path: target, bytes: Buffer.byteLength(html, 'utf8') }
     }
-    case 'json': {
-      const text = JSON.stringify(doc, null, 2)
-      writeFileSync(target, text, 'utf8')
-      return { ok: true, path: target, bytes: Buffer.byteLength(text, 'utf8') }
-    }
     case 'liro': {
-      const buffer = await archiveBytes(options.docId)
-      writeFileSync(target, buffer)
-      return { ok: true, path: target, bytes: buffer.byteLength }
-    }
-    case 'zip': {
       const buffer = await archiveBytes(options.docId)
       writeFileSync(target, buffer)
       return { ok: true, path: target, bytes: buffer.byteLength }

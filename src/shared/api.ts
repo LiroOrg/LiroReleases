@@ -69,15 +69,13 @@ export interface BoardFileRequest {
   name: string
   mime: string
   dataUrl: string
-  x: number
-  y: number
 }
 
 export interface BoardFileResult {
-  id: string
   file: string
   name: string
   mime: string
+  bytes: number
   excerpt: string
 }
 
@@ -91,6 +89,7 @@ export interface BoardAssetRequest {
 export interface BoardImageRef {
   name: string
   mime: string
+  bytes: number
   dataUrl: string
 }
 
@@ -161,7 +160,7 @@ export interface ApiLiro {
     offsetY?: number
   }) => Promise<IpcResult<{ added: number; images: number }>>
   boardPasteItems: (payload: { docId: string; sourceDocId: string; items: BoardItem[] }) => Promise<IpcResult<{ added: number }>>
-  boardAddFile: (payload: BoardFileRequest) => Promise<IpcResult<BoardFileResult>>
+  boardSaveFile: (payload: BoardFileRequest) => Promise<IpcResult<BoardFileResult>>
   boardSaveAsset: (payload: BoardAssetRequest) => Promise<IpcResult<boolean>>
   boardHasAsset: (docId: string, file: string) => Promise<IpcResult<boolean>>
   boardFileImages: (docId: string, file: string) => Promise<IpcResult<BoardImageRef[]>>

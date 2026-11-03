@@ -3,11 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { linkHtml, parseRichText, toPlainText } from '@shared/richtext'
 import { normalizeItems } from './import/normalize'
-import { guessKind, previewSrc } from './preview'
+import { guessKind, previewSrc, readPreviewText, toLocalPath } from './preview'
 import { csvToHtml, documentFromZip, markdownToHtml, readDocumentHtml, readDocumentImages, wordDocumentToHtml } from './documentText'
-import { assetPathOf } from './boardFile'
 import { createZip, readZip } from './util/zip'
-import { buildStats } from './import/commit'
+import { buildDoc, buildStats } from './import/commit'
+import { assetPathOf, boardFileImages, hasBoardAsset, saveBoardAsset, saveBoardFile } from './boardFile'
+import { assetsDir } from './paths'
+import { store } from './store'
 import { normalizeColor, luminance } from '@shared/color'
 import type { BoardDoc, BoardItem, ConnectorItem, ImageItem, ShapeItem, SolidItem, StickyItem } from '@shared/types'
 import { boundsOfItems, parseBoardRef, sanitizeFileName, withoutDanglingConnectors } from '@shared/util'
@@ -122,35 +124,100 @@ export function runSelfTest(): SelfTestResult {
 
   const docxDir = mkdtempSync(join(tmpdir(), 'liro-doc-'))
   try {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
     const docxFile = join(docxDir, 'документ.docx')
     writeFileSync(docxFile, createZip([{ name: 'word/document.xml', data: Buffer.from(wordXml, 'utf8') }]))
     check(results, 'документ: чтение docx целиком', (readDocumentHtml(docxFile) ?? '').includes('<td>Ячейка</td>'))
     check(results, 'документ: определение типа', guessKind(`file:///${docxFile.replace(/\\/g, '/')}`, 'file') === 'text')
+
+    const drawingXml =
+      '<w:p><w:r><w:drawing><wp:inline><wp:extent cx="609600" cy="304800"/>' +
+      '<a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rId7"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>'
+    const pictureXml = `<w:document><w:body>${drawingXml}<w:p><w:r><w:t>После картинки</w:t></w:r></w:p></w:body></w:document>`
+    const imageOnlyXml = `<w:document><w:body>${drawingXml}</w:body></w:document>`
+    const pictureZip = [
+      { name: 'word/document.xml', data: Buffer.from(pictureXml, 'utf8') },
+      { name: 'word/_rels/document.xml.rels', data: Buffer.from('<Relationships><Relationship Id="rId7" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>', 'utf8') },
+      { name: 'word/media/image1.png', data: png },
+      { name: 'word/media/image2.wmf', data: Buffer.from([1, 2, 3]) }
+    ]
+    const pictureDocx = join(docxDir, 'с-картинкой.docx')
+    writeFileSync(pictureDocx, createZip(pictureZip))
+    const pictureHtml = readDocumentHtml(pictureDocx) ?? ''
+    check(results, 'картинка docx: попадает в разметку', pictureHtml.includes('<img class="doc-img" src="data:image/png;base64,') && pictureHtml.includes('width="64" height="32"'), pictureHtml.slice(0, 160))
+    check(results, 'картинка docx: текст вокруг остаётся', pictureHtml.includes('После картинки'))
+    check(results, 'картинка docx: только картинки известного формата', readDocumentImages(pictureDocx).length === 1, `${readDocumentImages(pictureDocx).length}`)
+    check(results, 'картинка docx: base64 возвращается', readDocumentImages(pictureDocx)[0]?.dataUrl.startsWith('data:image/png;base64,') === true)
+    check(results, 'картинка docx: файла нет — картинок нет', readDocumentImages(join(docxDir, 'нет-такого.docx')).length === 0)
+
+    const plainDocx = join(docxDir, 'без-текста.docx')
+    writeFileSync(plainDocx, createZip([{ name: 'word/document.xml', data: Buffer.from('<w:document><w:body><w:p/></w:body></w:document>', 'utf8') }]))
+    check(results, 'документ: пустой без текста', readDocumentHtml(plainDocx) === null)
+
+    process.env.LIRO_LIBRARY = process.env.LIRO_LIBRARY ?? mkdtempSync(join(tmpdir(), 'liro-board-'))
+    store.load()
+    const boardId = 'bd_selftest_file'
+    store.createDoc(boardId, buildDoc({ docId: boardId, title: 'Файл', rawItems: [], source: { kind: 'file' } }).doc)
+    const docxDataUrl = `data:application/octet-stream;base64,${createZip([{ name: 'word/document.xml', data: Buffer.from(wordXml, 'utf8') }]).toString('base64')}`
+    const saved = saveBoardFile({ docId: boardId, name: 'C:\\tmp\\урок.docx', mime: '', dataUrl: docxDataUrl })
+    check(results, 'файл на доске: имя без пути', saved.name === 'урок.docx', saved.name)
+    check(results, 'файл на доске: расширение сохранено', saved.file.endsWith('.docx'), saved.file)
+    check(results, 'файл на доске: начало текста из файла', saved.excerpt.includes('Ячейка'), saved.excerpt.slice(0, 40))
+    check(results, 'файл на доске: путь внутри папки доски', assetPathOf(boardId, saved.file).startsWith(assetsDir(boardId)))
+    check(results, 'файл на доске: файл на диске', hasBoardAsset(boardId, saved.file))
+    check(results, 'файл на доске: файл в реестре доски', store.readDoc(boardId).assets[saved.file]?.bytes === saved.bytes)
+    check(results, 'файл на доске: тот же файл даёт тот же ассет', saveBoardFile({ docId: boardId, name: 'урок.docx', mime: '', dataUrl: docxDataUrl }).file === saved.file)
+    check(
+      results,
+      'файл на доске: пустые данные отклонены',
+      (() => {
+        try {
+          saveBoardFile({ docId: boardId, name: 'пустой.docx', mime: '', dataUrl: 'data:application/octet-stream;base64,' })
+          return false
+        } catch {
+          return true
+        }
+      })()
+    )
+    const pictureSaved = saveBoardFile({
+      docId: boardId,
+      name: 'с-картинкой.docx',
+      mime: '',
+      dataUrl: `data:application/octet-stream;base64,${createZip(pictureZip).toString('base64')}`
+    })
+    check(results, 'файл на доске: картинок в файле досчитано', boardFileImages(boardId, pictureSaved.file).length === 1)
+    const imageOnlySaved = saveBoardFile({
+      docId: boardId,
+      name: 'только-картинка.docx',
+      mime: '',
+      dataUrl: `data:application/octet-stream;base64,${createZip([
+        { name: 'word/document.xml', data: Buffer.from(imageOnlyXml, 'utf8') },
+        pictureZip[1],
+        pictureZip[2]
+      ]).toString('base64')}`
+    })
+    check(results, 'файл на доске: без текста начало пустое', imageOnlySaved.excerpt === '', imageOnlySaved.excerpt.slice(0, 40))
+    check(results, 'файл на доске: картинок нет у чужого файла', boardFileImages(boardId, 'нет-такого.docx').length === 0)
+    const pngDataUrl = `data:image/png;base64,${png.toString('base64')}`
+    check(
+      results,
+      'приём файла: записан на диск',
+      saveBoardAsset({ docId: boardId, file: 'полученный.png', mime: 'image/png', dataUrl: pngDataUrl }) === true &&
+        hasBoardAsset(boardId, 'полученный.png')
+    )
+    check(
+      results,
+      'приём файла: повтор пропускается',
+      saveBoardAsset({ docId: boardId, file: 'полученный.png', mime: 'image/png', dataUrl: pngDataUrl }) === false
+    )
+    check(
+      results,
+      'приём файла: имя не уходит за папку доски',
+      assetPathOf(boardId, '../../../../evil.png') === join(assetsDir(boardId), 'evil.png'),
+      assetPathOf(boardId, '../../../../evil.png')
+    )
   } finally {
     rmSync(docxDir, { recursive: true, force: true })
-  }
-
-  const mediaDir = mkdtempSync(join(tmpdir(), 'liro-media-'))
-  try {
-    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
-    const mediaDocx = join(mediaDir, 'с-картинками.docx')
-    writeFileSync(
-      mediaDocx,
-      createZip([
-        { name: 'word/document.xml', data: Buffer.from(wordXml, 'utf8') },
-        { name: 'word/media/image1.png', data: png },
-        { name: 'word/media/image2.emf', data: Buffer.from([1, 2, 3, 4]) }
-      ])
-    )
-    const images = readDocumentImages(mediaDocx)
-    check(results, 'картинки docx: только изображения', images.length === 1, `${images.length}`)
-    check(results, 'картинки docx: dataUrl', images[0]?.dataUrl.startsWith('data:image/png;base64,') === true, images[0]?.name ?? '')
-    check(results, 'картинки docx: пустой файл', readDocumentImages(join(mediaDir, 'нет-такого.docx')).length === 0)
-    const contained = assetPathOf('doc_a', '../../evil.png')
-    check(results, 'файл на доске: имя остаётся в папке ассетов', contained.endsWith('evil.png') && !contained.includes('..'), contained)
-    check(results, 'файл на доске: голых точек не принимается', (() => { try { assetPathOf('doc_a', '..'); return false } catch { return true } })())
-  } finally {
-    rmSync(mediaDir, { recursive: true, force: true })
   }
 
   const mdHtml = markdownToHtml(
@@ -809,4 +876,24 @@ export function runSelfTest(): SelfTestResult {
   )
 
   return results
+}
+
+export function runFileTest(file: string): string[] {
+  const path = toLocalPath(file)
+  const out: string[] = [`файл: ${path}`]
+  out.push(`предпросмотр: ${guessKind(previewSrc(path), 'file')}`)
+  const document = readPreviewText(path)
+  out.push(
+    document
+      ? `разметка: ${document.language}, ${document.content.length} символов, обрезан: ${document.truncated}`
+      : 'разметка: не получена'
+  )
+  const plain = (document?.content ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+  out.push(`текст: ${plain.length} символов`)
+  out.push(`начало: ${plain.slice(0, 300)}`)
+  out.push(`картинок в разметке: ${(document?.content.match(/<img class="doc-img"/g) ?? []).length}`)
+  const images = readDocumentImages(path)
+  out.push(`картинок в файле: ${images.length}`)
+  for (const image of images) out.push(`  ${image.name} ${image.mime} ${image.bytes}`)
+  return out
 }

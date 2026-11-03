@@ -22,7 +22,7 @@ import { buildExtensionFiles } from './import/extension'
 import { importFromFile } from './import/file'
 import { importFromApi, listBoards, type SourceBoardSummary } from './import/api'
 import { buildDoc, buildStats, assetsBytesOf, commitDoc, persistInlineAssets } from './import/commit'
-import { addBoardFile, hasBoardAsset, readBoardFileImages, saveBoardAsset } from './boardFile'
+import { boardFileImages, hasBoardAsset, saveBoardAsset, saveBoardFile } from './boardFile'
 import { exportBoard, exportToPath } from './export/exporter'
 import { exportFolder } from './export/render'
 import { openPreview, previewFor, readPreviewText, type PreviewPayload } from './preview'
@@ -358,6 +358,24 @@ export function registerIpc(): void {
   ipcMain.handle('asset:url', (_e, docId: string, file: string) => ok(assetUrl(docId, file)))
   ipcMain.handle('asset:data', (_e, docId: string, file: string) => ok(readAssetDataUrl(docId, file)))
   ipcMain.handle('asset:missing', (_e, docId: string) => ok(store.boards().length > 0 && !indexFile().length ? true : false))
+  ipcMain.handle('board:save-file', (_e, request: BoardFileRequest) => {
+    try {
+      const result = saveBoardFile(request)
+      sendLibraryChanged()
+      return ok(result)
+    } catch (error) {
+      return fail(error)
+    }
+  })
+  ipcMain.handle('board:save-asset', (_e, request: BoardAssetRequest) => {
+    try {
+      return ok(saveBoardAsset(request))
+    } catch (error) {
+      return fail(error)
+    }
+  })
+  ipcMain.handle('board:has-asset', (_e, docId: string, file: string) => ok(hasBoardAsset(docId, file)))
+  ipcMain.handle('board:file-images', (_e, docId: string, file: string) => ok(boardFileImages(docId, file)))
   ipcMain.handle('board:workspace-get', (_e, docId: string) => ok(readJson<BoardWorkspace>(workspaceFile(docId), {})))
   ipcMain.handle('board:workspace-set', (_e, docId: string, patch: BoardWorkspace) => {
     const current = readJson<BoardWorkspace>(workspaceFile(docId), {})
@@ -408,24 +426,6 @@ export function registerIpc(): void {
       return fail(error)
     }
   })
-  ipcMain.handle('board:add-file', (_e, request: BoardFileRequest) => {
-    try {
-      const result = addBoardFile(request)
-      sendLibraryChanged()
-      return ok(result)
-    } catch (error) {
-      return fail(error)
-    }
-  })
-  ipcMain.handle('board:save-asset', (_e, request: BoardAssetRequest) => {
-    try {
-      return ok(saveBoardAsset(request))
-    } catch (error) {
-      return fail(error)
-    }
-  })
-  ipcMain.handle('board:has-asset', (_e, docId: string, file: string) => ok(hasBoardAsset(docId, file)))
-  ipcMain.handle('board:file-images', (_e, docId: string, file: string) => ok(readBoardFileImages(docId, file)))
   ipcMain.handle('project:create', (_e, name: string) => {
     const project = store.createProject(name)
     sendLibraryChanged()
@@ -928,40 +928,21 @@ async function writeClipboard(html: string, text: string): Promise<void> {
   ])
 }
 
+const EXPORT_FILE_NAMES: Record<ExportOptions['format'], string> = {
+  liro: 'Файл Liro',
+  png: 'PNG',
+  html: 'HTML',
+  svg: 'SVG'
+}
+
 function suggestedName(options: ExportOptions): string {
   const doc = store.readDoc(options.docId)
   const base = doc.title.replace(/[\\/:*?"<>|]/g, ' ')
-  switch (options.format) {
-    case 'png':
-      return `${base}.png`
-    case 'pdf':
-      return `${base}.pdf`
-    case 'html':
-      return `${base}.html`
-    case 'zip':
-      return `${base}.zip`
-    case 'liro':
-      return `${base}.liro`
-    default:
-      return `${base}.json`
-  }
+  return `${base}.${options.format}`
 }
 
 function exportFilters(options: ExportOptions): Electron.FileFilter[] {
-  switch (options.format) {
-    case 'png':
-      return [{ name: 'PNG', extensions: ['png'] }]
-    case 'pdf':
-      return [{ name: 'PDF', extensions: ['pdf'] }]
-    case 'html':
-      return [{ name: 'HTML', extensions: ['html'] }]
-    case 'zip':
-      return [{ name: 'ZIP', extensions: ['zip'] }]
-    case 'liro':
-      return [{ name: 'Файл Liro', extensions: ['liro'] }]
-    default:
-      return [{ name: 'JSON', extensions: ['json'] }]
-  }
+  return [{ name: EXPORT_FILE_NAMES[options.format], extensions: [options.format] }]
 }
 
 async function runExport(options: ExportOptions, saveAs: boolean, targetPath?: string): Promise<ExportResult> {
@@ -977,8 +958,7 @@ function defaultExportPath(options: ExportOptions): string {
   const doc = store.readDoc(options.docId)
   const base = sanitizeFileName(doc.title) || 'board'
   const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
-  const ext = options.format === 'zip' ? 'zip' : options.format
-  return join(exportFolder(), `${base}-${stamp}.${ext}`)
+  return join(exportFolder(), `${base}-${stamp}.${options.format}`)
 }
 
 export function parseHtmlPayload(html: string): { items: unknown[] } {

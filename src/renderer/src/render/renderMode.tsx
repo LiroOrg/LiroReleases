@@ -5,16 +5,6 @@ import { api } from '../lib/api'
 import { ItemView, visibleItems } from '../board/scene'
 import { ConnectorLayer } from '../board/connectors'
 
-const PAPER_PX: Record<string, { width: number; height: number }> = {
-  a4: { width: 1123, height: 794 },
-  a3: { width: 1587, height: 1123 }
-}
-
-const PAPER_MM: Record<string, { width: number; height: number }> = {
-  a4: { width: 297, height: 210 },
-  a3: { width: 420, height: 297 }
-}
-
 export interface RenderQuery {
   docId: string
   scope: 'board' | 'frame' | 'selection' | 'thumb'
@@ -23,12 +13,9 @@ export interface RenderQuery {
   bbox?: Rect
   scale: number
   background: 'white' | 'transparent'
-  mode: 'png' | 'html' | 'print'
+  mode: 'png' | 'html'
   width: number
   height: number
-  paper: string
-  tileCols: number
-  tileRows: number
 }
 
 export function readRenderQuery(): RenderQuery | null {
@@ -54,16 +41,13 @@ export function readRenderQuery(): RenderQuery | null {
     background: (search.get('background') as 'white' | 'transparent') ?? 'white',
     mode: (search.get('mode') as RenderQuery['mode']) ?? 'png',
     width: Number(search.get('width') ?? '1600'),
-    height: Number(search.get('height') ?? '1000'),
-    paper: search.get('paper') ?? 'a3',
-    tileCols: Math.max(1, Number(search.get('tileCols') ?? '1') || 1),
-    tileRows: Math.max(1, Number(search.get('tileRows') ?? '1') || 1)
+    height: Number(search.get('height') ?? '1000')
   }
 }
 
 interface RenderHandle {
-  info: () => { width: number; height: number; printWidth: string; printHeight: string; ready: boolean }
-  ready: () => Promise<{ width: number; height: number; printWidth: string; printHeight: string; ready: boolean }>
+  info: () => { width: number; height: number; ready: boolean }
+  ready: () => Promise<{ width: number; height: number; ready: boolean }>
   html: () => Promise<string>
 }
 
@@ -71,7 +55,7 @@ export function RenderMode(): ReactNode {
   const query = useMemo(() => readRenderQuery(), [])
   const [doc, setDoc] = useState<BoardDoc | null>(null)
   const [assetsReady, setAssetsReady] = useState(false)
-  const [info, setInfo] = useState({ width: 0, height: 0, printWidth: '0', printHeight: '0', ready: false })
+  const [info, setInfo] = useState({ width: 0, height: 0, ready: false })
   const resolveReady = useRef<(() => void) | null>(null)
 
   useEffect(() => {
@@ -146,25 +130,17 @@ export function RenderMode(): ReactNode {
 
   useEffect(() => {
     if (!doc || !query || !assetsReady) return
-    const paper = PAPER_PX[query.paper] ?? PAPER_PX.a3
     let width = 0
     let height = 0
-    if (query.mode === 'print') {
-      width = paper.width * query.tileCols
-      height = paper.height * query.tileRows
-      const mm = PAPER_MM[query.paper] ?? PAPER_MM.a3
-      setInfo({ width, height, printWidth: String(mm.width), printHeight: String(mm.height), ready: true })
-      return
-    }
     if (query.scope === 'thumb') {
       width = Math.max(1, Math.round(query.width))
       height = Math.max(1, Math.round(query.height))
-      setInfo({ width, height, printWidth: '0', printHeight: '0', ready: true })
+      setInfo({ width, height, ready: true })
       return
     }
     width = Math.max(1, Math.round(region.width * query.scale))
     height = Math.max(1, Math.round(region.height * query.scale))
-    setInfo({ width, height, printWidth: '0', printHeight: '0', ready: true })
+    setInfo({ width, height, ready: true })
   }, [doc, query, region, assetsReady])
 
   const buildHtml = useCallback(async (): Promise<string> => {
@@ -276,9 +252,6 @@ ${viewer}
 
   if (!query || !doc) return <div className="rendermode" />
 
-  const paper = PAPER_PX[query.paper] ?? PAPER_PX.a3
-  const tiled = query.mode === 'print' && (query.tileCols > 1 || query.tileRows > 1)
-
   const stage = (offsetX: number, offsetY: number, scale: number, viewW: number, viewH: number, key: string): ReactNode => {
     const originX = offsetX / scale
     const originY = offsetY / scale
@@ -334,47 +307,6 @@ ${viewer}
             <ItemView key={item.id} item={item} doc={doc} assetUrl={assetUrl} selected={false} dimmed={false} />
           ))}
         </div>
-      </div>
-    )
-  }
-
-  if (query.mode === 'print') {
-    const tileWidth = region.width / query.tileCols
-    const tileHeight = region.height / query.tileRows
-    const scaleFactor = tiled ? paper.width / tileWidth : Math.min(paper.width / region.width, paper.height / region.height)
-    const pages: ReactNode[] = []
-    for (let row = 0; row < query.tileRows; row += 1) {
-      for (let col = 0; col < query.tileCols; col += 1) {
-        const contentX = tiled ? col * tileWidth : region.x
-        const contentY = tiled ? row * tileHeight : region.y
-        const tx = -contentX * scaleFactor + (paper.width - region.width * scaleFactor) / 2
-        const ty = -contentY * scaleFactor + (paper.height - region.height * scaleFactor) / 2
-        pages.push(
-          <div
-            key={`page-${row}-${col}`}
-            className="printpage"
-            style={{
-              width: paper.width,
-              height: paper.height,
-              left: col * paper.width,
-              top: row * paper.height,
-              position: 'absolute'
-            }}
-          >
-            {stage(tx, ty, scaleFactor, paper.width / scaleFactor, paper.height / scaleFactor, `s-${row}-${col}`)}
-          </div>
-        )
-      }
-    }
-    const mm = PAPER_MM[query.paper] ?? PAPER_MM.a3
-    return (
-      <div
-        className="rendermode"
-        data-background={query.background}
-        style={{ width: paper.width * query.tileCols, height: paper.height * query.tileRows, position: 'relative' }}
-      >
-        <style>{`@page{size:${mm.width}mm ${mm.height}mm;margin:0}`}</style>
-        {pages}
       </div>
     )
   }

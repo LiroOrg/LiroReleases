@@ -1856,6 +1856,48 @@ const run = async () => {
     check('сетка совпадает с положением доски', false, 'холста нет')
   }
 
+  const clickNode = async (node) => {
+    const rect = node.getBoundingClientRect()
+    const options = {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+      button: 0,
+      pointerId: 1,
+      isPrimary: true
+    }
+    node.dispatchEvent(new PointerEvent('pointerdown', options))
+    await wait(40)
+    node.dispatchEvent(new PointerEvent('pointerup', { ...options, buttons: 0 }))
+    node.dispatchEvent(new MouseEvent('click', options))
+    await wait(320)
+  }
+
+  const exportTrigger = Array.from(document.querySelectorAll('.bbar button')).find((node) =>
+    (node.textContent || '').includes('Экспорт')
+  )
+  if (exportTrigger) {
+    await clickNode(exportTrigger)
+    const formats = Array.from(document.querySelectorAll('.exportoption__title')).map((node) => (node.textContent || '').trim())
+    check('в экспорте только LIRO, PNG, HTML и SVG', formats.join(',') === 'LIRO,PNG,HTML,SVG', formats.join(','))
+    const dialogText = (document.querySelector('[role="dialog"]') || {}).textContent || ''
+    check('из экспорта убраны PDF, ZIP и JSON', !/PDF|ZIP|JSON/i.test(dialogText), dialogText.slice(0, 80))
+    const pngOption = Array.from(document.querySelectorAll('.exportoption')).find((node) =>
+      (node.textContent || '').startsWith('PNG')
+    )
+    if (pngOption) await clickNode(pngOption)
+    const pngText = (document.querySelector('[role="dialog"]') || {}).textContent || ''
+    const scaleRow = Array.from(document.querySelectorAll('.field__label')).find(
+      (node) => (node.textContent || '').trim() === 'Масштаб'
+    )
+    check('у PNG остались масштаб и фон', !!scaleRow && /Фон/.test(pngText), scaleRow ? 'строка масштаба на месте' : 'строки масштаба нет')
+    await press('Escape')
+    check('окно экспорта закрывается по Escape', !document.querySelector('.exportoption'), 'окно осталось открытым')
+  } else {
+    check('в экспорте только LIRO, PNG, HTML и SVG', false, 'кнопки Экспорт в панели доски нет')
+  }
+
   window.location.hash = '#/library'
   await wait(600)
 
