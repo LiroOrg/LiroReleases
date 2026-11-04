@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from 'react'
-import type { ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { KeyboardEvent as FieldKeyboardEvent, ReactNode } from 'react'
 import {
   Archive,
   ArrowLeft,
@@ -17,8 +17,8 @@ import {
   Star,
   Trash2
 } from 'lucide-react'
-import type { BoardMeta, Project } from '@shared/types'
-import { formatBytes, formatDate, formatNumber } from '@shared/util'
+import type { BoardMeta, Project, Settings } from '@shared/types'
+import { countNumber, formatBytes, formatDate, formatNumber } from '@shared/util'
 import { api } from '../lib/api'
 import { createBoardFromClipboard } from '../lib/paste'
 import { useApp } from '../lib/store'
@@ -44,16 +44,28 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function tileMeta(board: BoardMeta, folder: string): string {
+  return `${formatDate(board.updatedAt)} · ${folder}`
+}
+
+function rowMeta(board: BoardMeta, folder: string): string {
+  return `${formatDate(board.updatedAt)} · ${countNumber(board.itemCount, ['объект', 'объекта', 'объектов'])} · ${formatBytes(
+    board.assetBytes
+  )} · ${folder}`
+}
+
 export function Library(props?: { projectId?: string; query?: string }): ReactNode {
   const library = useApp((state) => state.library)
   const setLibrary = useApp((state) => state.setLibrary)
   const toast = useApp((state) => state.toast)
+  const settings = useApp((state) => state.settings)
+  const setSettings = useApp((state) => state.setSettings)
 
   const projectId = props?.projectId
   const [search, setSearch] = useState(props?.query ?? '')
   const [projectFilter, setProjectFilter] = useState(projectId ?? 'all')
-  const [sort, setSort] = useState<SortKey>('updated')
-  const [view, setView] = useState<ViewKey>('grid')
+  const [sort, setSortState] = useState<SortKey>(settings?.librarySort ?? 'updated')
+  const [view, setViewState] = useState<ViewKey>(settings?.libraryView ?? 'grid')
   const [archived, setArchived] = useState(false)
   const [dialog, setDialog] = useState<Dialog>({ kind: 'none' })
   const [draft, setDraft] = useState('')
@@ -61,6 +73,10 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
   const [deleteFiles, setDeleteFiles] = useState(false)
   const [deleteMode, setDeleteMode] = useState<'unassign' | 'deleteBoards'>('unassign')
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setSearch(props?.query ?? '')
+  }, [props?.query])
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -78,6 +94,33 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
     setDeleteMode('unassign')
   }, [])
 
+  const remember = useCallback(
+    (patch: Partial<Settings>): void => {
+      void api.settings
+        .set(patch)
+        .then(setSettings)
+        .catch(() => toast('Настройка не сохранится после перезапуска', 'error'))
+    },
+    [setSettings, toast]
+  )
+
+  const setSort = (value: SortKey): void => {
+    setSortState(value)
+    remember({ librarySort: value })
+  }
+
+  const setView = (value: ViewKey): void => {
+    setViewState(value)
+    remember({ libraryView: value })
+  }
+
+  const onSearchKey = (event: FieldKeyboardEvent<HTMLInputElement>): void => {
+    if (event.key !== 'Escape') return
+    if (!search) return
+    event.preventDefault()
+    setSearch('')
+  }
+
   const activeProject = useMemo(
     () => library.projects.find((project) => project.id === projectId) ?? null,
     [library.projects, projectId]
@@ -93,13 +136,7 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
     } else if (projectFilter !== 'all') {
       list = list.filter((board) => board.projectId === projectFilter)
     }
-    if (text) {
-      const folders = new Map(library.projects.map((project) => [project.id, project.name.toLowerCase()]))
-      list = list.filter((board) => {
-        const folder = board.projectId ? folders.get(board.projectId) ?? '' : ''
-        return `${board.title} ${board.description ?? ''} ${folder}`.toLowerCase().includes(text)
-      })
-    }
+    if (text) list = list.filter((board) => board.title.toLowerCase().includes(text))
     const sorted = [...list]
     if (sort === 'name') sorted.sort((left, right) => left.title.localeCompare(right.title, 'ru'))
     else if (sort === 'items') sorted.sort((left, right) => right.itemCount - left.itemCount)
@@ -136,7 +173,10 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
 
   const renameBoard = async (board: BoardMeta): Promise<void> => {
     const title = draft.trim()
-    if (!title) return
+    if (!title) {
+      toast('Название доски не может быть пустым', 'error')
+      return
+    }
     setBusy(true)
     try {
       await api.board.rename(board.id, title)
@@ -200,7 +240,10 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
 
   const createProject = async (): Promise<void> => {
     const name = draft.trim()
-    if (!name) return
+    if (!name) {
+      toast('Нужно название папки', 'error')
+      return
+    }
     setBusy(true)
     try {
       await api.project.create(name)
@@ -216,7 +259,10 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
 
   const renameProject = async (project: Project): Promise<void> => {
     const name = draft.trim()
-    if (!name) return
+    if (!name) {
+      toast('Нужно название папки', 'error')
+      return
+    }
     setBusy(true)
     try {
       await api.project.rename(project.id, name)
@@ -297,7 +343,12 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
               board.archived ? 'Доска возвращена' : 'Доска в архиве'
             )
         },
-        { id: 'reveal', label: 'Показать в папке', icon: <FolderOpen size={14} />, run: () => void api.board.reveal(board.id) },
+        {
+          id: 'reveal',
+          label: 'Показать в папке',
+          icon: <FolderOpen size={14} />,
+          run: () => void api.board.reveal(board.id).catch((error: unknown) => toast(errorText(error), 'error'))
+        },
         {
           id: 'delete',
           label: 'Удалить',
@@ -384,9 +435,10 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
             <Search size={15} />
             <input
               className="input"
-              placeholder="Поиск по названию"
+              placeholder="Поиск по названию доски"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
+              onKeyDown={onSearchKey}
             />
           </div>
           <select className="select libbar__sort" value={sort} onChange={(event) => setSort(event.target.value as SortKey)}>
@@ -458,7 +510,7 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
         {activeProject ? (
           <div className="libfolder">
             <span className="field__hint">
-              создана {formatDate(activeProject.createdAt)} · {formatNumber(folderCounts.get(activeProject.id) ?? 0)} досок
+              создана {formatDate(activeProject.createdAt)} · {countNumber(folderCounts.get(activeProject.id) ?? 0, ['доска', 'доски', 'досок'])}
             </span>
             <button
               type="button"
@@ -487,43 +539,44 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
         {boards.length ? (
           view === 'grid' ? (
             <div className="tiles">
-              {boards.map((board) => (
+              {boards.map((board) => {
+                const meta = tileMeta(board, projectName(board.projectId))
+                return (
                 <div key={board.id} className="tile" onClick={() => openBoard(board.id)}>
                   <span className="tile__thumb">
                     <BoardThumb board={board} />
                     {board.favorite ? <span className="tile__star" aria-label="В избранном"><Star size={12} fill="currentColor" /></span> : null}
                   </span>
                   <span className="tile__body">
-                    <span className="tile__title truncate">{board.title}</span>
-                    <span className="tile__meta truncate">
-                      {formatDate(board.updatedAt)} · {projectName(board.projectId)}
-                    </span>
+                    <span className="tile__title truncate" title={board.title}>{board.title}</span>
+                    <span className="tile__meta truncate" title={meta}>{meta}</span>
                   </span>
                   <span className="tile__menu" onClick={(event) => event.stopPropagation()}>
                     {boardMenu(board)}
                   </span>
                 </div>
-              ))}
+                )
+              })}
             </div>
           ) : (
             <div className="homerows">
-              {boards.map((board) => (
+              {boards.map((board) => {
+                const meta = rowMeta(board, projectName(board.projectId))
+                return (
                 <div key={board.id} className="homerow" onClick={() => openBoard(board.id)}>
                   <span className="homerow__thumb">
                     <BoardThumb board={board} />
                   </span>
                   <span className="homerow__main">
-                    <span className="homerow__title truncate">{board.title}</span>
-                    <span className="homerow__meta truncate">
-                      {formatDate(board.updatedAt)} · {formatNumber(board.itemCount)} объектов ·{' '}
-                      {formatBytes(board.assetBytes)} · {projectName(board.projectId)}
-                    </span>
+                    <span className="homerow__title truncate" title={board.title}>{board.title}</span>
+                    <span className="homerow__meta truncate" title={meta}>{meta}</span>
                   </span>
                   <span className="tile__menu" onClick={(event) => event.stopPropagation()}>
                     {boardMenu(board)}
                   </span>
                 </div>
-              ))}
+                )
+              })}
             </div>
           )
         ) : (
@@ -536,7 +589,7 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
             }
             action={
               <div className="field__row">
-                <button type="button" className="btn btn--primary" onClick={() => navigate({ name: 'home' })}>
+                <button type="button" className="btn btn--primary" disabled={busy} onClick={() => void pasteClipboard()}>
                   <ClipboardPaste size={15} />
                   Вставить из буфера
                 </button>
@@ -732,7 +785,7 @@ export function Library(props?: { projectId?: string; query?: string }): ReactNo
         }
       >
         <div className="stack">
-          <div>Папка «{(dialog as { project: Project }).project?.name}» будет удалён. Выберите, что делать с досками.</div>
+          <div>Папка «{(dialog as { project: Project }).project?.name}» будет удалена. Выберите, что делать с досками.</div>
           <label className="check">
             <input
               type="checkbox"

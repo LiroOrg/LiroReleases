@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as MenuKeyboardEvent, ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronRight } from 'lucide-react'
@@ -67,13 +67,21 @@ function MenuList(props: { items: MenuItem[]; onCloseAll: () => void; onBack?: (
   const listRef = useRef<HTMLDivElement>(null)
   const subRef = useRef<HTMLDivElement>(null)
   const rowsRef = useRef(new Map<string, HTMLButtonElement>())
+  const hoverTimer = useRef(0)
+  const rowId = useId()
 
   const selectable = props.items.filter((item) => !item.disabled)
 
-  const closeSub = useCallback((): void => setExpanded(''), [])
+  const closeSub = useCallback((): void => {
+    window.clearTimeout(hoverTimer.current)
+    setExpanded('')
+  }, [])
+
+  const cancelHover = (): void => window.clearTimeout(hoverTimer.current)
 
   useEffect(() => {
     listRef.current?.focus()
+    return cancelHover
   }, [])
 
   useEffect(() => {
@@ -90,9 +98,15 @@ function MenuList(props: { items: MenuItem[]; onCloseAll: () => void; onBack?: (
     })
   }, [expanded])
 
+  const reveal = (item: MenuItem): void => {
+    setCursor(props.items.indexOf(item))
+    rowsRef.current.get(item.id)?.scrollIntoView({ block: 'nearest' })
+  }
+
   const run = (item: MenuItem): void => {
     if (item.disabled) return
     if (item.submenu?.length) {
+      cancelHover()
       setExpanded(item.id)
       setCursor(props.items.indexOf(item))
       return
@@ -105,9 +119,22 @@ function MenuList(props: { items: MenuItem[]; onCloseAll: () => void; onBack?: (
     if (!selectable.length) return
     const current = selectable.findIndex((item) => props.items.indexOf(item) === cursor)
     const next = current < 0 ? (step > 0 ? 0 : selectable.length - 1) : (current + step + selectable.length) % selectable.length
+    reveal(selectable[next])
     const item = selectable[next]
-    setCursor(props.items.indexOf(item))
     if (expanded && expanded !== item.id) setExpanded(item.submenu?.length ? item.id : '')
+  }
+
+  const typeahead = (letter: string): boolean => {
+    const needle = letter.toLowerCase()
+    const start = selectable.findIndex((item) => props.items.indexOf(item) === cursor)
+    for (let offset = 1; offset <= selectable.length; offset += 1) {
+      const item = selectable[(start + offset + selectable.length) % selectable.length]
+      if (item.label.toLowerCase().startsWith(needle)) {
+        reveal(item)
+        return true
+      }
+    }
+    return false
   }
 
   const onKeyDown = (event: MenuKeyboardEvent<HTMLDivElement>): void => {
@@ -123,13 +150,13 @@ function MenuList(props: { items: MenuItem[]; onCloseAll: () => void; onBack?: (
     }
     if (event.key === 'Home') {
       event.preventDefault()
-      if (selectable[0]) setCursor(props.items.indexOf(selectable[0]))
+      if (selectable[0]) reveal(selectable[0])
       return
     }
     if (event.key === 'End') {
       event.preventDefault()
       const last = selectable[selectable.length - 1]
-      if (last) setCursor(props.items.indexOf(last))
+      if (last) reveal(last)
       return
     }
     if (event.key === 'ArrowRight') {
@@ -165,6 +192,17 @@ function MenuList(props: { items: MenuItem[]; onCloseAll: () => void; onBack?: (
       }
       return
     }
+    if (
+      event.key.length === 1 &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      event.key !== ' ' &&
+      typeahead(event.key)
+    ) {
+      event.preventDefault()
+      return
+    }
     if (event.key === 'Enter' || event.key === ' ') {
       const item = props.items[cursor]
       if (item) {
@@ -176,7 +214,17 @@ function MenuList(props: { items: MenuItem[]; onCloseAll: () => void; onBack?: (
 
   return (
     <>
-      <div className="menu__list" ref={listRef} role="menu" tabIndex={-1} onKeyDown={onKeyDown}>
+      <div
+        className="menu__list"
+        ref={listRef}
+        role="menu"
+        tabIndex={-1}
+        onKeyDown={onKeyDown}
+        onMouseLeave={cancelHover}
+        aria-activedescendant={
+          cursor >= 0 && props.items[cursor] ? `${rowId}:${props.items[cursor].id}` : undefined
+        }
+      >
         {props.items.map((item, index) => {
           const openSub = expanded === item.id && Boolean(item.submenu?.length)
           return (
@@ -187,8 +235,10 @@ function MenuList(props: { items: MenuItem[]; onCloseAll: () => void; onBack?: (
               ) : null}
               <button
                 type="button"
+                id={`${rowId}:${item.id}`}
                 role="menuitem"
                 className="menu__item"
+                title={item.label}
                 ref={(node) => {
                   if (node) rowsRef.current.set(item.id, node)
                   else rowsRef.current.delete(item.id)
@@ -203,8 +253,11 @@ function MenuList(props: { items: MenuItem[]; onCloseAll: () => void; onBack?: (
                 disabled={item.disabled}
                 onMouseEnter={() => {
                   setCursor(index)
-                  if (item.submenu?.length) setExpanded(item.id)
-                  else if (expanded) closeSub()
+                  if (item.submenu?.length) {
+                    if (expanded === item.id) return
+                    window.clearTimeout(hoverTimer.current)
+                    hoverTimer.current = window.setTimeout(() => setExpanded(item.id), 170)
+                  } else if (expanded) closeSub()
                 }}
                 onClick={(event) => {
                   event.stopPropagation()
@@ -353,15 +406,18 @@ export function Menu(props: {
       setOpen(false)
     }
     const onReflow = (): void => place()
+    const onBlur = (): void => setOpen(false)
     window.addEventListener('pointerdown', onDown)
     window.addEventListener('keydown', onKey, true)
     window.addEventListener('resize', onReflow)
     window.addEventListener('scroll', onReflow, true)
+    window.addEventListener('blur', onBlur)
     return () => {
       window.removeEventListener('pointerdown', onDown)
       window.removeEventListener('keydown', onKey, true)
       window.removeEventListener('resize', onReflow)
       window.removeEventListener('scroll', onReflow, true)
+      window.removeEventListener('blur', onBlur)
     }
   }, [open, place])
 

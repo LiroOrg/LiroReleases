@@ -175,6 +175,17 @@ export function Modal(props: {
         closeRef.current()
         return
       }
+      if (event.key === 'Enter') {
+        const target = event.target as HTMLElement | null
+        if (!target || (target.tagName !== 'INPUT' && target.tagName !== 'SELECT')) return
+        const confirm =
+          boxRef.current?.querySelector<HTMLButtonElement>('.modal__foot .btn--primary:not([disabled])') ??
+          boxRef.current?.querySelector<HTMLButtonElement>('.btn--primary:not([disabled])')
+        if (!confirm) return
+        event.preventDefault()
+        confirm.click()
+        return
+      }
       if (event.key !== 'Tab') return
       const list = focusables()
       if (!list.length) return

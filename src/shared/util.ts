@@ -65,6 +65,14 @@ export function formatNumber(value: number): string {
   return new Intl.NumberFormat('ru-RU').format(Math.round(value))
 }
 
+export function countNumber(value: number, forms: [string, string, string]): string {
+  const amount = Math.abs(Math.trunc(value))
+  const hundred = amount % 100
+  const tail = amount % 10
+  const form = hundred >= 11 && hundred <= 14 ? forms[2] : tail === 1 ? forms[0] : tail >= 2 && tail <= 4 ? forms[1] : forms[2]
+  return `${formatNumber(amount)} ${form}`
+}
+
 export function formatDate(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ''

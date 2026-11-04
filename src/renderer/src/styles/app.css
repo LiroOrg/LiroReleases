@@ -417,6 +417,13 @@ body:has(.app--wide) {
   box-shadow: var(--ring-soft);
 }
 
+.input:focus-visible,
+.select:focus-visible,
+.textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .input::placeholder,
 .textarea::placeholder {
   color: var(--text-4);

@@ -524,6 +524,14 @@
   overflow: visible;
 }
 
+.boardview__canvas[data-tool='select'] .boarditem:not(.boarditem--locked) {
+  cursor: move;
+}
+
+.boardview__canvas[data-tool='select'] .boarditem--locked {
+  cursor: default;
+}
+
 .boarditem__text {
   width: 100%;
   height: 100%;
@@ -1069,6 +1077,11 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
   caret-color: var(--text);
+}
+
+.texteditor:focus-visible {
+  outline: 1px solid var(--text);
+  outline-offset: 2px;
 }
 
 .texteditor p,
@@ -2347,6 +2360,11 @@ div.texteditor[data-empty='true'][data-placeholder]::before {
   outline: none;
 }
 
+.calculator__input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .calculator__result {
   margin-top: var(--sp-1);
   font-family: var(--font-mono);
@@ -3032,6 +3050,11 @@ button.livepanel__tag[data-active='true'] {
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--fs-ui);
+}
+
+.sheet__formula:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
 }
 
 .sheet__grid {

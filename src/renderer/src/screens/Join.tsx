@@ -16,19 +16,28 @@ export function JoinScreen(props: { code: string }): ReactNode {
   const [state, setState] = useState<'wait' | 'ready' | 'error'>('wait')
   const [message, setMessage] = useState('Подключение к доске…')
   const startedRef = useRef(false)
+  const attemptRef = useRef(0)
 
   const connect = useCallback(
     async (raw: string): Promise<void> => {
       const wanted = codeFromInput(raw)
-      if (!wanted) return
+      if (!wanted) {
+        setState('error')
+        setMessage('Введите код приглашения')
+        return
+      }
+      const attempt = attemptRef.current + 1
+      attemptRef.current = attempt
       setState('wait')
       setMessage('Подключение к доске…')
       const deadline = Date.now() + WAIT_ROOMS_MS
       let offer: string | null = null
       while (Date.now() < deadline) {
+        if (attemptRef.current !== attempt) return
         try {
           offer = await api.live.guestFetch(wanted)
         } catch (error) {
+          if (attemptRef.current !== attempt) return
           setState('error')
           setMessage(error instanceof Error ? error.message : String(error))
           return
@@ -37,6 +46,7 @@ export function JoinScreen(props: { code: string }): ReactNode {
         setMessage('Ждём, пока хост откроет сессию…')
         await new Promise((resolve) => setTimeout(resolve, 900))
       }
+      if (attemptRef.current !== attempt) return
       if (!offer) {
         setState('error')
         setMessage('Сессия не найдена или уже закрыта')
@@ -45,9 +55,11 @@ export function JoinScreen(props: { code: string }): ReactNode {
       try {
         setPendingJoin(wanted, offer)
         const board = await api.board.createSession(`Совместная доска ${wanted}`)
+        if (attemptRef.current !== attempt) return
         setGuestBoardId(board.id)
         navigate({ name: 'board', docId: board.id })
       } catch (error) {
+        if (attemptRef.current !== attempt) return
         setState('error')
         setMessage(error instanceof Error ? error.message : String(error))
       }
@@ -74,13 +86,19 @@ export function JoinScreen(props: { code: string }): ReactNode {
           <input
             value={code}
             onChange={(event) => setCode(codeFromInput(event.target.value))}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return
+              event.preventDefault()
+              void connect(code)
+            }}
             placeholder="abc-def-ghi"
             spellCheck={false}
             autoComplete="off"
+            autoFocus
           />
         </label>
         <div className="join__actions">
-          <button type="button" className="btn btn--sm btn--primary" onClick={() => void connect(code)} disabled={state === 'wait'}>
+          <button type="button" className="btn btn--sm btn--primary" onClick={() => void connect(code)}>
             Подключиться
           </button>
           <button

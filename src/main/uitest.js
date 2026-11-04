@@ -26,10 +26,34 @@ const gesture = (node, from, to, button) => {
   node.dispatchEvent(new PointerEvent('pointerup', { ...base, ...to }))
 }
 
+const tapNode = async (node, shift) => {
+  const rect = node.getBoundingClientRect()
+  const options = {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+    buttons: 1,
+    pointerId: 1,
+    isPrimary: true,
+    shiftKey: !!shift,
+    clientX: rect.left + rect.width / 2,
+    clientY: rect.top + rect.height / 2
+  }
+  node.dispatchEvent(new PointerEvent('pointerdown', options))
+  await wait(60)
+  node.dispatchEvent(new PointerEvent('pointerup', { ...options, buttons: 0 }))
+  await wait(140)
+}
+
 const itemCount = () => {
   const node = document.querySelector('[data-board-details]')
   const raw = node ? node.getAttribute('data-items') : ''
   return raw ? Number(raw) : -1
+}
+
+const toastText = () => {
+  const nodes = document.querySelectorAll('.toast__text')
+  return nodes.length ? nodes[nodes.length - 1].textContent || '' : ''
 }
 
 const press = async (key, modifiers) => {
@@ -420,6 +444,9 @@ const run = async () => {
       editor.innerHTML = '<p>Привет</p>'
       editor.dispatchEvent(new Event('input', { bubbles: true }))
       await wait(120)
+      editor.innerHTML = '<b>Привет</b> мир'
+      editor.dispatchEvent(new Event('input', { bubbles: true }))
+      await wait(120)
       editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }))
       await wait(300)
       check('текст сохраняется', !document.querySelector('.texteditor'))
@@ -427,6 +454,18 @@ const run = async () => {
       check('текст виден на доске', texts.some((value) => value.includes('Привет')))
       const plainItem = Array.from(document.querySelectorAll(".boarditem[data-kind='text']")).pop()
       check('простой текст виден без тегов', !!plainItem && (plainItem.textContent || '').trim().length > 0, plainItem ? plainItem.textContent : 'нет')
+      const freshId = freshNode?.getAttribute('data-item-id')
+      const freshItem = freshId ? document.querySelector(`[data-item-id="${freshId}"]`) : null
+      check(
+        'формат без абзаца не показывается тегами',
+        !!freshItem && !/<\/?[a-z]/i.test(freshItem.querySelector('.boarditem__text')?.textContent || ''),
+        freshItem?.querySelector('.boarditem__text')?.textContent || 'нет объекта'
+      )
+      check(
+        'формат без абзаца остаётся жирным',
+        Array.from(freshItem?.querySelectorAll('span') || []).some((node) => node.style.fontWeight === '700'),
+        (freshItem?.innerHTML || 'нет объекта').slice(0, 90)
+      )
     }
     await press('z', { ctrlKey: true })
     await wait(200)
@@ -533,6 +572,20 @@ const run = async () => {
   await wait(240)
   const thirdTool = document.querySelector('.toolrail .toolbtn[data-active="true"]')
   check('цифра выбирает инструмент по порядку', !!thirdTool, thirdTool ? thirdTool.getAttribute('aria-label') : 'нет')
+  await press('Escape')
+  await press('т', { code: 'KeyN' })
+  await wait(220)
+  const ruTool = document.querySelector('.toolrail .toolbtn[data-active="true"]')
+  check('русская раскладка не ломает клавишу инструмента', !!ruTool && ruTool.getAttribute('aria-label') === 'Стикер', ruTool ? ruTool.getAttribute('aria-label') : 'нет')
+  await press('Escape')
+  await press('v')
+  await wait(180)
+  const ruSelectedBefore = document.querySelectorAll('.boarditem--selected').length
+  await press('ф', { code: 'KeyA', ctrlKey: true })
+  await wait(240)
+  const ruSelectedAfter = document.querySelectorAll('.boarditem--selected').length
+  check('русская раскладка не ломает Ctrl+A', ruSelectedAfter > ruSelectedBefore && ruSelectedAfter > 3, `${ruSelectedBefore} → ${ruSelectedAfter}`)
+  await press('Escape')
   await press('v')
   await wait(180)
   const linkCount = itemCount()
@@ -578,6 +631,85 @@ const run = async () => {
   await press('v')
   await wait(160)
 
+  const cutTotal = itemCount()
+  await press('a', { ctrlKey: true })
+  await wait(240)
+  const cutSelected = document.querySelectorAll('.boarditem--selected').length
+  await press('x', { ctrlKey: true })
+  await wait(320)
+  const afterCut = itemCount()
+  check(
+    'Ctrl+X вырезает выбранные объекты',
+    cutSelected > 1 && afterCut < cutTotal && document.querySelectorAll('.boarditem--selected').length === 0,
+    `${cutTotal} → ${afterCut}, выбрано ${cutSelected}`
+  )
+  await press('z', { ctrlKey: true })
+  await wait(360)
+  check('Ctrl+Z возвращает вырезанное', itemCount() === cutTotal, `${itemCount()} против ${cutTotal}`)
+
+  await press('Escape')
+  await wait(120)
+  const pairNodes = Array.from(document.querySelectorAll('.boarditem')).filter((node) => {
+    const rect = node.getBoundingClientRect()
+    if (node.classList.contains('boarditem--locked')) return false
+    return rect.width > 10 && rect.height > 10 && rect.left > 80 && rect.top > 80 && rect.right < window.innerWidth - 30 && rect.bottom < window.innerHeight - 160
+  })
+  if (pairNodes.length >= 2) {
+    await tapNode(pairNodes[0], false)
+    await tapNode(pairNodes[1], true)
+    const groupedNow = document.querySelectorAll('.boarditem--selected').length
+    await press('g', { ctrlKey: true })
+    await wait(320)
+    check('Ctrl+G объединяет выбранное в группу', groupedNow >= 2 && /групп/.test(toastText()), toastText())
+    await press('G', { ctrlKey: true, shiftKey: true })
+    await wait(320)
+    check('Ctrl+Shift+G разбирает группу', /разделена/.test(toastText()), toastText())
+    await press('z', { ctrlKey: true })
+    await wait(320)
+    await press('z', { ctrlKey: true })
+    await wait(320)
+
+    await press('Escape')
+    await wait(140)
+    await tapNode(pairNodes[0], false)
+    await press('g', { ctrlKey: true })
+    await wait(280)
+    check('Ctrl+G с одним объектом объясняет причину', /минимум два/.test(toastText()), toastText())
+    await press('Escape')
+    await wait(120)
+    await tapNode(pairNodes[0], false)
+    const rotatedNode = document.querySelector('.boarditem--selected')
+    if (rotatedNode) {
+      const beforeRotate = rotatedNode.style.transform || ''
+      await press('и', { code: 'BracketRight' })
+      await wait(300)
+      const afterRotate = (document.querySelector('.boarditem--selected') || rotatedNode).style.transform || ''
+      check(
+        'русская раскладка не ломает поворот по скобкам',
+        afterRotate !== beforeRotate && /rotate\(15deg\)/.test(afterRotate),
+        `${beforeRotate || 'нет'} → ${afterRotate || 'нет'}`
+      )
+      await press('z', { ctrlKey: true })
+      await wait(300)
+
+      const layerNode = document.querySelector('.boarditem--selected') || rotatedNode
+      const beforeLayer = layerNode.style.zIndex || ''
+      await press('и', { code: 'BracketRight', ctrlKey: true, shiftKey: true })
+      await wait(300)
+      const afterLayer = (document.querySelector('.boarditem--selected') || layerNode).style.zIndex || ''
+      check(
+        'Ctrl+Shift+скобка поднимает слой',
+        afterLayer !== beforeLayer && Number(afterLayer) === Number(beforeLayer || 0) + 1,
+        `${beforeLayer || 'нет'} → ${afterLayer || 'нет'}`
+      )
+      await press('z', { ctrlKey: true })
+      await wait(300)
+    }
+  }
+  await press('Escape')
+  await press('v')
+  await wait(160)
+
   const lockButton = '.bfloat--br .toolgroup:last-of-type'
   if (canvasShape) {
     const box = canvasShape.getBoundingClientRect()
@@ -600,7 +732,28 @@ const run = async () => {
       lock.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await wait(300)
       check('объект блокируется', document.querySelectorAll('.boarditem--locked').length > 0)
-      lock.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      const lockedNode = document.querySelector('.boarditem--locked')
+      if (lockedNode) {
+        await tapNode(lockedNode)
+        check(
+          'заблокированный объект выделяется щелчком',
+          lockedNode.classList.contains('boarditem--selected'),
+          lockedNode.className
+        )
+        const leftBefore = lockedNode.getBoundingClientRect().left
+        await press('ArrowRight')
+        await wait(240)
+        check(
+          'стрелки не сдвигают заблокированный объект',
+          Math.abs(lockedNode.getBoundingClientRect().left - leftBefore) < 0.6,
+          `${leftBefore} → ${lockedNode.getBoundingClientRect().left}`
+        )
+        check('стрелки по замку объясняют причину', /заблокирован/.test(toastText()), toastText())
+      }
+      const unlock = Array.from(document.querySelectorAll('.toolpalette .toolbtn, .bfloat--br .toolbtn')).find((node) =>
+        /Разблокировать/.test(node.getAttribute('title') || '')
+      )
+      if (unlock) unlock.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await wait(300)
       check('объект разблокируется', document.querySelectorAll('.boarditem--locked').length === 0)
       await press('z', { ctrlKey: true })
@@ -1467,6 +1620,56 @@ const run = async () => {
       )
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
       await wait(240)
+
+      const nodeId = plainNode.getAttribute('data-item-id')
+      const liveNode2 = () => document.querySelector(`[data-item-id="${nodeId}"]`)
+      const isBold = () => Array.from(liveNode2()?.querySelectorAll('span') || []).some((node) => node.style.fontWeight === '700')
+      const richBox = liveNode2()?.getBoundingClientRect()
+      if (richBox) {
+        const richOptions = { bubbles: true, cancelable: true, button: 0, pointerId: 1, isPrimary: true, clientX: richBox.left + richBox.width / 2, clientY: richBox.top + richBox.height / 2 }
+        liveNode2().dispatchEvent(new PointerEvent('pointerdown', richOptions))
+        canvasText.dispatchEvent(new PointerEvent('pointerup', richOptions))
+        await wait(220)
+        liveNode2().dispatchEvent(new MouseEvent('dblclick', richOptions))
+        await wait(420)
+        const editor = document.querySelector('.texteditor')
+        if (editor) {
+          const range = document.createRange()
+          range.selectNodeContents(editor)
+          const selection = window.getSelection()
+          selection.removeAllRanges()
+          selection.addRange(range)
+          editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', code: 'KeyB', ctrlKey: true, bubbles: true, cancelable: true }))
+          await wait(240)
+          check('текст форматируется на доске', /<(?:b|strong)\b/i.test(editor.innerHTML), editor.innerHTML.slice(0, 60))
+        } else {
+          check('текст форматируется на доске', false, 'поля правки нет')
+        }
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        await wait(420)
+        check('форматирование сохраняется после выхода из правки', isBold(), (liveNode2()?.innerHTML || 'нет объекта').slice(0, 60))
+
+        const richInspector = await openInspector(liveNode2())
+        const textArea = Array.from(richInspector?.querySelectorAll('textarea') || []).find((node) =>
+          /Текст/.test(node.closest('.field')?.textContent || '')
+        )
+        if (textArea) {
+          const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
+          setValue.call(textArea, `${textArea.value}!!`)
+          textArea.dispatchEvent(new Event('input', { bubbles: true }))
+          await wait(900)
+          check('правка текста в свойствах меняет текст', /!!/.test(liveNode2()?.textContent || ''), liveNode2()?.textContent || 'нет объекта')
+          check('правка текста в свойствах сохраняет жирный', isBold(), (liveNode2()?.innerHTML || 'нет объекта').slice(0, 60))
+          const warns = Array.from(document.querySelectorAll('.toast__text')).some((node) =>
+            /не сохраняются/.test(node.textContent || '')
+          )
+          check('правка текста в свойствах не предупреждает о потере формата', !warns)
+        } else {
+          check('правка текста в свойствах сохраняет жирный', false, 'поля текста нет')
+        }
+        await press('Escape')
+        await wait(200)
+      }
     }
     await press('Escape')
     await wait(120)

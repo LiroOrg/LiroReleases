@@ -71,7 +71,25 @@ export function App(): ReactNode {
       if (target.startsWith('#')) window.location.hash = target.slice(1)
     })
     const offCommand = window.liro.subscribe('board:command', (payload) => {
-      window.dispatchEvent(new CustomEvent('liro:board-command', { detail: String(payload) }))
+      const command = String(payload)
+      if (command === 'clipboard') {
+        if (parseRoute(window.location.hash).name === 'board') {
+          window.dispatchEvent(new CustomEvent('liro:board-command', { detail: 'paste' }))
+          return
+        }
+        void api.clipboard
+          .readHtml()
+          .then((html) => {
+            if (!html) {
+              toast('В буфере нет данных доски', 'clipboard')
+              return
+            }
+            void pasteIntoNewBoard(html, '', toast, fail)
+          })
+          .catch(() => fail('Не удалось прочитать буфер обмена'))
+        return
+      }
+      window.dispatchEvent(new CustomEvent('liro:board-command', { detail: command }))
     })
     const offToast = window.liro.subscribe('toast', (payload) => toast(payload.text, payload.kind))
     const offJoin = window.liro.subscribe('live:join', (code) => {
@@ -154,7 +172,10 @@ export function App(): ReactNode {
       if (parseRoute(window.location.hash).name === 'board') return
       const html = event.clipboardData?.getData('text/html')
       const text = event.clipboardData?.getData('text/plain')
-      if (!html && !text) return
+      if (!html && !text) {
+        toast('В буфере нет данных для вставки', 'clipboard')
+        return
+      }
       event.preventDefault()
       void pasteIntoNewBoard(html ?? '', text ?? '', toast, fail)
     }

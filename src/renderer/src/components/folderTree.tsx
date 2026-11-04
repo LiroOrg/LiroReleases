@@ -4,6 +4,7 @@ import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent }
 import { createPortal } from 'react-dom'
 import { Archive, ChevronDown, ChevronRight, Copy, FolderInput, LayoutGrid, MoreHorizontal, Pencil, Pin, PinOff, Plus, Trash2 } from 'lucide-react'
 import type { BoardMeta, LibraryIndex, Project } from '@shared/types'
+import { countNumber } from '@shared/util'
 import type { ToastKind } from '../lib/store'
 import { api } from '../lib/api'
 import { navigate, type Route } from '../router'
@@ -177,7 +178,10 @@ export function FolderTree(props: TreeProps): ReactNode {
 
   const renameBoard = async (board: BoardMeta): Promise<void> => {
     const title = draft.trim()
-    if (!title) return
+    if (!title) {
+      props.onToast('Название доски не может быть пустым', 'error')
+      return
+    }
     try {
       await api.board.rename(board.id, title)
       setRenaming(null)
@@ -192,15 +196,6 @@ export function FolderTree(props: TreeProps): ReactNode {
     try {
       await api.board.remove(board.id, !keepFiles)
       setRemoving(null)
-      props.onToast('Доска удалена', 'delete')
-    } catch (error) {
-      props.onFail(message(error))
-    }
-  }
-
-  const eraseBoard = async (board: BoardMeta): Promise<void> => {
-    try {
-      await api.board.remove(board.id, true)
       props.onToast('Доска удалена', 'delete')
     } catch (error) {
       props.onFail(message(error))
@@ -473,7 +468,7 @@ export function FolderTree(props: TreeProps): ReactNode {
 
   const folderItems = (project: Project): MenuItem[] => [
     { id: 'new', label: 'Новая доска', icon: <Plus size={14} />, run: () => void newBoard(project.id) },
-    { id: 'rename', label: 'Переименовать', icon: <Pencil size={14} />, run: () => setEditing(project) },
+    { id: 'rename', label: 'Настроить папку', icon: <Pencil size={14} />, run: () => setEditing(project) },
     {
       id: 'pin',
       label: project.pinned ? 'Открепить' : 'Закрепить',
@@ -544,7 +539,8 @@ export function FolderTree(props: TreeProps): ReactNode {
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation()
-                    void eraseBoard(board)
+                    setKeepFiles(false)
+                    setRemoving(board)
                   }}
                 >
                   <Trash2 size={12} />
@@ -689,7 +685,7 @@ aria-label="Новая доска в папке" onClick={() => void newBoard(pr
           }
         >
           <div className="field">
-            <input className="input" aria-label="Название папки" value={draft} onChange={(event) => setDraft(event.target.value)} autoFocus />
+            <input className="input" aria-label="Название доски" value={draft} onChange={(event) => setDraft(event.target.value)} autoFocus />
           </div>
         </Modal>
       ) : null}
@@ -726,7 +722,7 @@ aria-label="Новая доска в папке" onClick={() => void newBoard(pr
           <div className="field__hint">
             Папка «{pendingDelete.project.name}» будет удалена.{' '}
             {pendingDelete.count > 0
-              ? `В ней ${pendingDelete.count} досок. Выберите, что с ними сделать.`
+              ? `В ней ${countNumber(pendingDelete.count, ['доска', 'доски', 'досок'])}. Выберите, что с ними сделать.`
               : 'В папке нет досок.'}
           </div>
           <div className="field__row" style={{ justifyContent: 'flex-end', marginTop: 16 }}>
@@ -953,8 +949,13 @@ function FolderModal(props: {
           type="button"
           className="btn btn--primary"
           onClick={() => {
+            const title = name.trim()
+            if (!title && props.project) {
+              props.onFail('Нужно название папки')
+              return
+            }
             const patch: Partial<Project> = {
-              name: name.trim() || 'Новая папка',
+              name: title || 'Новая папка',
               icon,
               iconColor,
               glyph: custom ? glyph : undefined

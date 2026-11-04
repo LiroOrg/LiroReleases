@@ -101,15 +101,14 @@ export function parseRichText(html: string): Block[] {
   const flushRun = (): void => {
     if (!buffer) return
     const style = runStack[runStack.length - 1]
-    const target = stack[stack.length - 1]
     const text = decodeEntities(buffer).replace(/\u00a0/g, ' ')
     if (text) {
-      if (target) {
-        const prev = target.runs[target.runs.length - 1]
-        const same = prev && sameStyle(prev, style)
-        if (same) prev.text += text
-        else target.runs.push({ text, ...style })
-      }
+      if (!stack.length) stack.push({ type: 'p', level: 1, runs: [] })
+      const target = stack[stack.length - 1]
+      const prev = target.runs[target.runs.length - 1]
+      const same = prev && sameStyle(prev, style)
+      if (same) prev.text += text
+      else target.runs.push({ text, ...style })
     }
     buffer = ''
   }

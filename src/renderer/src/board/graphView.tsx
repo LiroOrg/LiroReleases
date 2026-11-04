@@ -47,7 +47,63 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
     [item.expressions, item.scale, originX, originY, width, height, xFrom, xTo]
   )
 
-  const [hover, setHover] = useState<{ px: number; py: number; x: number; y: number; color: string } | null>(null)
+  const intersections = useMemo(() => {
+    const active = curves.filter((curve) => curve.fn)
+    if (active.length < 2) return [] as Array<{ x: number; y: number; px: number; py: number; colors: string[] }>
+    const count = Math.max(240, Math.min(900, Math.round(width)))
+    const span = xTo - xFrom
+    if (!Number.isFinite(span) || span === 0) return []
+    const values = active.map((curve) => {
+      const out = new Array<number>(count + 1)
+      for (let index = 0; index <= count; index += 1) {
+        const x = xFrom + (span * index) / count
+        const y = curve.fn ? curve.fn(x) : Number.NaN
+        out[index] = Number.isFinite(y) ? y : Number.NaN
+      }
+      return out
+    })
+    const found: Array<{ x: number; y: number; px: number; py: number; colors: string[] }> = []
+    for (let i = 0; i < active.length; i += 1) {
+      for (let j = i + 1; j < active.length; j += 1) {
+        for (let k = 1; k <= count; k += 1) {
+          const a0 = values[i][k - 1]
+          const a1 = values[i][k]
+          const b0 = values[j][k - 1]
+          const b1 = values[j][k]
+          if (!Number.isFinite(a0) || !Number.isFinite(a1) || !Number.isFinite(b0) || !Number.isFinite(b1)) continue
+          const d0 = a0 - b0
+          const d1 = a1 - b1
+          if (d0 === d1) continue
+          if (d0 === 0 || d0 * d1 < 0) {
+            const t = d0 === 0 ? 0 : d0 / (d0 - d1)
+            if (t < 0 || t > 1) continue
+            const x0 = xFrom + (span * (k - 1)) / count
+            const x1 = xFrom + (span * k) / count
+            const x = x0 + (x1 - x0) * t
+            const y = a0 + (a1 - a0) * t
+            const px = toX(x)
+            const py = toY(y)
+            if (px < -20 || px > width + 20 || py < -20 || py > height + 20) continue
+            const existing = found.find((entry) => Math.hypot(entry.px - px, entry.py - py) < 6)
+            if (existing) {
+              if (!existing.colors.includes(active[i].color)) existing.colors.push(active[i].color)
+              if (!existing.colors.includes(active[j].color)) existing.colors.push(active[j].color)
+            } else {
+              found.push({ x, y, px, py, colors: [active[i].color, active[j].color] })
+            }
+          }
+        }
+      }
+    }
+    return found
+  }, [curves, width, height, xFrom, xTo, item.scale, originX, originY])
+
+  const [hover, setHover] = useState<{ px: number; py: number; x: number; y: number; colors: string[] } | null>(null)
+
+  const magnet = (value: number): number => {
+    const rounded = Math.round(value * 10) / 10
+    return Math.abs(value - rounded) <= 0.035 ? rounded : value
+  }
 
   const onHoverMove = (event: ReactPointerEvent<SVGSVGElement>): void => {
     const target = event.currentTarget
@@ -56,8 +112,10 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
     const px = ((event.clientX - rect.left) * width) / rect.width
     const py = ((event.clientY - rect.top) * height) / rect.height
     const gx = (px - originX * width) / item.scale
-    let best: { py: number; y: number; color: string } | null = null
+
+    let best: { px: number; py: number; x: number; y: number; colors: string[] } | null = null
     let bestDistance = 14
+
     for (const curve of curves) {
       if (!curve.fn) continue
       const value = curve.fn(gx)
@@ -66,21 +124,28 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
       const distance = Math.abs(sy - py)
       if (distance <= bestDistance) {
         bestDistance = distance
-        best = { py: sy, y: value, color: curve.color }
+        best = { px, py: sy, x: magnet(gx), y: magnet(value), colors: [curve.color] }
       }
     }
+
+    for (const point of intersections) {
+      const distance = Math.hypot(point.px - px, point.py - py)
+      if (distance <= 12 && (!best || distance <= bestDistance + 2)) {
+        bestDistance = distance
+        best = { px: point.px, py: point.py, x: magnet(point.x), y: magnet(point.y), colors: point.colors }
+      }
+    }
+
     if (!best) {
       setHover(null)
       return
     }
-    setHover({ px, py: best.py, x: gx, y: best.y, color: best.color })
+    setHover(best)
   }
 
   const onHoverLeave = (): void => setHover(null)
 
-  const hoverLabel = hover
-    ? `${formatTick(hover.x)}; ${formatTick(hover.y)}`
-    : ''
+  const hoverLabel = hover ? `${formatTick(hover.x)}; ${formatTick(hover.y)}` : ''
   const hoverFontSize = tick
   const hoverTextWidth = hoverLabel.length * hoverFontSize * 0.64 + 12
   const hoverBox =
@@ -94,6 +159,8 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
           const top = above ? hover.py - boxHeight - 6 : hover.py + 10
           return { left: Math.max(1, left), top: Math.max(1, Math.min(height - boxHeight - 1, top)), boxWidth, boxHeight }
         })()
+  const hoverFillId = hover && hover.colors.length > 1 ? `graph-hover-${item.id}` : null
+  const hoverFill = hover ? (hoverFillId ? `url(#${hoverFillId})` : hover.colors[0]) : undefined
 
   const stepPx = Math.max(1, step * item.scale)
   const drawEvery = Math.max(1, Math.ceil(8 / stepPx))
@@ -194,11 +261,21 @@ export const GraphView = memo(function GraphView(props: GraphViewProps): ReactNo
             />
           ) : null
         )}
+        {hoverFillId && hover ? (
+          <defs>
+            <linearGradient id={hoverFillId} x1="0%" y1="0%" x2="100%" y2="0%">
+              {hover.colors.map((color, index) => {
+                const from = hover.colors.length === 1 ? 0 : (index * 100) / (hover.colors.length - 1)
+                return <stop key={`${color}-${index}`} offset={`${from}%`} stopColor={color} />
+              })}
+            </linearGradient>
+          </defs>
+        ) : null}
         {hover ? (
           <g pointerEvents="none">
-            <line x1={hover.px} y1={hover.py} x2={hover.px} y2={axisY} stroke={hover.color} strokeWidth={1} strokeDasharray="4 4" opacity={0.7} />
-            <line x1={hover.px} y1={hover.py} x2={axisX} y2={hover.py} stroke={hover.color} strokeWidth={1} strokeDasharray="4 4" opacity={0.7} />
-            <circle cx={hover.px} cy={hover.py} r={3.2} fill={hover.color} stroke="#ffffff" strokeWidth={1.2} />
+            <line x1={hover.px} y1={hover.py} x2={hover.px} y2={axisY} stroke={hoverFill} strokeWidth={1} strokeDasharray="4 4" opacity={0.7} />
+            <line x1={hover.px} y1={hover.py} x2={axisX} y2={hover.py} stroke={hoverFill} strokeWidth={1} strokeDasharray="4 4" opacity={0.7} />
+            <circle cx={hover.px} cy={hover.py} r={3.2} fill={hoverFill} stroke="#ffffff" strokeWidth={1.2} />
           </g>
         ) : null}
       </g>

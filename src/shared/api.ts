@@ -233,7 +233,7 @@ export interface ApiLiro {
   livePendingCode: () => Promise<IpcResult<string>>
 }
 
-export type BoardCommand = 'undo' | 'redo' | 'duplicate' | 'delete' | 'select-all'
+export type BoardCommand = 'undo' | 'redo' | 'duplicate' | 'delete' | 'select-all' | 'copy' | 'paste' | 'clipboard'
 
 export interface LiveOfferResult {
   ok: boolean

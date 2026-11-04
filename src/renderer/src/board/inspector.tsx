@@ -1,8 +1,12 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Copy, Trash2, X } from 'lucide-react'
 import type { BoardItem, TableItem } from '@shared/types'
 import { Switch } from '../components/ui'
+import { countNumber } from '@shared/util'
+import { useApp } from '../lib/store'
+import { applyPlainEdit, richHtmlFromPlain } from './richHtml'
+import { kindLabel } from './itemKinds'
 
 export interface InspectorProps {
   items: BoardItem[]
@@ -34,6 +38,10 @@ const PALETTE = [
 const TEXT_PALETTE = ['#1a1a1a', '#ffffff', '#7f1d1d', '#1d4ed8', '#15803d', '#b45309']
 
 const STICKY_PALETTE = ['#fff9b1', '#ffd8b1', '#cfe8fb', '#d9f2e3', '#f3e0ff']
+
+function hasRichText(content: string): boolean {
+  return /<(?:b|strong|i|em|u|s|strike|font|span|a|mark|code)\b|\bstyle=/i.test(content)
+}
 
 function strokeColorOf(item: BoardItem): string | null {
   if (item.kind === 'path' || item.kind === 'connector') return item.color
@@ -211,7 +219,7 @@ function TableControls(props: { item: TableItem; onPatch: (patch: Partial<TableI
               })
             }}
           >
-            − строка
+            − последняя строка
           </button>
         ) : null}
         {columns > 1 ? (
@@ -235,39 +243,15 @@ function TableControls(props: { item: TableItem; onPatch: (patch: Partial<TableI
               })
             }}
           >
-            − столбец
+            − последний столбец
           </button>
         ) : null}
       </div>
       <div className="field__hint">
-        Строка: {rows} · Столбцов: {columns}. Щёлкните по ячейке, чтобы вписать текст.
+        {countNumber(rows, ['строка', 'строки', 'строк'])} · {countNumber(columns, ['столбец', 'столбца', 'столбцов'])}. Щёлкните по ячейке, чтобы вписать текст.
       </div>
     </div>
   )
-}
-
-const KIND_LABEL: Record<string, string> = {
-  sticky: 'Стикер',
-  text: 'Текст',
-  shape: 'Фигура',
-  image: 'Изображение',
-  frame: 'Рамка',
-  connector: 'Связь',
-  card: 'Карточка',
-  embed: 'Вставка',
-  video: 'Видео',
-  table: 'Таблица',
-  solid: '3D-фигура',
-  graph: 'График',
-  path: 'Рисунок',
-  vote: 'Голосование',
-  group: 'Группа',
-  tag: 'Метка',
-  document: 'Документ',
-  app_card: 'Приложение',
-  code: 'Код',
-  comment: 'Комментарий',
-  unknown: 'Неизвестный объект'
 }
 
 const field = (label: string, value: string): ReactNode => (
@@ -323,6 +307,8 @@ function NumberField(props: {
 }
 
 export function Inspector(props: InspectorProps): ReactNode {
+  const toast = useApp((state) => state.toast)
+  const richWarnedId = useRef('')
   const { items } = props
   if (!items.length) return null
   const single = items.length === 1 ? items[0] : null
@@ -339,7 +325,7 @@ export function Inspector(props: InspectorProps): ReactNode {
   return (
     <div className="inspector">
       <div className="inspector__title">
-        <span>{single ? KIND_LABEL[single.kind] ?? single.kind : `Выбрано: ${items.length}`}</span>
+        <span>{single ? kindLabel(single.kind) : `Выбрано: ${items.length}`}</span>
         <span style={{ marginLeft: 'auto' }} />
         <button type="button" className="btn btn--ghost btn--icon btn--sm" onClick={props.onClose} aria-label="Закрыть панель">
           <X size={14} />
@@ -376,10 +362,13 @@ export function Inspector(props: InspectorProps): ReactNode {
                 className="textarea textarea--compact"
                 value={'plain' in single ? single.plain : ''}
                 onChange={(event) => {
-                  const html = event.target.value
-                    .split(/\n{2,}/)
-                    .map((chunk) => `<p>${chunk.replace(/\n/g, '<br>')}</p>`)
-                    .join('')
+                  const before = 'content' in single ? (single.content ?? '') : ''
+                  const kept = applyPlainEdit(before, event.target.value)
+                  if (!kept && hasRichText(before) && richWarnedId.current !== single.id) {
+                    richWarnedId.current = single.id
+                    toast('Жирный, курсив и цвет в этом поле не сохраняются. Правьте текст двойным щелчком по объекту', 'text')
+                  }
+                  const html = kept ?? richHtmlFromPlain(event.target.value)
                   props.onPatchLive([single.id], { content: html, plain: event.target.value } as Partial<BoardItem>)
                 }}
               />

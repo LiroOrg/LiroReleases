@@ -49,16 +49,30 @@ export function PreviewScreen(): ReactNode {
   const [online, setOnline] = useState(() => navigator.onLine)
   const [text, setText] = useState<PreviewText | null>(null)
   const [textReady, setTextReady] = useState(false)
+  const [loadError, setLoadError] = useState('')
 
   const kind = payload?.kind ?? 'file'
   const src = payload?.src ?? ''
 
   useEffect(() => {
-    void api.preview.get().then((value) => {
-      setPayload(value)
-      setLoaded(true)
-    })
+    void api.preview
+      .get()
+      .then((value) => {
+        setPayload(value)
+        setLoaded(true)
+      })
+      .catch((error: unknown) => {
+        setLoadError(error instanceof Error ? error.message : String(error))
+        setLoaded(true)
+      })
   }, [])
+
+  const openExternal = (): void => {
+    void api.shell.open(src).catch((error: unknown) => {
+      const text = error instanceof Error ? error.message : String(error)
+      setPayload((current) => (current ? { ...current, detail: `Браузер не открылся: ${text}` } : current))
+    })
+  }
 
   useEffect(() => {
     if (!payload) return
@@ -183,7 +197,7 @@ export function PreviewScreen(): ReactNode {
         </div>
         <div className="winframe__buttons">
           {src ? (
-            <button type="button" title="Открыть во внешнем браузере" aria-label="Открыть во внешнем браузере" onClick={() => void api.shell.open(src)}>
+            <button type="button" title="Открыть во внешнем браузере" aria-label="Открыть во внешнем браузере" onClick={openExternal}>
               <ExternalLink size={14} />
             </button>
           ) : null}
@@ -199,7 +213,17 @@ export function PreviewScreen(): ReactNode {
         </div>
       </div>
       <div className="preview__body" data-kind={kind}>
-        {loaded ? body : null}
+        {loaded ? (
+          loadError ? (
+            <div className="preview__center preview__center--empty">
+              <FileQuestion size={42} />
+              <div className="preview__hint">Предпросмотр не загрузился</div>
+              <div className="preview__hint preview__hint--dim">{loadError}</div>
+            </div>
+          ) : (
+            body
+          )
+        ) : null}
       </div>
       {kind === 'web' && online ? (
         <div className="preview__foot">

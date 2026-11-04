@@ -247,7 +247,11 @@ export function Home(props: { onFail: (text: string) => void }): ReactNode {
               <LayoutGrid size={15} />
               Все доски
             </button>
-            <button type="button" className="ghost" onClick={() => void api.board.reveal(last.id)}>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void api.board.reveal(last.id).catch((error: unknown) => fail(errorText(error)))}
+            >
               <FolderOpen size={15} />
               Файлы доски
             </button>
@@ -305,7 +309,11 @@ export function Home(props: { onFail: (text: string) => void }): ReactNode {
       ) : null}
 
       <footer className="homefoot">
-        <button type="button" className="homefoot__item" onClick={() => void api.storage.reveal()}>
+        <button
+          type="button"
+          className="homefoot__item"
+          onClick={() => void api.storage.reveal().catch((error: unknown) => fail(errorText(error)))}
+        >
           <HardDrive size={14} />
           <span className="truncate">{appInfo?.storage || 'Папка хранилища'}</span>
         </button>

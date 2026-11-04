@@ -93,6 +93,7 @@ import {
   shiftPastePayload
 } from '../lib/paste'
 import { readObjectClipboard, writeObjectClipboard } from '../lib/objectClipboard'
+import { bracketKey, letterKey } from '../lib/letterKey'
 import { encodeLiroClipboard, decodeLiroClipboard } from '../lib/liroClipboard'
 import { useLiveBoard } from '../live/useLiveBoard'
 import { useMediaSync } from '../live/mediaSync'
@@ -747,9 +748,9 @@ export function BoardView(props: { docId: string }): ReactNode {
         .then((result) => {
           setSettings(result)
         })
-        .catch(() => undefined)
+        .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
     },
-    [setSettings]
+    [setSettings, fail]
   )
 
   const [doc, setDoc] = useState<BoardDoc | null>(null)
@@ -1780,16 +1781,6 @@ export function BoardView(props: { docId: string }): ReactNode {
   const shapePanelTarget =
     resizeTargets.length === 1 && resizeTargets[0].kind === 'shape' ? (resizeTargets[0] as ShapeItem) : null
   const pointsTarget = shapePanelTarget && shapePoints === shapePanelTarget.id ? shapePanelTarget : null
-  const setShapeRadius = useCallback(
-    (id: string, value: number): void => {
-      if (!doc) return
-      setDoc({
-        ...doc,
-        items: doc.items.map((entry) => (entry.id === id && entry.kind === 'shape' ? ({ ...entry, adjust: value } as BoardItem) : entry))
-      })
-    },
-    [doc]
-  )
   const toolPanelKind: 'none' | 'selection' | 'solid' | 'graph' | 'create' | 'erase' | 'link' | 'text' | 'sticky' | 'image' | 'table' | 'pen' = (() => {
     if (tool === 'graph') return 'graph'
     if (tool === 'solid') return 'solid'
@@ -2107,9 +2098,9 @@ export function BoardView(props: { docId: string }): ReactNode {
         window.clearTimeout(saveTimerRef.current)
         saveTimerRef.current = null
       }
-      void api.board.saveItems(props.docId, pending).catch(() => undefined)
+      void api.board.saveItems(props.docId, pending).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
     },
-    [props.docId]
+    [props.docId, fail]
   )
 
   const changeGrid = useCallback(
@@ -2121,9 +2112,9 @@ export function BoardView(props: { docId: string }): ReactNode {
       void api.settings
         .set(patch)
         .then((next) => setSettings(next))
-        .catch(() => undefined)
+        .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
     },
-    [setSettings]
+    [setSettings, fail]
   )
 
   const scheduleThumb = useCallback(() => {
@@ -2171,22 +2162,28 @@ export function BoardView(props: { docId: string }): ReactNode {
   }, [doc])
 
   useEffect(() => {
-    const flush = (): void => {
+    const flush = (appIsClosing: boolean): void => {
       const pending = pendingRef.current
       if (!pending) return
       pendingRef.current = null
-      void api.board.saveItems(props.docId, pending).catch(() => undefined)
+      void api.board.saveItems(props.docId, pending).catch((error: unknown) => {
+        if (appIsClosing) return
+        fail(error instanceof Error ? error.message : String(error))
+      })
+    }
+    const onLeave = (): void => {
+      flush(true)
     }
     const onHide = (): void => {
-      if (document.visibilityState === 'hidden') flush()
+      if (document.visibilityState === 'hidden') flush(false)
     }
-    window.addEventListener('pagehide', flush)
+    window.addEventListener('pagehide', onLeave)
     document.addEventListener('visibilitychange', onHide)
     return () => {
-      window.removeEventListener('pagehide', flush)
+      window.removeEventListener('pagehide', onLeave)
       document.removeEventListener('visibilitychange', onHide)
     }
-  }, [props.docId])
+  }, [props.docId, fail])
 
   const saveNow = useCallback(
     (items: BoardItem[]) => {
@@ -2209,8 +2206,10 @@ export function BoardView(props: { docId: string }): ReactNode {
       saveTimerRef.current = null
     }
     pendingRef.current = null
-    await api.board.saveItems(props.docId, pending).catch(() => undefined)
-  }, [props.docId])
+    await api.board
+      .saveItems(props.docId, pending)
+      .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
+  }, [props.docId, fail])
 
   const commit = useCallback(
     (next: BoardItem[]) => {
@@ -2259,7 +2258,11 @@ export function BoardView(props: { docId: string }): ReactNode {
   )
 
   const undo = useCallback(() => {
-    if (!doc || readOnly) return
+    if (!doc) return
+    if (readOnly) {
+      toast('Правка доступна только ведущему', 'readonly')
+      return
+    }
     if (live.connected) {
       const entry = liveUndoRef.current.pop()
       if (!entry) {
@@ -2296,7 +2299,11 @@ export function BoardView(props: { docId: string }): ReactNode {
   }, [doc, readOnly, saveNow, toast, live])
 
   const redo = useCallback(() => {
-    if (!doc || readOnly) return
+    if (!doc) return
+    if (readOnly) {
+      toast('Правка доступна только ведущему', 'readonly')
+      return
+    }
     if (live.connected) {
       const entry = liveRedoRef.current.pop()
       if (!entry) {
@@ -2391,7 +2398,10 @@ export function BoardView(props: { docId: string }): ReactNode {
     const previous = wrapRef.current
     if (previous) previous.removeEventListener('wheel', dispatchWheel)
     wrapRef.current = node
-    if (node) node.addEventListener('wheel', dispatchWheel, { passive: false })
+    if (!node) return
+    node.addEventListener('wheel', dispatchWheel, { passive: false })
+    if (node.contains(document.activeElement)) return
+    node.focus({ preventScroll: true })
   }, [dispatchWheel])
 
   const eraseSegmentsRef = useRef<Map<string, Set<number>>>(new Map())
@@ -3044,12 +3054,23 @@ export function BoardView(props: { docId: string }): ReactNode {
   const startCrop = useCallback(
     async (id: string): Promise<void> => {
       const item = byId.get(id)
-      if (!item || item.kind !== 'image' || readOnly) return
+      if (!item || item.kind !== 'image') return
+      if (readOnly) {
+        toast('Правка доступна только ведущему', 'readonly')
+        return
+      }
+      if (item.locked) {
+        toast('Объект заблокирован: снимите замок, чтобы обрезать', 'lock')
+        return
+      }
       const asset = item.asset
       const src = asset?.file ? assetUrl(asset.file) : asset?.dataUrl ?? asset?.sourceUrl ?? ''
       if (!src) return
       const natural = await imageSizeOf(src)
-      if (!natural || !natural.width || !natural.height) return
+      if (!natural || !natural.width || !natural.height) {
+        toast('Картинку не обрезать: файл не открывается', 'image')
+        return
+      }
       const box = itemBounds(item)
       const insets = item.crop ?? { top: 0, right: 0, bottom: 0, left: 0 }
       const fx = Math.max(0.02, 1 - insets.left - insets.right)
@@ -3073,7 +3094,7 @@ export function BoardView(props: { docId: string }): ReactNode {
         win
       })
     },
-    [byId, assetUrl, readOnly]
+    [byId, assetUrl, readOnly, toast]
   )
 
   const moveCrop = useCallback(
@@ -3289,6 +3310,7 @@ export function BoardView(props: { docId: string }): ReactNode {
         return
       }
       const point = toWorld(event.clientX, event.clientY)
+      if (present) return
       if (tool === 'erase') {
         if (!doc || readOnly) return
         eraseBaseRef.current = doc.items
@@ -3385,7 +3407,8 @@ export function BoardView(props: { docId: string }): ReactNode {
       connectorAt,
       startMove,
       editing,
-      selection
+      selection,
+      present
     ]
   )
 
@@ -3442,11 +3465,7 @@ export function BoardView(props: { docId: string }): ReactNode {
       if (event.button !== 0) return
       if (tool === 'pen' && !editing) {
         const itemNow = byId.get(id)
-        if (itemNow?.locked) {
-          event.stopPropagation()
-          toast('Объект заблокирован', 'lock')
-          return
-        }
+        if (itemNow?.locked) return
         if (itemNow?.kind === 'solid' && !readOnly) {
           const point = toWorld(event.clientX, event.clientY)
           const hit = faceAtLocal(itemNow, point)
@@ -3475,11 +3494,7 @@ export function BoardView(props: { docId: string }): ReactNode {
       if (tool === 'text') {
         const itemNow = byId.get(id)
         if (itemNow?.kind !== 'solid' || !doc || readOnly) return
-        if (itemNow.locked) {
-          event.stopPropagation()
-          toast('Объект заблокирован', 'lock')
-          return
-        }
+        if (itemNow.locked) return
         const point = toWorld(event.clientX, event.clientY)
         const hit = faceAtLocal(itemNow, point)
         const local = hit ? facePointOf(itemNow, hit.id, point) : null
@@ -3505,7 +3520,15 @@ export function BoardView(props: { docId: string }): ReactNode {
       holdBoardPointer(event)
       const item = byId.get(id)
       if (item?.locked) {
-        toast('Объект заблокирован', 'lock')
+        const alreadySelected = selection.has(id)
+        setSelection((current) => {
+          if (!event.shiftKey) return new Set([id])
+          const next = new Set(current)
+          if (next.has(id)) next.delete(id)
+          else next.add(id)
+          return next
+        })
+        if (!alreadySelected) toast('Объект заблокирован', 'lock')
         return
       }
       if (item?.kind === 'solid' && !readOnly) {
@@ -3682,7 +3705,8 @@ export function BoardView(props: { docId: string }): ReactNode {
   }, [applyMoveDrag])
 
   useEffect(() => {
-    if (drag.kind !== 'move') return
+    const glides = drag.kind === 'move' || drag.kind === 'rubber' || drag.kind === 'textdraft' || drag.kind === 'link'
+    if (!glides) return
     const edge = 30
     const limit = 900
     let last = performance.now()
@@ -3708,14 +3732,19 @@ export function BoardView(props: { docId: string }): ReactNode {
         if (pushX || pushY) {
           const step = (limit * dt) / 1000 / current.zoom
           applyView({ ...current, x: current.x + step * pushX, y: current.y + step * pushY })
-          applyMoveDragRef.current(toWorld(client.x, client.y))
+          const world = toWorld(client.x, client.y)
+          if (drag.kind === 'move') applyMoveDragRef.current(world)
+          else {
+            overlayPointRef.current = world
+            scheduleOverlayRender()
+          }
         }
       }
       frame = requestAnimationFrame(glide)
     }
     frame = requestAnimationFrame(glide)
     return () => cancelAnimationFrame(frame)
-  }, [drag.kind, size, applyView, toWorld])
+  }, [drag.kind, size, applyView, toWorld, scheduleOverlayRender])
 
   const onPointerMove = useCallback(
     (event: React.PointerEvent) => {
@@ -4231,8 +4260,8 @@ export function BoardView(props: { docId: string }): ReactNode {
             return box.x < rect.x + rect.width && box.x + box.width > rect.x && box.y < rect.y + rect.height && box.y + box.height > rect.y
           })
           .map((item) => item.id)
-        setSelection(new Set(picked))
-      } else if (event.button === 0) {
+        setSelection((current) => (event.shiftKey ? new Set([...current, ...picked]) : new Set(picked)))
+      } else if (event.button === 0 && !event.shiftKey) {
         setSelection(new Set())
       }
       setDrag({ kind: 'idle' })
@@ -4263,7 +4292,7 @@ export function BoardView(props: { docId: string }): ReactNode {
       applyView(viewRef.current, true)
       if (!drag.moved) startInertia(0, 0)
       else startInertia(drag.velocityX, drag.velocityY)
-      if (drag.button === 2 && !drag.moved) {
+      if (drag.button === 2 && !drag.moved && !present) {
         const hit = itemAt(toWorld(event.clientX, event.clientY))
         if (hit && !selection.has(hit) && !readOnly) setSelection(new Set([hit]))
         setMenu({ x: event.clientX, y: event.clientY, onItem: hit ?? '' })
@@ -4271,15 +4300,19 @@ export function BoardView(props: { docId: string }): ReactNode {
     }
     setDrag({ kind: 'idle' })
     },
-    [drag, doc, persist, remember, commit, commitAgainst, strokeColor, strokeWidth, penOpacity, applyView, startInertia, size, itemAt, toWorld, createFromDrag, clearPreview, byId, addConnector, penMode, selection, readOnly]
+    [drag, doc, persist, remember, commit, commitAgainst, strokeColor, strokeWidth, penOpacity, applyView, startInertia, size, itemAt, toWorld, createFromDrag, clearPreview, byId, addConnector, penMode, selection, readOnly, present]
   )
 
   const deleteItems = useCallback(
     (ids: string[]) => {
-      if (!doc || readOnly) return
+      if (!doc) return
+      if (readOnly) {
+        toast('Правка доступна только ведущему', 'readonly')
+        return
+      }
       const remove = new Set(ids.filter((id) => !byId.get(id)?.locked))
       if (!remove.size) {
-        toast('Все выбранные объекты заблокированы', 'lock')
+        toast(ids.length ? 'Все выбранные объекты заблокированы' : 'Сначала выделите объект', ids.length ? 'lock' : 'select')
         return
       }
       commit(
@@ -4297,7 +4330,15 @@ export function BoardView(props: { docId: string }): ReactNode {
 
   const duplicateItems = useCallback(
     (ids: string[]) => {
-      if (!doc || readOnly) return
+      if (!doc) return
+      if (readOnly) {
+        toast('Правка доступна только ведущему', 'readonly')
+        return
+      }
+      if (!ids.length) {
+        toast('Сначала выделите объект', 'copy')
+        return
+      }
       const source = doc.items.filter((item) => ids.includes(item.id))
       const cloneIds = source.map((item, index) => uid(`cp_${index}`))
       const groups = cloneGroupMap(source)
@@ -4332,17 +4373,44 @@ export function BoardView(props: { docId: string }): ReactNode {
 
   const copyItems = useCallback(
     (ids: string[]) => {
-      if (!doc || readOnly) return
+      if (!doc) return
       const source = doc.items.filter((item) => ids.includes(item.id))
-      if (!source.length) return
+      if (!source.length) {
+        toast('Сначала выделите объект', 'select')
+        return
+      }
       writeObjectClipboard(props.docId, source)
       const html = encodeLiroClipboard({ version: 1, docId: props.docId, items: source })
       void api.clipboard
         .writeHtml(html, source.map((item) => ('plain' in item ? item.plain : '')).filter(Boolean).join('\n'))
-        .catch(() => undefined)
+        .catch(() => toast('В чужие программы не скопировано: вставка только в Liro', 'clipboard'))
       toast('Объекты скопированы', 'copy')
     },
-    [doc, readOnly, props.docId, toast]
+    [doc, props.docId, toast]
+  )
+
+  const cutItems = useCallback(
+    (ids: string[]) => {
+      if (!doc) return
+      if (readOnly) {
+        toast('Правка доступна только ведущему', 'readonly')
+        return
+      }
+      const keep = ids.filter((id) => !byId.get(id)?.locked)
+      const source = doc.items.filter((item) => keep.includes(item.id))
+      if (!source.length) {
+        deleteItems(ids)
+        return
+      }
+      writeObjectClipboard(props.docId, source)
+      const html = encodeLiroClipboard({ version: 1, docId: props.docId, items: source })
+      void api.clipboard
+        .writeHtml(html, source.map((item) => ('plain' in item ? item.plain : '')).filter(Boolean).join('\n'))
+        .catch(() => toast('В чужие программы не скопировано: вставка только в Liro', 'clipboard'))
+      deleteItems(ids)
+      toast('Объекты вырезаны', 'copy')
+    },
+    [doc, readOnly, byId, props.docId, deleteItems, toast]
   )
 
   const pasteShift = useCallback(
@@ -4371,7 +4439,11 @@ export function BoardView(props: { docId: string }): ReactNode {
   )
 
   const pasteObjects = useCallback(async () => {
-    if (!doc || readOnly) return
+    if (!doc) return
+    if (readOnly) {
+      toast('Правка доступна только ведущему', 'readonly')
+      return
+    }
     const stored = readObjectClipboard()
     const source = stored?.items ?? []
     if (!source.length) {
@@ -4422,7 +4494,11 @@ export function BoardView(props: { docId: string }): ReactNode {
   }, [selectedItems])
 
   const groupSelection = useCallback(() => {
-    if (!doc || readOnly || selection.size < 2) return
+    if (!doc || readOnly) return
+    if (selection.size < 2) {
+      toast('Для группы нужно выделить минимум два объекта', 'layer')
+      return
+    }
     const groupId = uid('grp_')
     const target = new Set(selection)
     commit(doc.items.map((item) => (target.has(item.id) ? ({ ...item, groupId } as BoardItem) : item)))
@@ -4432,7 +4508,10 @@ export function BoardView(props: { docId: string }): ReactNode {
   const ungroupSelection = useCallback(() => {
     if (!doc || readOnly) return
     const groups = new Set(selectedItems.map((item) => item.groupId).filter((value): value is string => !!value))
-    if (!groups.size) return
+    if (!groups.size) {
+      toast('В выделении нет групп', 'layer')
+      return
+    }
     commit(
       doc.items.map((item) =>
         item.groupId && groups.has(item.groupId) ? ({ ...item, groupId: undefined } as BoardItem) : item
@@ -4450,6 +4529,29 @@ export function BoardView(props: { docId: string }): ReactNode {
       const moved = ordered.filter((item) => target.has(item.id))
       commit([...rest, ...moved].map((item, index) => ({ ...item, z: index } as BoardItem)))
       toast(front ? 'Объекты на самом верху' : 'Объекты на самом низу', 'layer')
+    },
+    [doc, commit, readOnly, selection, toast]
+  )
+
+  const shiftSelectionLayer = useCallback(
+    (forward: boolean) => {
+      if (!doc) return
+      if (readOnly) {
+        toast('Правка доступна только ведущему', 'readonly')
+        return
+      }
+      if (!selection.size) return
+      const ordered = [...doc.items].sort((a, b) => a.z - b.z)
+      if (forward) {
+        for (let i = ordered.length - 2; i >= 0; i -= 1) {
+          if (selection.has(ordered[i].id) && !selection.has(ordered[i + 1].id)) [ordered[i], ordered[i + 1]] = [ordered[i + 1], ordered[i]]
+        }
+      } else {
+        for (let i = 1; i < ordered.length; i += 1) {
+          if (selection.has(ordered[i].id) && !selection.has(ordered[i - 1].id)) [ordered[i], ordered[i - 1]] = [ordered[i - 1], ordered[i]]
+        }
+      }
+      commit(ordered.map((item, index) => ({ ...item, z: index } as BoardItem)))
     },
     [doc, commit, readOnly, selection, toast]
   )
@@ -4530,6 +4632,45 @@ export function BoardView(props: { docId: string }): ReactNode {
       applyLivePatch(next, base)
     },
     [doc, readOnly, applyLivePatch]
+  )
+
+  const lockNoticeAt = useRef(0)
+
+  const blockLockedPatch = useCallback(
+    (ids: string[]): boolean => {
+      if (!ids.length || !ids.every((id) => byId.get(id)?.locked)) return false
+      const now = Date.now()
+      if (now - lockNoticeAt.current > 2500) {
+        lockNoticeAt.current = now
+        toast('Объект заблокирован: снимите замок, чтобы менять свойства', 'lock')
+      }
+      return true
+    },
+    [byId, toast]
+  )
+
+  const inspectorPatch = useCallback(
+    (id: string, patch: Partial<BoardItem>): void => {
+      if (blockLockedPatch([id])) return
+      patchItem(id, patch)
+    },
+    [blockLockedPatch, patchItem]
+  )
+
+  const inspectorPatchMany = useCallback(
+    (ids: string[], patch: Partial<BoardItem>): void => {
+      if (blockLockedPatch(ids)) return
+      patchItems(ids, patch)
+    },
+    [blockLockedPatch, patchItems]
+  )
+
+  const inspectorPatchLive = useCallback(
+    (ids: string[], patch: Partial<BoardItem>): void => {
+      if (blockLockedPatch(ids)) return
+      patchItemsLive(ids, patch)
+    },
+    [blockLockedPatch, patchItemsLive]
   )
 
   const fitTextHeight = useCallback(
@@ -4625,9 +4766,17 @@ const assetOf = (dataUrl: string, size: { width: number; height: number } | null
 
   const replaceImage = useCallback(
     async (id: string, source: 'clipboard' | 'file' | 'url'): Promise<void> => {
-      if (!doc || readOnly) return
+      if (!doc) return
+      if (readOnly) {
+        toast('Правка доступна только ведущему', 'readonly')
+        return
+      }
       const item = byId.get(id)
       if (!item || item.kind !== 'image') return
+      if (item.locked) {
+        toast('Объект заблокирован: снимите замок, чтобы заменить картинку', 'lock')
+        return
+      }
       try {
         if (source === 'url') {
           const value = await ask('Ссылка на картинку', item.asset?.sourceUrl ?? 'https://', 'https://')
@@ -4756,6 +4905,10 @@ const assetOf = (dataUrl: string, size: { width: number; height: number } | null
       setDropActive(false)
       const entries = Array.from(event.dataTransfer.files)
       if (entries.length === 0) return
+      if (readOnly) {
+        toast('Правка доступна только ведущему', 'readonly')
+        return
+      }
       entries.sort((a, b) => a.name.localeCompare(b.name, 'ru'))
       const point = toWorld(event.clientX, event.clientY)
       const images = entries.filter(isImageFile)
@@ -4764,7 +4917,7 @@ const assetOf = (dataUrl: string, size: { width: number; height: number } | null
       for (const [index, file] of files.entries())
         await addDroppedFile(file, { x: point.x + index * (FILE_WIDTH + 60), y: point.y })
     },
-    [applyImageFiles, addDroppedFile, toWorld]
+    [applyImageFiles, addDroppedFile, toWorld, readOnly, toast]
   )
 
   const patchGraph = useCallback(
@@ -4823,9 +4976,13 @@ const openLinkPreview = useCallback(
       setLinkPreview(src)
       const web = /^https?:\/\//i.test(src)
       const title = web ? /^https?:\/\/([^/?#]+)/i.exec(src)?.[1] ?? src : src.split(/[\\/]/).pop() ?? src
-      await api.preview.open({ kind: web ? 'web' : 'file', title, src })
+      try {
+        await api.preview.open({ kind: web ? 'web' : 'file', title, src })
+      } catch (error) {
+        fail(error instanceof Error ? error.message : String(error))
+      }
     },
-    [ask, linkPreview]
+    [ask, linkPreview, fail]
   )
 
   const openItemPreview = useCallback(
@@ -4835,18 +4992,18 @@ const openLinkPreview = useCallback(
       const title = (item as { title?: string }).title || raw.title || (item.kind === 'image' ? 'Картинка' : 'Объект')
       const file = asset?.file ? assetUrl(asset.file) : ''
       if (file) {
-        void api.preview.open({ kind: 'file', title, src: file })
+        void api.preview.open({ kind: 'file', title, src: file }).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
         return
       }
       const sourceUrl = asset?.sourceUrl ?? asset?.src ?? ''
       const url = sourceUrl || raw.url || raw.link || raw.source || raw.embedUrl || ''
       if (url) {
-        void api.preview.open({ kind: 'web', title, src: url })
+        void api.preview.open({ kind: 'web', title, src: url }).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
         return
       }
       toast('У объекта нет ни файла, ни ссылки', 'link')
     },
-    [assetUrl, toast]
+    [assetUrl, toast, fail]
   )
 
 const navigateTo = useCallback(
@@ -4879,8 +5036,21 @@ const navigateTo = useCallback(
   const startEditing = useCallback(
     (id: string) => {
       const item = byId.get(id)
-      if (!item || readOnly || item.locked) return
+      if (!item) return
+      if (item.kind === 'document') {
+        setSelection(new Set([id]))
+        void openItemPreview(item)
+        return
+      }
+      if (readOnly) {
+        toast('Правка доступна только ведущему', 'readonly')
+        return
+      }
       if (item.kind === 'image') {
+        if (item.locked) {
+          toast('Объект заблокирован: снимите замок, чтобы обрезать или заменить', 'lock')
+          return
+        }
         setSelection(new Set([id]))
         const asset = item.asset
         const src = asset?.file ? assetUrl(asset.file) : asset?.dataUrl ?? asset?.sourceUrl ?? ''
@@ -4888,12 +5058,11 @@ const navigateTo = useCallback(
         else void replaceImage(id, 'clipboard')
         return
       }
-      if (item.kind === 'document') {
-        setSelection(new Set([id]))
-        void openItemPreview(item)
+      if (item.kind !== 'text' && item.kind !== 'sticky' && item.kind !== 'shape') return
+      if (item.locked) {
+        toast('Объект заблокирован: снимите замок, чтобы редактировать текст', 'lock')
         return
       }
-      if (item.kind !== 'text' && item.kind !== 'sticky' && item.kind !== 'shape') return
       setSelection(new Set([id]))
       const html = sanitizeRichHtml(item.content || '') || richHtmlFromPlain(item.plain || '')
       editorSizeRef.current = null
@@ -4902,7 +5071,7 @@ const navigateTo = useCallback(
       editingDirtyRef.current = false
       setEditing({ id, html, plain: plainFromRichHtml(html) })
     },
-    [byId, readOnly, replaceImage, startCrop, assetUrl, openItemPreview]
+    [byId, readOnly, replaceImage, startCrop, assetUrl, openItemPreview, toast]
   )
 
   const writeEditing = useCallback(
@@ -4924,10 +5093,12 @@ const navigateTo = useCallback(
       }
       if (!item) return
       if (item.kind !== 'text' && item.kind !== 'sticky' && item.kind !== 'shape') return
-      if (!value && !item.sourceType && item.kind === 'text') {
+      const blankNewSticky = item.kind === 'sticky' && freshEditingRef.current === editing.id
+      if (!value && !item.sourceType && (item.kind === 'text' || blankNewSticky)) {
         if (!close) return
         setSelection(new Set())
         editingBaseRef.current = null
+        freshEditingRef.current = null
         commit(doc.items.filter((entry) => entry.id !== editing.id))
         return
       }
@@ -5392,10 +5563,10 @@ const navigateTo = useCallback(
       const command = (event as CustomEvent<string>).detail
       if (command === 'undo') undo()
       else if (command === 'redo') redo()
-      else if (command === 'duplicate' && selection.size) duplicateItems([...selection])
-      else if (command === 'copy' && selection.size) copyItems([...selection])
+      else if (command === 'duplicate') duplicateItems([...selection])
+      else if (command === 'copy') copyItems([...selection])
       else if (command === 'paste') void pasteObjects()
-      else if (command === 'delete' && selection.size) deleteItems([...selection])
+      else if (command === 'delete') deleteItems([...selection])
       else if (command === 'select-all' && doc) {
         setSelection(new Set(doc.items.filter((item) => item.kind !== 'connector').map((item) => item.id)))
       }
@@ -5415,6 +5586,7 @@ const navigateTo = useCallback(
       }
       if (typing) return
       if (event.type !== 'keydown') return
+      const letter = letterKey(event)
       if (present) {
         if (event.key === 'Escape') {
           event.preventDefault()
@@ -5431,6 +5603,7 @@ const navigateTo = useCallback(
           stepFrame(-1)
           return
         }
+        return
       }
       if (
         ['PageUp', 'PageDown', 'Home', 'End'].includes(event.key) &&
@@ -5440,7 +5613,7 @@ const navigateTo = useCallback(
         event.preventDefault()
         return
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a' && doc) {
+      if ((event.ctrlKey || event.metaKey) && letter === 'a' && doc) {
         event.preventDefault()
         setSelection(new Set(doc.items.filter((item) => item.kind !== 'connector').map((item) => item.id)))
         return
@@ -5455,23 +5628,31 @@ const navigateTo = useCallback(
         }
       }
       const plain = !event.ctrlKey && !event.metaKey && !event.altKey
-      if (plain && (event.key.toLowerCase() === 'v' || event.key.toLowerCase() === 'h' || event.key.toLowerCase() === 'e')) {
-        const mode = event.key.toLowerCase()
+      if (plain && (letter === 'v' || letter === 'h' || letter === 'e')) {
+        if (letter === 'e' && readOnly) {
+          toast('Правка доступна только ведущему', 'readonly')
+          return
+        }
+        const mode = letter
         setTool(mode === 'v' ? 'select' : mode === 'h' ? 'pan' : 'erase')
         return
       }
       const toolKeys: Record<string, Tool> = { s: 'create', r: 'create', o: 'create', l: 'link', c: 'link', t: 'text', n: 'sticky', i: 'image', d: 'solid', b: 'table', p: 'pen' }
-      if (plain && event.key.toLowerCase() === 'g') {
+      if (plain && letter === 'g') {
         changeGrid({ gridMode: gridMode === 'none' ? 'dots' : 'none' })
         return
       }
-      const mapped = plain ? toolKeys[event.key.toLowerCase()] : undefined
-      if (mapped && !readOnly) {
-        if (event.key.toLowerCase() === 'r') {
+      const mapped = plain ? toolKeys[letter] : undefined
+      if (mapped) {
+        if (readOnly) {
+          toast('Правка доступна только ведущему', 'readonly')
+          return
+        }
+        if (letter === 'r') {
           setCreateShape('rectangle')
           setCreateTool('shape')
         }
-        if (event.key.toLowerCase() === 'o') {
+        if (letter === 'o') {
           setCreateShape('circle')
           setCreateTool('shape')
         }
@@ -5514,10 +5695,6 @@ const navigateTo = useCallback(
           setMoreOpen(false)
           return
         }
-        if (present) {
-          stopPresent()
-          return
-        }
         if (showExport) {
           setShowExport(false)
           return
@@ -5554,38 +5731,55 @@ const navigateTo = useCallback(
         }
         return
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd') {
+      if ((event.ctrlKey || event.metaKey) && letter === 'd') {
         event.preventDefault()
         duplicateItems([...selection])
         return
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c' && selection.size) {
+      if ((event.ctrlKey || event.metaKey) && letter === 'g') {
+        event.preventDefault()
+        if (event.shiftKey) ungroupSelection()
+        else groupSelection()
+        return
+      }
+      const layerBracket = bracketKey(event)
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && layerBracket) {
+        event.preventDefault()
+        shiftSelectionLayer(layerBracket === ']')
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && letter === 'c' && selection.size) {
         event.preventDefault()
         copyItems([...selection])
         return
       }
-      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'v' && imageSelection.length) {
+      if ((event.ctrlKey || event.metaKey) && letter === 'x' && selection.size) {
+        event.preventDefault()
+        cutItems([...selection])
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && letter === 'v' && imageSelection.length) {
         event.preventDefault()
         void replaceImagesFromClipboard().catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
         return
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v' && readObjectClipboard()) {
+      if ((event.ctrlKey || event.metaKey) && letter === 'v' && readObjectClipboard()) {
         event.preventDefault()
         void pasteObjects()
         return
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+      if ((event.ctrlKey || event.metaKey) && letter === 'z') {
         event.preventDefault()
         if (event.shiftKey) redo()
         else undo()
         return
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') {
+      if ((event.ctrlKey || event.metaKey) && letter === 'y') {
         event.preventDefault()
         redo()
         return
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') {
+      if ((event.ctrlKey || event.metaKey) && letter === 'v') {
         event.preventDefault()
         void api.clipboard
           .readHtml()
@@ -5593,7 +5787,7 @@ const navigateTo = useCallback(
           .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))
         return
       }
-      if (plain && event.key === 'f') {
+      if (plain && letter === 'f') {
         fitAll()
         return
       }
@@ -5606,7 +5800,8 @@ const navigateTo = useCallback(
       if (plain && (event.key === '-' || event.key === '_')) zoomBy(1 / 1.2)
       if (event.key === 'Tab' && tool === 'select' && !editing && doc && target === wrapRef.current && doc.items.length) {
         event.preventDefault()
-        const order = doc.items
+        const order = doc.items.filter((item) => !item.locked && item.kind !== 'connector')
+        if (!order.length) return
         const at = selection.size === 1 ? order.findIndex((item) => selection.has(item.id)) : -1
         const index = at < 0 ? (event.shiftKey ? order.length - 1 : 0) : (at + (event.shiftKey ? -1 : 1) + order.length) % order.length
         const item = order[index]
@@ -5630,6 +5825,10 @@ const navigateTo = useCallback(
         if (!selection.size || readOnly || !doc) return
         event.preventDefault()
         const step = event.shiftKey ? 40 : 10
+        if (!doc.items.some((item) => selection.has(item.id) && !item.locked && item.kind !== 'connector')) {
+          toast('Все выбранные объекты заблокированы', 'lock')
+          return
+        }
         const dw = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0
         const dh = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0
         const next = doc.items.map((item) =>
@@ -5644,10 +5843,14 @@ const navigateTo = useCallback(
         else commit(next)
         return
       }
-      if ((event.key === '[' || event.key === ']') && !event.ctrlKey && !event.metaKey) {
+      if (layerBracket && !event.ctrlKey && !event.metaKey) {
         if (!selection.size || readOnly || !doc) return
         event.preventDefault()
-        const delta = (event.shiftKey ? 1 : 15) * (event.key === ']' ? 1 : -1)
+        if (!doc.items.some((item) => selection.has(item.id) && !item.locked)) {
+          toast('Все выбранные объекты заблокированы', 'lock')
+          return
+        }
+        const delta = (event.shiftKey ? 1 : 15) * (layerBracket === ']' ? 1 : -1)
         const next = doc.items.map((item) =>
           selection.has(item.id) && !item.locked
             ? ({ ...item, rotation: (((item.rotation ?? 0) + delta) % 360 + 360) % 360 } as BoardItem)
@@ -5661,6 +5864,10 @@ const navigateTo = useCallback(
         if (!selection.size || readOnly || !doc) return
         event.preventDefault()
         const step = event.shiftKey ? 10 : 1
+        if (!doc.items.some((item) => selection.has(item.id) && !item.locked)) {
+          toast('Все выбранные объекты заблокированы', 'lock')
+          return
+        }
         const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0
         const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0
         const next = doc.items.map((item) =>
@@ -5682,7 +5889,7 @@ const navigateTo = useCallback(
       window.removeEventListener('keydown', listener)
       window.removeEventListener('keyup', listener)
     }
-  }, [doc, selection, zoomBy, fitAll, deleteItems, duplicateItems, copyItems, pasteObjects, commit, persist, undo, redo, readOnly, animateTo, pasteIntoBoard, fail, present, stopPresent, stepFrame, changeGrid, gridMode, railOrder, railExtras, menu, shapePoints, moreOpen, showExport, boardSettingsOpen, calculatorOpen, detailsOpen, showInspector, throughAnchor, editing, byId, startEditing, commitEditing, tool, imageSelection, replaceImagesFromClipboard])
+  }, [doc, selection, zoomBy, fitAll, deleteItems, cutItems, duplicateItems, copyItems, pasteObjects, commit, persist, undo, redo, readOnly, animateTo, pasteIntoBoard, fail, present, stopPresent, stepFrame, changeGrid, gridMode, railOrder, railExtras, menu, shapePoints, moreOpen, showExport, boardSettingsOpen, calculatorOpen, detailsOpen, showInspector, throughAnchor, editing, byId, startEditing, commitEditing, tool, imageSelection, replaceImagesFromClipboard, groupSelection, ungroupSelection, shiftSelectionLayer])
 
   const penBox = drag.kind === 'pen' ? inkGeometry(penPointsRef.current, penStraightRef.current, '') : null
 
@@ -5920,7 +6127,7 @@ const navigateTo = useCallback(
           id: 'edit-text',
           label: textTargets.length > 1 ? 'Редактировать текст' : 'Редактировать',
           icon: <Pencil size={14} />,
-          hint: 'Enter',
+          hint: textTargets.length === 1 ? 'Enter' : undefined,
           section: 'Объект',
           run: () => startEditing(textTargets[0].id)
         })
@@ -5979,6 +6186,7 @@ const navigateTo = useCallback(
           id: 'group',
           label: 'В группу',
           icon: <Group size={14} />,
+          hint: 'Ctrl+G',
           section: 'Группа',
           run: () => groupSelection()
         })
@@ -5987,6 +6195,7 @@ const navigateTo = useCallback(
           id: 'ungroup',
           label: 'Из группы',
           icon: <Ungroup size={14} />,
+          hint: 'Ctrl+Shift+G',
           section: items.some((item) => item.section === 'Группа') ? undefined : 'Группа',
           run: () => ungroupSelection()
         })
@@ -6007,7 +6216,7 @@ const navigateTo = useCallback(
             label: 'Обрезать',
             icon: <Crop size={14} />,
             section: 'Картинка',
-            disabled: readOnly,
+            disabled: readOnly || target.locked,
             run: () => {
               void startCrop(target.id)
             }
@@ -6016,7 +6225,7 @@ const navigateTo = useCallback(
             id: 'replace',
             label: 'Заменить',
             icon: <ImagePlus size={14} />,
-            disabled: readOnly,
+            disabled: readOnly || target.locked,
             submenu: [
               { id: 'replace-clipboard', label: 'Из буфера', icon: <ClipboardPaste size={14} />, run: () => void replaceImage(target.id, 'clipboard') },
               { id: 'replace-file', label: 'Из файла', icon: <ImagePlus size={14} />, run: () => void replaceImage(target.id, 'file') },
@@ -6074,6 +6283,7 @@ const navigateTo = useCallback(
           label: 'Свойства',
           icon: <Layers size={14} />,
           line: true,
+          disabled: readOnly,
           run: () => setShowInspector(true)
         }
       )
@@ -6285,7 +6495,7 @@ const navigateTo = useCallback(
               <button
                 type="button"
                 className="toolbtn"
-                onClick={() => void api.board.openSource(doc.id)}
+                onClick={() => void api.board.openSource(doc.id).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)))}
                 aria-label="Открыть оригинал"
                 title="Открыть оригинал доски"
               >
@@ -6332,9 +6542,10 @@ const navigateTo = useCallback(
                 }}
                 onGoToPartner={() => {
                   const at = live.cursors[0]
-                  if (!at) return
+                  if (!at) return false
                   if (live.following) live.stopFollow()
                   animateTo({ x: at.targetX, y: at.targetY, zoom: viewRef.current.zoom }, 420)
+                  return true
                 }}
                 onTransferHost={live.transferHost}
                 onSaveBoard={saveCopyToLibrary}
@@ -6448,16 +6659,16 @@ const navigateTo = useCallback(
             doc={doc}
             assetUrl={assetUrl}
             selection={selection}
-            selectable={tool === 'select' && !readOnly}
-            interactive={(tool === 'select' || tool === 'pen' || tool === 'text') && !readOnly}
+            selectable={tool === 'select' && !readOnly && !present}
+            interactive={(tool === 'select' || tool === 'pen' || tool === 'text') && !readOnly && !present}
             moving={drag.kind === 'move'}
-            editable={!readOnly}
+            editable={!readOnly && !present}
             editingId={editing?.id ?? null}
             onPatch={patchItem}
             onFit={fitTextHeight}
             onNode={registerNode}
             onPointerDown={onItemPointerDown}
-            onDoubleClick={readOnly ? undefined : startEditing}
+            onDoubleClick={present ? undefined : startEditing}
             onLink={(href) => void openLinkPreview(href)}
             media={media}
             livePos={livePosRef.current}
@@ -7172,10 +7383,15 @@ aria-label="Увеличить шрифт">
           <div className="toolgroup toolpalette">
             <PaletteGroup title={selection.size > 1 ? `Выбрано: ${selection.size}` : 'Объект'}>
               <PaletteGrid columns={2}>
-                <PaletteCell title="Объединить выделенные в группу" icon={<Group size={16} />} disabled={selection.size < 2 || readOnly} onClick={() => groupSelection()}>
+                <PaletteCell title={selection.size < 2 ? 'Объединить выделенные в группу: нужно выделить минимум два объекта' : 'Объединить выделенные в группу'} icon={<Group size={16} />} disabled={selection.size < 2 || readOnly} onClick={() => groupSelection()}>
                   В группу
                 </PaletteCell>
-                <PaletteCell title="Разделить группу на отдельные объекты" icon={<Ungroup size={16} />} disabled={!groupedSelection || readOnly} onClick={() => ungroupSelection()}>
+                <PaletteCell
+                  title={!groupedSelection ? 'Разделить группу: в выделении нет групп' : 'Разделить группу на отдельные объекты'}
+                  icon={<Ungroup size={16} />}
+                  disabled={!groupedSelection || readOnly}
+                  onClick={() => ungroupSelection()}
+                >
                   Из группы
                 </PaletteCell>
                 <PaletteCell title="Дублировать (Ctrl+D)" icon={<Copy size={16} />} disabled={!selection.size || readOnly} onClick={() => duplicateItems([...selection])}>
@@ -7206,7 +7422,7 @@ aria-label="Увеличить шрифт">
                   value={Math.round(cornerRadius(shapePanelTarget.shape, shapePanelTarget) * 100)}
                   min={0}
                   max={50}
-                  onChange={(value) => setShapeRadius(shapePanelTarget.id, value / 100)}
+                  onChange={(value) => patchItemsLive([shapePanelTarget.id], { adjust: value / 100 })}
                 />
               </PaletteGroup>
             ) : null}
@@ -7755,16 +7971,20 @@ aria-label="Увеличить шрифт">
 
       {present ? (
         <div className="presentbar">
-          <button type="button" className="toolbtn" onClick={() => stepFrame(-1)} aria-label="Предыдущая рамка" title="Предыдущая рамка (стрелка влево)">
-            <ChevronLeft size={17} />
-          </button>
+          {frames.length ? (
+            <button type="button" className="toolbtn" onClick={() => stepFrame(-1)} aria-label="Предыдущая рамка" title="Предыдущая рамка (стрелка влево)">
+              <ChevronLeft size={17} />
+            </button>
+          ) : null}
           <div className="presentbar__title">
             {frames.length ? frames[presentIndex]?.title || 'Без названия' : 'Вся доска'}
             {frames.length ? <span className="presentbar__count">{presentIndex + 1} из {frames.length}</span> : null}
           </div>
-          <button type="button" className="toolbtn" onClick={() => stepFrame(1)} aria-label="Следующая рамка" title="Следующая рамка (стрелка вправо)">
-            <ChevronRight size={17} />
-          </button>
+          {frames.length ? (
+            <button type="button" className="toolbtn" onClick={() => stepFrame(1)} aria-label="Следующая рамка" title="Следующая рамка (стрелка вправо)">
+              <ChevronRight size={17} />
+            </button>
+          ) : null}
           <div className="bbar__sep" />
           <button type="button" className="toolbtn" onClick={stopPresent} aria-label="Выйти из режима докладчика" title="Выйти (Esc)">
             <X size={17} />
@@ -7820,9 +8040,9 @@ aria-label="Увеличить шрифт">
           items={selectedItems}
           docTitle={doc.title}
           onClose={() => setShowInspector(false)}
-          onPatch={patchItem}
-          onPatchMany={patchItems}
-          onPatchLive={patchItemsLive}
+          onPatch={inspectorPatch}
+          onPatchMany={inspectorPatchMany}
+          onPatchLive={inspectorPatchLive}
           onDelete={deleteItems}
           onDuplicate={duplicateItems}
           onNavigateTo={navigateTo}

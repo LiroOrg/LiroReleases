@@ -92,6 +92,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
   const wasConnectedRef = useRef(false)
   const leavingRef = useRef(false)
   const armSeqRef = useRef(0)
+  const armFailRef = useRef(0)
   const hadPartnerRef = useRef(false)
   const hostDocRef = useRef<(() => BoardDoc | null) | null>(null)
   const rearmRef = useRef<() => void>(() => undefined)
@@ -183,8 +184,11 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       try {
         const offer = await session.createOffer()
         await api.live.hostCreate(offer, inviteCode)
+        armFailRef.current = 0
       } catch {
         session.close()
+        armFailRef.current += 1
+        if (armFailRef.current === 1) toast('Не удаётся открыть сессию, пробую снова', 'live')
         if (alive()) window.setTimeout(() => rearmRef.current(), 3000)
         return
       }
@@ -221,7 +225,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       await api.live.hostCleanup(inviteCode).catch(() => undefined)
       sendSnapshot(session, getDoc)
     },
-    [createSession]
+    [createSession, toast]
   )
 
   const startHost = useCallback(
@@ -233,6 +237,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       const inviteCode = (stored && stored.invite) || (await api.live.hostCode())
       if (!stored || stored.invite !== inviteCode) void api.board.workspace.set(doc.id, { invite: inviteCode }).catch(() => undefined)
       hostDocRef.current = getDoc
+      armFailRef.current = 0
       setCode(inviteCode)
       codeRef.current = inviteCode
       await armHost(inviteCode)
@@ -249,6 +254,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
           session.close()
           setCode(null)
           codeRef.current = null
+          toast('Сессия не найдена или уже закрыта', 'live')
           return
         }
         const answer = await session.acceptOffer(offer)
@@ -261,7 +267,7 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
       codeRef.current = inviteCode
       setCanEdit(false)
     },
-    [createSession]
+    [createSession, toast]
   )
 
   const leave = useCallback((): void => {
@@ -294,10 +300,18 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
   const leaveAndCleanup = useCallback((): void => {
     const guestBoard = getGuestBoardId()
     leave()
-    if (!guestBoard) return
+    if (!guestBoard) {
+      toast('Сессия завершена', 'live')
+      return
+    }
     clearGuestBoardId()
-    void api.board.remove(guestBoard, true).catch(() => undefined)
-  }, [leave])
+    void api.board
+      .remove(guestBoard, true)
+      .then(() => toast('Сессия завершена, копия доски удалена', 'live'))
+      .catch((error: unknown) =>
+        toast(`Сессия завершена, копию доски не удалить: ${error instanceof Error ? error.message : String(error)}`, 'live')
+      )
+  }, [leave, toast])
 
   const togglePermission = useCallback((value: boolean): void => {
     canEditRef.current = value
@@ -324,7 +338,10 @@ export function useLiveBoard(options: { userName: string }): LiveBoardBridge {
 
   const transferHost = useCallback((): void => {
     const session = sessionRef.current
-    if (!session || !session.isConnected) return
+    if (!session || !session.isConnected) {
+      toast('Нет связи с партнёром', 'live')
+      return
+    }
     session.sendOps({ t: 'handover', hostId: selfIdRef.current, hostName: session.selfName })
     roleRef.current = 'guest'
     setRole('guest')

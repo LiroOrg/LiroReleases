@@ -1,7 +1,7 @@
 {
   "name": "liro",
   "productName": "Liro",
-  "version": "1.14.22",
+  "version": "1.14.24",
   "description": "Настольное приложение для досок. Работает офлайн",
   "main": "./out/main/index.js",
   "author": "Liro",

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { plainFromRichHtml } from './richHtml'
+import { letterKey } from '../lib/letterKey'
 
 export interface TextFormatState {
   b: boolean
@@ -160,6 +161,16 @@ export function TextEditor(props: {
           event.preventDefault()
           callbacksRef.current.onCommit()
           return
+        }
+        if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) {
+          const key = letterKey(event)
+          const format = key === 'b' ? 'bold' : key === 'i' ? 'italic' : key === 'u' ? 'underline' : ''
+          if (format) {
+            event.preventDefault()
+            applyFormat(format)
+            report()
+            return
+          }
         }
         if (event.key === 'Tab') {
           event.preventDefault()

@@ -292,6 +292,19 @@ export function runSelfTest(): SelfTestResult {
   )
   const mixedBlocks = parseRichText('Строка<p>Вторая</p>')
   check(results, 'richtext: смешанный текст виден', mixedBlocks.length >= 1, `${mixedBlocks.length}`)
+  const inlineBlocks = parseRichText('<b>Жирный</b> и обычный')
+  check(
+    results,
+    'richtext: формат без абзаца виден',
+    inlineBlocks.flatMap((block) => block.runs.map((run) => run.text)).join('') === 'Жирный и обычный',
+    JSON.stringify(inlineBlocks)
+  )
+  check(
+    results,
+    'richtext: формат без абзаца остаётся жирным',
+    inlineBlocks.some((block) => block.runs.some((run) => run.b && run.text === 'Жирный')),
+    JSON.stringify(inlineBlocks)
+  )
 
   check(results, 'цвет: имя палитры', normalizeColor('light_yellow') === '#fff9b1', normalizeColor('light_yellow'))
   check(results, 'цвет: hex с альфой', normalizeColor('#ffffff00') === '#ffffff')

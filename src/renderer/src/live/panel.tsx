@@ -26,7 +26,7 @@ export interface LivePanelProps {
   onTogglePermission: (canEdit: boolean) => void
   onWatchPartner: () => void
   onPullPartner: () => void
-  onGoToPartner: () => void
+  onGoToPartner: () => boolean
   onTransferHost: () => void
   onSaveBoard: () => void
   onLeave: () => void
@@ -82,10 +82,27 @@ export function LivePanel(props: LivePanelProps): ReactNode {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [anchor, setAnchor] = useState({ top: 0, right: 0 })
   const idleRef = useRef<number | null>(null)
+  const menuRef = useRef<{ x: number; y: number } | null>(null)
   const toggleRef = useRef<HTMLButtonElement | null>(null)
+  const boxRef = useRef<HTMLDivElement | null>(null)
   const moreRef = useRef<HTMLButtonElement | null>(null)
 
   const link = props.code ? `liro://connect/${props.code}` : ''
+
+  useEffect(() => {
+    menuRef.current = menu
+  }, [menu])
+
+  const armIdle = useCallback((): void => {
+    if (idleRef.current !== null) window.clearTimeout(idleRef.current)
+    idleRef.current = window.setTimeout(() => {
+      if (boxRef.current?.contains(document.activeElement) || menuRef.current) {
+        armIdle()
+        return
+      }
+      setOpen(false)
+    }, IDLE_MS)
+  }, [])
 
   useLayoutEffect(() => {
     if (!open) return undefined
@@ -108,18 +125,12 @@ export function LivePanel(props: LivePanelProps): ReactNode {
 
   useEffect(() => {
     if (!open) return undefined
-    idleRef.current = window.setTimeout(() => setOpen(false), IDLE_MS)
+    armIdle()
     return () => {
       if (idleRef.current !== null) window.clearTimeout(idleRef.current)
       idleRef.current = null
     }
-  }, [open, menu])
-
-  const bump = useCallback((): void => {
-    if (idleRef.current === null) return
-    window.clearTimeout(idleRef.current)
-    idleRef.current = window.setTimeout(() => setOpen(false), IDLE_MS)
-  }, [])
+  }, [open, menu, armIdle])
 
   const copyLink = useCallback(async () => {
     if (!link) return
@@ -138,7 +149,7 @@ export function LivePanel(props: LivePanelProps): ReactNode {
     event.stopPropagation()
     const box = (moreRef.current ?? (event.currentTarget as HTMLElement)).getBoundingClientRect()
     setMenu({ x: box.right - 188, y: box.bottom + 6 })
-    bump()
+    armIdle()
   }
 
   const partnerItems = (): MenuItem[] => {
@@ -150,8 +161,8 @@ export function LivePanel(props: LivePanelProps): ReactNode {
         section: 'Обзор',
         disabled: !props.connected,
         run: () => {
-          props.onGoToPartner()
-          props.onToast(`Перешли к ${props.partner?.name ?? 'участнику'}`, 'locate')
+          if (props.onGoToPartner()) props.onToast(`Перешли к ${props.partner?.name ?? 'участнику'}`, 'locate')
+          else props.onToast('Участник ещё не двигался по доске', 'locate')
         }
       },
       {
@@ -170,7 +181,10 @@ export function LivePanel(props: LivePanelProps): ReactNode {
         label: 'Перенести к себе',
         icon: <UserRoundArrowLeft size={14} />,
         disabled: !props.connected,
-        run: () => props.onPullPartner()
+        run: () => {
+          props.onPullPartner()
+          props.onToast(`Перенесли ${props.partner?.name ?? 'участника'} к вам`, 'locate')
+        }
       }
     ]
     if (props.role === 'host') {
@@ -198,7 +212,10 @@ export function LivePanel(props: LivePanelProps): ReactNode {
         ref={toggleRef}
         type="button"
         className="toolbtn livepanel__toggle"
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          if (open) setMenu(null)
+          setOpen((value) => !value)
+        }}
         aria-label="Участники"
         title={props.watching ? 'Участники — за вами следят' : 'Участники'}
         data-active={open}
@@ -208,10 +225,10 @@ export function LivePanel(props: LivePanelProps): ReactNode {
       </button>
       <LiveWatcher on={props.watching} hidden={open || menu !== null || props.topMenuOpen} />
       {open ? (
-        <div className="livepanel__box" style={{ top: anchor.top, right: anchor.right }} onPointerMove={bump} onPointerDown={bump}>
+        <div ref={boxRef} className="livepanel__box" style={{ top: anchor.top, right: anchor.right }} onPointerMove={armIdle} onPointerDown={armIdle}>
           <div className="livepanel__head">
             <span className="livepanel__title">Участники</span>
-            <button type="button" className="livepanel__close" onClick={() => setOpen(false)} title="Закрыть"
+            <button type="button" className="livepanel__close" onClick={() => { setMenu(null); setOpen(false) }} title="Закрыть"
 aria-label="Закрыть">
               <X size={14} />
             </button>
@@ -237,8 +254,8 @@ aria-label="Закрыть">
                       className="livepanel__name livepanel__name--link"
                       disabled={!props.connected}
                       onClick={() => {
-                        props.onGoToPartner()
-                        props.onToast(`Перешли к ${partner.name}`, 'locate')
+                        if (props.onGoToPartner()) props.onToast(`Перешли к ${partner.name}`, 'locate')
+                        else props.onToast('Участник ещё не двигался по доске', 'locate')
                       }}
                       onContextMenu={openMenu}
                       title={`Перейти к ${partner.name}`}
@@ -299,7 +316,7 @@ aria-label="Скопировать ссылку">
             </div>
           </div>
           <div className="livepanel__actions">
-            <button type="button" className="livepanel__action" onClick={props.onSaveBoard} disabled={!props.connected}>
+            <button type="button" className="livepanel__action" onClick={props.onSaveBoard}>
               <Save size={14} />
               Сохранить себе
             </button>
@@ -310,7 +327,7 @@ aria-label="Скопировать ссылку">
           </div>
         </div>
       ) : null}
-      {menu && partner ? (
+      {open && menu && partner ? (
         <ContextMenu
           title={partner.name}
           items={partnerItems()}
@@ -318,7 +335,7 @@ aria-label="Скопировать ссылку">
           y={menu.y}
           onClose={() => {
             setMenu(null)
-            bump()
+            armIdle()
           }}
         />
       ) : null}

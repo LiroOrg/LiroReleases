@@ -306,7 +306,7 @@ export const ItemLayer = memo(function ItemLayer(props: {
           onPatch={props.onPatch}
           onFit={props.editable ? props.onFit : undefined}
           onNode={props.onNode}
-          onPointerDown={props.interactive && !item.locked ? props.onPointerDown : undefined}
+          onPointerDown={props.interactive ? props.onPointerDown : undefined}
           onDoubleClick={props.onDoubleClick}
           onLink={props.onLink}
           media={props.media}
@@ -357,12 +357,10 @@ export const ItemView = memo(function ItemView(props: {
   if (dimmed) classes.push('boarditem--dim')
   if (item.locked) classes.push('boarditem--locked')
 
-  const interactiveProps = props.onPointerDown
-    ? {
-        onPointerDown: (event: React.PointerEvent) => props.onPointerDown?.(item.id, event),
-        onDoubleClick: () => props.onDoubleClick?.(item.id)
-      }
-    : {}
+  const interactiveProps = {
+    ...(props.onPointerDown ? { onPointerDown: (event: React.PointerEvent) => props.onPointerDown?.(item.id, event) } : {}),
+    ...(props.onDoubleClick ? { onDoubleClick: () => props.onDoubleClick?.(item.id) } : {})
+  }
 
   return (
     <div

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Download, FolderOpen, HardDrive, Image, RefreshCw } from 'lucide-react'
 import type { Settings as AppSettings } from '@shared/types'
-import { formatBytes, formatNumber } from '@shared/util'
+import { countNumber, formatBytes, formatNumber } from '@shared/util'
 import { api } from '../lib/api'
 import { useApp } from '../lib/store'
 import { Modal, Switch, Spinner } from '../components/ui'
@@ -36,18 +36,10 @@ export function SettingsScreen(): ReactNode {
   const [askMove, setAskMove] = useState(false)
   const [thumbProgress, setThumbProgress] = useState({ done: 0, total: 0 })
   const [name, setName] = useState('')
-  const nameTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     setName(settings?.userName ?? '')
   }, [settings?.userName])
-
-  useEffect(
-    () => () => {
-      if (nameTimerRef.current !== null) window.clearTimeout(nameTimerRef.current)
-    },
-    []
-  )
 
   const update = useCallback(
     async (patch: Partial<AppSettings>, message: string): Promise<void> => {
@@ -66,20 +58,14 @@ export function SettingsScreen(): ReactNode {
     const value = name.trim()
     const current = (settings?.userName ?? '').trim()
     if (!value) {
+      if (!current) return
       setName(current)
+      toast('Имя участника не может быть пустым', 'error')
       return
     }
     if (value === current) return
     await update({ userName: value }, 'Имя сохранено')
   }
-
-  const scheduleNameSave = useCallback(() => {
-    if (nameTimerRef.current !== null) window.clearTimeout(nameTimerRef.current)
-    nameTimerRef.current = window.setTimeout(() => {
-      nameTimerRef.current = null
-      void saveName()
-    }, 600)
-  }, [saveName])
 
   const storagePath = appInfo?.storage || ''
 
@@ -125,20 +111,24 @@ export function SettingsScreen(): ReactNode {
     setThumbBusy(true)
     setThumbProgress({ done: 0, total: boards.length })
     let done = 0
+    let failed = 0
     for (const board of boards) {
       try {
         await api.board.thumbnail(board.id)
       } catch {
-        done += 1
-        setThumbProgress({ done, total: boards.length })
-        continue
+        failed += 1
       }
       done += 1
       setThumbProgress({ done, total: boards.length })
     }
-    setLibrary(await api.library.get())
     setThumbBusy(false)
-    toast('Превью обновлены', 'preview')
+    try {
+      setLibrary(await api.library.get())
+    } catch (error) {
+      toast(errorText(error), 'error')
+      return
+    }
+    toast(failed ? `Превью обновлены, сбоев: ${failed}` : 'Превью обновлены', 'preview')
   }
 
   const thumbPercent = useMemo(() => {
@@ -200,17 +190,8 @@ export function SettingsScreen(): ReactNode {
                 value={name}
                 maxLength={40}
                 placeholder="Как к вам обращаться"
-                onChange={(event) => {
-                  setName(event.target.value)
-                  scheduleNameSave()
-                }}
-                onBlur={() => {
-                  if (nameTimerRef.current !== null) {
-                    window.clearTimeout(nameTimerRef.current)
-                    nameTimerRef.current = null
-                  }
-                  void saveName()
-                }}
+                onChange={(event) => setName(event.target.value)}
+                onBlur={() => void saveName()}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') void saveName()
                 }}
@@ -325,7 +306,7 @@ export function SettingsScreen(): ReactNode {
                 </button>
                 <span className="field__hint">
                   <Image size={13} /> Занято: {formatBytes(library.boards.reduce((sum, board) => sum + board.assetBytes, 0))}{' '}
-                  в {formatNumber(library.boards.length)} досок.
+                  в {countNumber(library.boards.length, ['доске', 'досках', 'досках'])}.
                 </span>
               </div>
             </div>

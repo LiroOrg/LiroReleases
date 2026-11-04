@@ -8,6 +8,7 @@ import { useApp } from '../lib/store'
 export function FirstRunName(): ReactNode {
   const settings = useApp((state) => state.settings)
   const setSettings = useApp((state) => state.setSettings)
+  const fail = useApp((state) => state.fail)
   const [name, setName] = useState('')
   const [ready, setReady] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -31,7 +32,8 @@ export function FirstRunName(): ReactNode {
     if (!value) return
     try {
       setSettings(await api.settings.set({ userName: value }))
-    } catch {
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error))
       inputRef.current?.focus()
     }
   }

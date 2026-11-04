@@ -2,7 +2,7 @@ import { app, BrowserWindow, Menu, session, shell } from 'electron'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { getCapture, openBoardFile, registerIpc, setMainWindow } from './ipc'
+import { getCapture, openBoardFile, pickAndOpenBoardFile, registerIpc, setMainWindow } from './ipc'
 import { buildExtensionFiles } from './import/extension'
 import uiTestSource from './uitest.js?raw'
 import { migrateLegacyData } from './paths'
@@ -212,17 +212,14 @@ function buildMenu(): void {
       submenu: [
         {
           label: 'Вставить из буфера обмена',
-          accelerator: 'CmdOrCtrl+Shift+V',
           click: () => {
-            mainWindow?.webContents.send('event:nav:go', '#/')
+            mainWindow?.webContents.send('event:board:command', 'clipboard')
           }
         },
         {
           label: 'Открыть файл доски…',
           accelerator: 'CmdOrCtrl+O',
-          click: () => {
-            mainWindow?.webContents.send('event:nav:go', '#/')
-          }
+          click: () => pickAndOpenBoardFile()
         },
         { type: 'separator' },
         { label: 'Настройки', accelerator: 'CmdOrCtrl+,', click: () => mainWindow?.webContents.send('event:nav:go', '#/settings') },
@@ -235,28 +232,23 @@ function buildMenu(): void {
       submenu: [
         {
           label: 'Отменить',
-          accelerator: 'CmdOrCtrl+Z',
           click: () => mainWindow?.webContents.send('event:board:command', 'undo')
         },
         {
           label: 'Вернуть',
-          accelerator: 'CmdOrCtrl+Y',
           click: () => mainWindow?.webContents.send('event:board:command', 'redo')
         },
         {
           label: 'Дублировать выделенное',
-          accelerator: 'CmdOrCtrl+D',
           click: () => mainWindow?.webContents.send('event:board:command', 'duplicate')
         },
         {
           label: 'Удалить выделенное',
-          accelerator: 'Delete',
           click: () => mainWindow?.webContents.send('event:board:command', 'delete')
         },
         { type: 'separator' },
         {
           label: 'Выделить всё',
-          accelerator: 'CmdOrCtrl+A',
           click: () => mainWindow?.webContents.send('event:board:command', 'select-all')
         }
       ]

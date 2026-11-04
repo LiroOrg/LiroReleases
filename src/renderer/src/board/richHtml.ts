@@ -117,3 +117,136 @@ export function escapeRichHtml(plain: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
 }
+
+const INLINE_TAGS = new Set(['a', 'span', 'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'del'])
+
+interface RichChar {
+  ch: string
+  key: string
+  marks: string[]
+  block: boolean
+}
+
+function pushChar(out: RichChar[], ch: string, marks: string[], block: boolean): void {
+  out.push({ ch, key: marks.join('|'), marks, block })
+}
+
+function collectChars(node: Node, marks: string[], out: RichChar[]): boolean {
+  if (node.nodeType === 3) {
+    for (const ch of String(node.nodeValue ?? '').replace(/ /g, ' ')) pushChar(out, ch, marks, false)
+    return true
+  }
+  if (node.nodeType !== 1) return true
+  const element = node as Element
+  const tag = element.tagName.toLowerCase()
+  if (tag === 'ul' || tag === 'ol' || tag === 'li' || tag === 'font' || DROP_TAGS.has(tag)) return false
+  if (tag === 'br') {
+    pushChar(out, '\n', marks, false)
+    return true
+  }
+  if (BLOCK_TAGS.has(tag)) {
+    if (out.length && out[out.length - 1].ch !== '\n') pushChar(out, '\n', marks, true)
+    for (const child of Array.from(element.childNodes)) if (!collectChars(child, marks, out)) return false
+    if (out.length && out[out.length - 1].ch !== '\n') pushChar(out, '\n', marks, true)
+    return true
+  }
+  if (!INLINE_TAGS.has(tag)) return false
+  const color = COLOR_STYLE_TAGS.has(tag) ? styleColor(element.getAttribute('style') ?? '') : ''
+  const href = tag === 'a' ? safeHref(element.getAttribute('href') ?? '').replace(/["'<>]/g, '') : ''
+  if (tag === 'span' && !color) {
+    for (const child of Array.from(element.childNodes)) if (!collectChars(child, marks, out)) return false
+    return true
+  }
+  if (tag === 'a' && !href) {
+    for (const child of Array.from(element.childNodes)) if (!collectChars(child, marks, out)) return false
+    return true
+  }
+  const inner = [...marks, tag === 'span' ? `span:${color}` : tag === 'a' ? `a:${href}` : tag]
+  for (const child of Array.from(element.childNodes)) if (!collectChars(child, inner, out)) return false
+  return true
+}
+
+function wrapGroup(chars: RichChar[]): string {
+  const text = chars.map((entry) => entry.ch).join('')
+  let html = escapeRichHtml(text).replace(/\n/g, '<br>')
+  for (const mark of [...(chars[0]?.marks ?? [])].reverse()) {
+    const attribute = mark.startsWith('span:')
+      ? ` style="color:${mark.slice('span:'.length)}"`
+      : mark.startsWith('a:')
+        ? ` href="${mark.slice('a:'.length)}" rel="noopener" target="_blank"`
+        : ''
+    const tag = mark.split(':')[0]
+    html = `<${tag}${attribute}>${html}</${tag}>`
+  }
+  return html
+}
+
+function htmlFromChars(chars: RichChar[]): string {
+  const groups: RichChar[][] = []
+  let current: RichChar[] = []
+  for (const entry of chars) {
+    if (entry.block) {
+      groups.push(current)
+      current = []
+      continue
+    }
+    current.push(entry)
+  }
+  groups.push(current)
+  while (groups.length > 1 && !groups[groups.length - 1].length) groups.pop()
+  const blocks = groups.map((group) => {
+    let html = ''
+    let index = 0
+    while (index < group.length) {
+      let end = index
+      while (end < group.length && group[end].key === group[index].key) end += 1
+      html += wrapGroup(group.slice(index, end))
+      index = end
+    }
+    return html
+  })
+  return blocks.map((block) => `<p>${block}</p>`).join('')
+}
+
+function insertedChars(text: string, marks: string[]): RichChar[] {
+  const out: RichChar[] = []
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index]
+    if (ch !== '\n') {
+      pushChar(out, ch, marks, false)
+      continue
+    }
+    let run = 0
+    while (index + run < text.length && text[index + run] === '\n') run += 1
+    pushChar(out, '\n', marks, true)
+    for (let extra = 1; extra < run; extra += 1) pushChar(out, '\n', marks, false)
+    index += run - 1
+  }
+  return out
+}
+
+export function applyPlainEdit(html: string, nextPlain: string): string | null {
+  const root = rootOf(html)
+  if (!root) return null
+  const chars: RichChar[] = []
+  for (const child of Array.from(root.childNodes)) if (!collectChars(child, [], chars)) return null
+  const normalized = plainFromRichHtml(html)
+  let oldPlain = chars.map((entry) => entry.ch).join('')
+  while (oldPlain.length > normalized.length && oldPlain.endsWith('\n')) {
+    oldPlain = oldPlain.slice(0, -1)
+    chars.pop()
+  }
+  if (oldPlain !== normalized) return null
+  const shared = Math.min(oldPlain.length, nextPlain.length)
+  let prefix = 0
+  while (prefix < shared && oldPlain[prefix] === nextPlain[prefix]) prefix += 1
+  let suffix = 0
+  while (suffix < shared - prefix && oldPlain[oldPlain.length - 1 - suffix] === nextPlain[nextPlain.length - 1 - suffix])
+    suffix += 1
+  const marks = chars[prefix - 1]?.marks ?? chars[0]?.marks ?? []
+  const middle = insertedChars(nextPlain.slice(prefix, nextPlain.length - suffix), marks)
+  const next = [...chars.slice(0, prefix), ...middle, ...chars.slice(oldPlain.length - suffix)]
+  const result = htmlFromChars(next)
+  if (plainFromRichHtml(result) !== nextPlain) return null
+  return result
+}

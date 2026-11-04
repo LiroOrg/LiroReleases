@@ -3,6 +3,8 @@ import type { ReactNode } from 'react'
 import type { TableItem } from '@shared/types'
 import { cellAddress, columnName, evaluateSheet } from '@shared/sheet'
 import { api } from '../lib/api'
+import { useApp } from '../lib/store'
+import { letterKey } from '../lib/letterKey'
 
 export interface TableViewProps {
   item: TableItem
@@ -35,6 +37,7 @@ export function sheetSize(columns: number, rows: number, columnWidth: number, ro
 
 export function TableView(props: TableViewProps): ReactNode {
   const { item } = props
+  const toast = useApp((state) => state.toast)
   const columns = Math.max(1, item.columns)
   const rows = Math.max(1, item.rows)
   const fontSize = Math.max(11, Math.round(item.fontSize || 14))
@@ -229,7 +232,10 @@ export function TableView(props: TableViewProps): ReactNode {
       for (let column = range.c1; column <= range.c2; column += 1) parts.push(raw[at(column, row)] ?? '')
       lines.push(parts.join('\t'))
     }
-    void api.clipboard.writeText(lines.join('\n'))
+    void api.clipboard
+      .writeText(lines.join('\n'))
+      .then(() => toast('Ячейки скопированы', 'copy'))
+      .catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), 'error'))
   }
 
   const clearSelection = (): void => {
@@ -282,18 +288,18 @@ export function TableView(props: TableViewProps): ReactNode {
       const column = Math.min(columns - 1, Math.max(0, columnOf(active) + dc))
       select(at(column, row), shift)
     }
-    if (control && event.key.toLowerCase() === 'c') {
+    if (control && letterKey(event) === 'c') {
       handled()
       copySelection()
       return
     }
-    if (control && event.key.toLowerCase() === 'x') {
+    if (control && letterKey(event) === 'x') {
       handled()
       copySelection()
       clearSelection()
       return
     }
-    if (control && event.key.toLowerCase() === 'v') return
+    if (control && letterKey(event) === 'v') return
     if (event.key === 'ArrowDown') {
       handled()
       step(1, 0)

@@ -569,6 +569,9 @@ export interface Settings {
   userName: string
   exportScale: number
   exportBackground: 'white' | 'transparent' | 'board'
+  exportFormat?: ExportOptions['format']
+  librarySort?: 'updated' | 'name' | 'items' | 'size'
+  libraryView?: 'grid' | 'list'
   imageQuality: 'original' | 'high' | 'medium'
   uiScale: number
   toolbarOrder: string[]

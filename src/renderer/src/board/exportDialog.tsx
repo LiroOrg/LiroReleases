@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { api } from '../lib/api'
 import { useApp } from '../lib/store'
 import { Modal } from '../components/ui'
-import type { BoardDoc, ExportOptions } from '@shared/types'
+import type { BoardDoc, ExportOptions, Settings } from '@shared/types'
 
 const FORMATS: Array<{ id: ExportOptions['format']; title: string; text: string }> = [
   { id: 'liro', title: 'LIRO', text: 'Наш формат: доска целиком со всеми картинками в одном файле.' },
@@ -17,12 +17,41 @@ const WHOLE_FILE: Array<ExportOptions['format']> = ['liro']
 export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?: () => Promise<void> }): ReactNode {
   const toast = useApp((state) => state.toast)
   const fail = useApp((state) => state.fail)
-  const [format, setFormat] = useState<ExportOptions['format']>('liro')
+  const setSettings = useApp((state) => state.setSettings)
+  const settings = useApp((state) => state.settings)
+  const [format, setFormat] = useState<ExportOptions['format']>(settings?.exportFormat ?? 'liro')
   const [scope, setScope] = useState<ExportOptions['scope']>('board')
-  const [scale, setScale] = useState(2)
-  const [background, setBackground] = useState<ExportOptions['background']>('white')
+  const [scale, setScale] = useState(settings?.exportScale ?? 2)
+  const [background, setBackground] = useState<ExportOptions['background']>(
+    settings?.exportBackground === 'transparent' ? 'transparent' : 'white'
+  )
   const [frameId, setFrameId] = useState('')
   const [busy, setBusy] = useState(false)
+
+  const remember = useCallback(
+    (patch: Partial<Settings>): void => {
+      void api.settings
+        .set(patch)
+        .then(setSettings)
+        .catch(() => undefined)
+    },
+    [setSettings]
+  )
+
+  const pickFormat = (value: ExportOptions['format']): void => {
+    setFormat(value)
+    remember({ exportFormat: value })
+  }
+
+  const pickScale = (value: number): void => {
+    setScale(value)
+    remember({ exportScale: value })
+  }
+
+  const pickBackground = (value: ExportOptions['background']): void => {
+    setBackground(value)
+    remember({ exportBackground: value })
+  }
 
   const frames = useMemo(() => props.doc.items.filter((item) => item.kind === 'frame'), [props.doc.items])
   const measured = useMemo(() => {
@@ -77,10 +106,16 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
       onClose={props.onClose}
       footer={
         <>
-          <button type="button" className="btn" onClick={() => void run(true)} disabled={busy || frameMissing}>
+          <button type="button" className="btn" onClick={() => void run(true)} disabled={busy || frameMissing} title={frameMissing ? 'Сначала выберите рамку' : undefined}>
             Выбрать место…
           </button>
-          <button type="button" className="btn btn--primary" onClick={() => void run(false)} disabled={busy || frameMissing}>
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={() => void run(false)}
+            disabled={busy || frameMissing}
+            title={frameMissing ? 'Сначала выберите рамку' : undefined}
+          >
             {busy ? 'Готовим…' : 'Экспортировать в папку Liro'}
           </button>
         </>
@@ -96,7 +131,7 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
               className="exportoption"
               data-active={format === item.id}
               aria-pressed={format === item.id}
-              onClick={() => setFormat(item.id)}
+              onClick={() => pickFormat(item.id)}
             >
               <div className="exportoption__title">{item.title}</div>
               <div className="exportoption__text">{item.text}</div>
@@ -162,7 +197,7 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
                   className="chip"
                   data-active={scale === value}
                   aria-pressed={scale === value}
-                  onClick={() => setScale(value)}
+                  onClick={() => pickScale(value)}
                 >
                   {value}×
                 </button>
@@ -180,7 +215,7 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
                 className="chip"
                 data-active={background === 'white'}
                 aria-pressed={background === 'white'}
-                onClick={() => setBackground('white')}
+                onClick={() => pickBackground('white')}
               >
                 Белый
               </button>
@@ -189,7 +224,7 @@ export function ExportDialog(props: { doc: BoardDoc; onClose: () => void; flush?
                 className="chip"
                 data-active={background === 'transparent'}
                 aria-pressed={background === 'transparent'}
-                onClick={() => setBackground('transparent')}
+                onClick={() => pickBackground('transparent')}
               >
                 Прозрачный
               </button>

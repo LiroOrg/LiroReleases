@@ -105,6 +105,17 @@ export function openBoardFile(path: string): string {
   }
 }
 
+export function pickAndOpenBoardFile(): void {
+  const chosen = firstPath(
+    dialog.showOpenDialogSync(mainWindow ?? undefined!, {
+      title: 'Откройте файл доски',
+      properties: ['openFile'],
+      filters: [{ name: 'Файлы Liro', extensions: ['liro', 'json', 'zip', 'rtb'] }]
+    })
+  )
+  if (chosen) openBoardFile(chosen)
+}
+
 const IMAGE_LIMIT = 24 * 1024 * 1024
 
 function nameFromUrl(url: string): string {
