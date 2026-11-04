@@ -5,11 +5,11 @@
 </div>
 
 <p align="center">
-  <a href="https://github.com/LiroOrg/LiroReleases/releases/download/v1.14.22/Liro-1.14.22-x64-setup.exe"><img src="https://img.shields.io/badge/Скачать_Liro_1.14.22-for_Windows-black?style=for-the-badge" alt="Скачать Liro" /></a>
+  <a href="https://github.com/LiroOrg/LiroReleases/releases/download/v1.14.23/Liro-1.14.23-x64-setup.exe"><img src="https://img.shields.io/badge/Скачать_Liro_1.14.23-for_Windows-black?style=for-the-badge" alt="Скачать Liro" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/LiroOrg/LiroReleases/releases/download/v1.14.22/Liro-1.14.22-x64-setup.exe">Liro-1.14.22-x64-setup.exe</a> · 118 МБ · Windows 10 и 11, 64 бита
+  <a href="https://github.com/LiroOrg/LiroReleases/releases/download/v1.14.23/Liro-1.14.23-x64-setup.exe">Liro-1.14.23-x64-setup.exe</a> · 118 МБ · Windows 10 и 11, 64 бита
 </p>
 
 <p align="center">
@@ -50,7 +50,7 @@ Liro — приложение для Windows: бесконечная белая 
 
 ## Установка
 
-Скачайте [`Liro-1.14.22-x64-setup.exe`](https://github.com/LiroOrg/LiroReleases/releases/download/v1.14.22/Liro-1.14.22-x64-setup.exe) и запустите — установщик сам найдёт прежнюю версию и поставит новую поверх, доски останутся на месте.
+Скачайте [`Liro-1.14.23-x64-setup.exe`](https://github.com/LiroOrg/LiroReleases/releases/download/v1.14.23/Liro-1.14.23-x64-setup.exe) и запустите — установщик сам найдёт прежнюю версию и поставит новую поверх, доски останутся на месте.
 Нужна Windows 10 или 11, 64 бита.
 
 ## Обновления
